@@ -1,9 +1,9 @@
 """The entry module's live namespace, for the names a caller patches there.
 
-`conduct_pipeline.py` is the module a caller loads, and five of the names it owns are read at CALL time
-because a caller may replace them: `tests/harness.py` swaps `_run` for its in-process command runner
-and points `DAG_MANAGE` at the dag-manage it hooks, and `tests/test_conduct_pipeline.py` sets
-`CMD_TIMEOUT` and replaces `_run` to prove that a hung child and a half-applied close are both
+`conduct_pipeline.py` is the module a caller loads, and these are the names it owns that are read at
+CALL time because a caller may replace them: `tests/harness.py` swaps `_run` for its in-process
+command runner and points `DAG_MANAGE` at the dag-manage it hooks, and `tests/test_conduct_pipeline.py`
+sets `CMD_TIMEOUT` and replaces `_run` to prove that a hung child and a half-applied close are both
 reported. A logic module that did `from ... import CMD_TIMEOUT` would freeze a copy at import and
 make every one of those patches invisible, so the logic modules come through here instead.
 
@@ -56,9 +56,14 @@ def run(argv, cwd) -> None:
 def capture(argv, cwd) -> str:
     """The entry's `_capture`: run one command and hand back its stdout.
 
-    `run` throws stdout away, which is right for every command whose effect IS the point. The
-    maintenance channel's `dag-manage add` is the one exception: the uuid it mints is only ever
-    printed, so the caller has to read it. Same bound, same loud failure on a non-zero exit.
+    `run` throws stdout away, which is right for every command whose effect IS the point. Two callers
+    need the text: the maintenance channel's `dag-manage add` (the uuid it mints is only ever
+    printed) and `nodes._rank_ready_nodes` (the DAG's own ranking). Same bound, same loud failure on
+    a non-zero exit.
+
+    **子进程只有 `run` 与 `capture` 两条路**：包里的模块一律经这里，谁都不自己 `subprocess` ——
+    调用方在入口 patch 这两个名字，就拦得住全部子进程。子进程输出一律按 `errors='replace'`
+    解码，这条约定写在入口的 `_capture` 那里（一处）。
     """
     return _entry()['_capture'](argv, cwd)
 
@@ -68,6 +73,10 @@ def timeout() -> int:
     return _entry()['CMD_TIMEOUT']
 
 
-def spawn_ps1():
-    """The entry's `SPAWN_PS1`: the path of the session spawner."""
-    return _entry()['SPAWN_PS1']
+def spawner_script():
+    """The entry's `SPAWNER_SCRIPT`: the path of the session spawner this host opens sessions with.
+
+    One name for both hosts: the value is `spawn/host.py`'s answer (`dsh-spawn.ps1` under DSH,
+    `zcode-spawn.ps1` under ZCode, or whatever `DSH_CONDUCT_SPAWNER` names).
+    """
+    return _entry()['SPAWNER_SCRIPT']

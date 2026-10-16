@@ -75,8 +75,9 @@ def write_signal(cycle: str, node: str, status: str, summary: str,
     The record -- its six keys, its path under `.pf/signals/`, its timestamp -- belongs to
     `conduct_state.store`, which writes it: this function checks what a caller handed over and hands
     it on. `base_dir` is that store's signals directory, for a caller that already resolved the
-    project root (`handoff.py` does, from a worktree cwd); left out, the store's own binding is
-    used, which is cwd resolved at call time.
+    project root (`handoff.py` does, from a worktree cwd); it is where THIS one write lands and
+    nothing more -- the store's own binding is left exactly where it was, and a write that names no
+    `base_dir` still uses it (cwd resolved at call time).
     """
     if not isinstance(status, str) or not status:
         print('Error: a signal needs a status', file=sys.stderr)
@@ -86,9 +87,8 @@ def write_signal(cycle: str, node: str, status: str, summary: str,
         sys.exit(1)
 
     store = _store()
-    if base_dir is not None:
-        store.bind_paths(Path(base_dir).parent)
-    return store._write_signal(cycle, node, status, summary, outputs)
+    return store._write_signal(cycle, node, status, summary, outputs,
+                               signals_dir=None if base_dir is None else Path(base_dir))
 
 
 def main() -> None:

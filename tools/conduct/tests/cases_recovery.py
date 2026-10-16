@@ -8,6 +8,7 @@ the two commands a worker runs, and the sweep that clears the one place process 
 
 from __future__ import annotations
 
+import ast
 import json
 import sys
 from pathlib import Path
@@ -203,6 +204,42 @@ class TestHandoff(Base):
         proc = sb.handoff('cyc', NODE, 'completed', 'done', self.outputs())
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertFalse((sb.root / '.pf' / 'meta' / 'CONDUCT-CALLBACK-FAILED-cyc.json').exists())
+
+    def test_the_ticket_write_is_the_only_thing_that_lands(self):
+        """交条子这一拍只落那一张条子：手里另一格不因为这一趟而被补上 prompt。
+
+        另一格此刻既没有条子、也没有 `started` 记号 —— 正是「补写下一份 prompt」会挑中的那个
+        状态。交条子的命令读一遍下一步就交回去，落 prompt 是收尾那一拍的事。
+        """
+        sb = self.make()
+        sb.add_node(NODE, '甲', mode='auto')
+        sb.add_node(NODE2, '乙', mode='auto')
+        sb.start_cycle(tags=['coding'])
+        sb._tool('cycle', 'hold', 'cyc', NODE2, cli=True)
+        self.assertEqual(sorted(sb.holding_ids()), sorted([NODE, NODE2]), '两格没都在手里')
+
+        proc = sb.handoff('cyc', NODE, 'completed', 'done', self.outputs())
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        launch = sb.root / '.pf' / 'meta' / 'launch'
+        written = sorted(p.parts[-2] for p in launch.rglob('prompt.txt')) if launch.exists() else []
+        self.assertEqual(written, [], '交条子这一拍写出了下一份 prompt')
+        self.assertIsNone(sb.read_signal('cyc', NODE2), '另一格凭空多了一张条子')
+        self.assertEqual(sb.path(), [], '这一拍动了线的路径')
+        self.assertEqual(sb.holding_ids(), [NODE, NODE2], '这一拍动了手里那两格')
+
+    def test_it_reads_the_next_step_instead_of_driving_it(self):
+        """交条子读下一步走的是只读的 `plan`；`record` 那条写方在这条命令的路外。
+
+        `record` 是 conductor 的机械例行：它 apply、它替手里的格补 prompt。交条子的会话读一遍
+        下一步就交回去 —— 收格、挑下一格、落下一份 prompt 都是收尾那一拍的事。上面那条钉住这一
+        拍的效果，这条钉住落笔那条路压根不在它手上。
+        """
+        called = {node.func.attr for node in ast.walk(ast.parse(
+            HANDOFF_PY.read_text(encoding='utf-8')))
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
+        self.assertNotIn('record', called, 'handoff.py 调上了写方：交条子会落笔')
+        self.assertIn('plan', called, 'handoff.py 没读下一步')
 
 
 class TestSignalGuards(Base):

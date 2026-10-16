@@ -6,9 +6,9 @@ Part of the suite's serial tail, for the same process-level-mock reason as the r
     python -m unittest cases_chain_spawn            # from this directory
 
 No live fire: the pwsh call is mocked at `subprocess.run` (the same seam the spawn cases use),
-and the dry-run path never reaches it at all. Which spawner the host picks is `conduct_pipeline.py`'s
+and the dry-run path never reaches it at all. Which spawner the host picks is `spawn/host.py`'s
 own tested territory; here the choice is pinned through `DSH_CONDUCT_SPAWNER` -- the override
-`_default_spawner` answers first.
+`default_spawner` answers first.
 """
 from __future__ import annotations
 

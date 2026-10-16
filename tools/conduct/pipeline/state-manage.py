@@ -66,6 +66,26 @@ _impl = _load_impl()
 globals().update({name: getattr(_impl, name) for name in _impl.__all__})
 
 
+class _NextHelp(argparse.Action):
+    """`next --help`：help 尾巴上那段合同正文，只有真打印这一次才算得出来。
+
+    `_render_contract` 要按路径加载管线包（`_load_pipeline`），所以它挂在打印那一刻 —— 解析器建
+    起来就给每条 state-manage 命令白背一次那份加载，不值当。判据是解析器自己选中了这个动作：哪
+    一条 `--help` 被选中，就是那一条在打印。
+    """
+
+    def __init__(self, option_strings, dest, default=argparse.SUPPRESS,
+                 help='打印 `next` 的 help（尾巴上是 action 全集）'):
+        # `dest` 用 argparse 自己算的那个（`'help'`）：读解析器的人靠它认出这条 help 动作，
+        # 而这条动作的全部作用就是打印 help。
+        super().__init__(option_strings, dest, nargs=0, default=default, help=help)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        parser.epilog = _load_pipeline()._render_contract()
+        parser.print_help()
+        parser.exit()
+
+
 def _layer(args) -> str:
     """`--global` 说的是哪一层：没有它就是项目那一层。"""
     return 'global' if getattr(args, 'global_', False) else 'project'
@@ -83,22 +103,8 @@ _ROUTES = {
                                                    getattr(a, 'yes', False),
                                                    getattr(a, 'force', False)),
     ('fork-worktree', None): lambda a: cmd_fork_worktree(a.node),
-    ('next', None): lambda a: cmd_next(getattr(a, 'cycle', None),
-                                       'plan' if getattr(a, 'plan', False) else 'apply',
-                                       getattr(a, 'json', False),
-                                       'continue' if getattr(a, 'cont', False)
-                                       else 'stop' if getattr(a, 'stop', False) else None,
-                                       getattr(a, 'node', None),
-                                       getattr(a, 'note', ''),
-                                       getattr(a, 'spawn', False),
-                                       getattr(a, 'after', None),
-                                       getattr(a, 'spawner', None),
-                                       getattr(a, 'project', None),
-                                       bool(getattr(a, 'cont', False)
-                                            or getattr(a, 'stop', False))),
-    ('dispatch', None): lambda a: cmd_dispatch(a.id, getattr(a, 'json', False),
-                                               getattr(a, 'project', None),
-                                               getattr(a, 'spawner', None)),
+    ('next', None): cmd_next,
+    ('dispatch', None): cmd_dispatch,
 
     ('cycle', 'create'): lambda a: cmd_cycle_create(a.id, a.title,
                                                     getattr(a, 'force', False),
@@ -429,7 +435,12 @@ def main(argv=None) -> None:
                     '`wait` (read its note / close_with and run that one command), `ask_user`, '
                     '`stop_pipeline`. The returned action NEVER carries commands to run: the '
                     'tool runs them.',
+        # `-h` is this parser's own action because its help carries the action vocabulary
+        # (`conduct_pipeline.ACTIONS`, the single source the contract is computed from) as an
+        # epilog, computed at print time.
+        add_help=False,
         formatter_class=argparse.RawDescriptionHelpFormatter)
+    p_next.add_argument('-h', '--help', action=_NextHelp)
     p_next.add_argument('--cycle', help='Cycle id (default: the single active cycle)')
     p_next.add_argument('--project', default=None, help='Project root (default: current directory)')
     p_next.add_argument('--plan', action='store_true',
@@ -453,14 +464,6 @@ def main(argv=None) -> None:
     p_next.add_argument('--spawner', default=None, metavar='KIND|PATH',
                         help='Which spawner opens that session: `dsh`, `zcode`, or a path. '
                              'Default: whichever host this shell runs under.')
-
-    # The action vocabulary is `next`'s own contract: the keys a caller branches on, and the one
-    # invariant that goes with them. `--help` prints it, computed from the single source
-    # (`conduct_pipeline.ACTIONS`) rather than restated here. The pipeline module is loaded once when
-    # the parser is built (the `--scope` choices are its `SCOPES`); `_render_contract` is computed
-    # only when `next --help` was asked for.
-    if 'next' in argv and any(a in ('-h', '--help') for a in argv):
-        p_next.epilog = _load_pipeline()._render_contract()
 
     p_disp = sub.add_parser(
         'dispatch',

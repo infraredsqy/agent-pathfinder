@@ -7,8 +7,9 @@ The pipeline (`next --spawn` / `dispatch <cycle>`) decides WHAT the next session
 reaches the spawner. This file is the other caller shape: a chain a skill runs on itself --
 text-repair rounds, say -- where the prompt file already carries the whole handoff (its first line is
 the next invocation line) and no ledger is involved.
-It adds nothing of its own: pick the host's spawner (`conduct_pipeline.py`'s `_default_spawner`), make
-the one call (`conduct_spawn.spawn_session`), print its last line.
+It adds nothing of its own: pick the host's spawner (`spawn/host.py`'s `default_spawner` -- the one
+answer to "which spawner", asked without loading the pipeline), make the one call
+(`conduct_spawn.spawn_session`), print its last line.
 
 The failure-marker policy is the spawners' own, and it is correct here as it stands: this call IS
 the chain advancing, so a failure leaves `.pf/meta/CONDUCT-CALLBACK-FAILED-<cycle-id>.json` on
@@ -74,7 +75,7 @@ def main(argv=None) -> int:
     prompt_file = Path(args.prompt_file).resolve()
     workspace = Path(args.workspace).resolve()
     cycle_id = args.cycle_id or prompt_file.stem
-    spawner = _loaded(HERE.parent / 'pipeline' / 'conduct_pipeline.py', 'conduct_pipeline_host')._default_spawner()
+    spawner = _loaded(HERE / 'host.py', 'conduct_spawn_host').default_spawner()
     try:
         output = _loaded(HERE / 'conduct_spawn.py', 'conduct_spawn').spawn_session(
             workspace, cycle_id, prompt_file, spawner=spawner, dry_run=args.dry_run)

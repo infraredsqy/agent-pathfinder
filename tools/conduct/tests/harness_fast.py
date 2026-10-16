@@ -131,11 +131,8 @@ class FastStateManage:
     #: Verb -> the module function that verb runs, as `function(namespace)`.
     _CALLS = {
         'clean-temp': lambda mod, ns: mod.cmd_clean_temp(ns.project, ns.node, ns.yes, ns.force),
-        'dispatch': lambda mod, ns: mod.cmd_dispatch(ns.id, ns.json, ns.project, ns.spawner),
-        'next': lambda mod, ns: mod.cmd_next(ns.cycle, 'plan' if ns.plan else 'apply', ns.json,
-                                             'continue' if ns.cont else 'stop' if ns.stop else None,
-                                             ns.node, ns.note, ns.spawn, ns.after, ns.spawner,
-                                             ns.project),
+        'dispatch': lambda mod, ns: mod.cmd_dispatch(ns),
+        'next': lambda mod, ns: mod.cmd_next(ns),
     }
     #: Positional arguments the real parser declares `type=int`.
     _INT_POSITIONALS = set()

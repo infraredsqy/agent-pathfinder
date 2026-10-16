@@ -2,7 +2,7 @@
 
 `conduct_pipeline.py` is the entry point: the module the CLI runs, the module `handoff.py`,
 `state-manage.py` and the test harness load by path -- fresh every time -- and the module that owns
-the child-process seam (`_cmd` / `_dag` / `_as_text` / `_run` / `CMD_TIMEOUT` / `SPAWN_PS1`),
+the child-process seam (`_cmd` / `_dag` / `_as_text` / `_run` / `CMD_TIMEOUT` / `SPAWNER_SCRIPT`),
 because those are what a caller patches. The machinery is here:
 
     seam.py      the live link back to the entry module's globals (see its docstring)
@@ -41,7 +41,7 @@ from . import writer  # noqa: F401
 
 #: Everything `conduct_pipeline.py` re-exports: one flat surface, exactly what this module had at module
 #: scope before the split, minus the names the entry keeps for itself (its own paths, the seam
-#: functions, and the CLI: `ACTIONS`, `_render_contract`, `_render`, `main`).
+#: functions, and the CLI: `ACTIONS`, `_render_contract`, `main`).
 __all__ = [
     # the layers themselves, for a caller that wants to poke at one of them
     'seam', 'store', 'instruct', 'nodes', 'prompts', 'maintenance', 'actions', 'planner', 'writer',
@@ -72,15 +72,16 @@ __all__ = [
     'thresholds_for', 'asked_readings', 'pool_weight', 'insertion', 'read_new_node_id',
     'maintenance_spec', 'maintenance_title', 'substitute',
 
-    # actions: state -> an action package
+    # actions: state -> an action package, and an action package as the caller reads it
     '_ask', '_dispatch', '_dispatch_many', '_maintenance_due', 'attention_items', '_ticket_wait',
-    '_retry_wait', '_sessions_wait', '_close_commands', '_stop_action',
+    '_retry_wait', '_sessions_wait', '_close_commands', '_stop_action', 'render_action',
 
     # planner: plan() and the node's own close
     'stop_criterion', 'plan', 'node_mode', '_close_own_node', '_named_node_outside_scope',
 
     # writer: apply() / record()
-    'MAX_SETTLE_STEPS', '_snapshot', 'spawn_session', 'clean_launch_dir', 'apply', 'record',
+    'MAX_SETTLE_STEPS', '_snapshot', 'resolve_spawner', 'spawn_session', 'clean_launch_dir',
+    'apply', 'record',
 ]
 
 # One list, resolved here: every name above is taken from whichever layer defines it (the layer
