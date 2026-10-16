@@ -14,7 +14,6 @@ from commands import (
     cmd_by_module,
     cmd_export_plan,
     cmd_mark,
-    cmd_help,
     cmd_list,
     cmd_open_plan,
     cmd_remove,
@@ -189,8 +188,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_export_plan)
 
     # help
-    p = subs.add_parser('help', help='Show full usage reference')
-    p.set_defaults(func=cmd_help)
+    subs.add_parser('help', help='Show the full usage reference')
 
     return parser
 
@@ -204,6 +202,11 @@ MUTATING_VERBS = {'add', 'update', 'resolve', 'reject', 'acknowledge', 'remove',
 def main():
     parser = _build_parser()
     args = parser.parse_args()
+    if args.command == 'help':
+        # `help` and `--help` are one text: the verbs, their flags and their values are what this
+        # parser prints, and nothing keeps a second copy of that list to fall out of step with it.
+        parser.print_help()
+        return
     if args.command in MUTATING_VERBS:
         with _ledger_lock():
             args.func(args)

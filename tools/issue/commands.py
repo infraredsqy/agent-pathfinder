@@ -1,23 +1,8 @@
 """Manage a persistent issue database for code quality tracking.
 
-Usage:
-    issue_manager.py <command> [args]
-
-Commands:
-    add            Add a new issue
-    list           List issues (with optional filters)
-    update         Update issue fields
-    resolve        Mark issue as resolved
-    reject         Mark issue as rejected (requires --reason)
-    acknowledge    Mark issue as acknowledged
-    remove         Delete an issue entirely
-    status         Show summary statistics
-    weight         The pool's weighted debt, as one number
-    top            Show top N open issues by priority
-    by_module      List open issues grouped by module
-    stale          List stale open issues (high check_count)
-    mark           Record scan-aliveness confirmations (never resolves)
-    export_plan    Generate execution plan for given issue IDs
+Every verb this module answers is one entry in `issue_manager.py`'s parser, and that parser is the
+one place the verb list lives: `issue_manager.py --help` and `help` print that same text. This file
+holds what each verb does, next to the data access in `storage.py`.
 """
 
 import json
@@ -517,11 +502,6 @@ def cmd_open_plan(args):
     if not resolved.is_absolute():
         resolved = Path.cwd() / resolved
     print(resolved.resolve())
-
-
-def cmd_help(args):
-    """Show full usage reference."""
-    print(__doc__)
 
 
 def cmd_search(args):
