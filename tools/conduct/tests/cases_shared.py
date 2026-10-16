@@ -28,11 +28,24 @@ from harness import _run_proc, run_dag, run_signal
 from harness_env import HANDOFF_PY, SIGNAL_PY, TOOLS_DIR, _child_env, _fresh_module, load_pipeline
 
 __all__ = ['TestTheOneLoader', 'TestOneSharedDoor', 'TestOneReaderOneWording',
-           'TestTheLockSerialisesANote', 'TestTheMarkerWaitsOutAReader', 'TestOneWriterPerRecord']
+           'TestTheLockSerialisesANote', 'TestTheMarkerWaitsOutAReader', 'TestTheMarkerContract',
+           'TestOneWriterPerRecord']
 
 CONDUCT_DIR = TOOLS_DIR / 'conduct'
 SHARED_DIR = TOOLS_DIR / 'shared'
 ISSUE_MANAGE = TOOLS_DIR / 'issue' / 'issue_manager.py'
+SPAWN_DIR = CONDUCT_DIR / 'spawn'
+
+
+def _spawn_sources():
+    """The spawner half of the tree, both languages: the Python files there and the PowerShell ones."""
+    return sorted(SPAWN_DIR.glob('*.py')) + sorted(SPAWN_DIR.glob('*.ps1'))
+
+
+def _marker_module():
+    """`spawn/marker.py`, loaded the way its callers load it -- one copy per process."""
+    return _shared_loader().load_by_path('conduct_spawn_marker', SPAWN_DIR / 'marker.py',
+                                         register=True, reuse=True)
 
 
 def _shared_loader():
@@ -429,6 +442,99 @@ class TestTheMarkerWaitsOutAReader(Base):
         self.assertEqual([], sorted(p.name for p in target.parent.iterdir() if p.suffix == '.tmp'),
                          'a failed write leaves its temp file behind')
         self.assertEqual({'stale': True}, json.loads(target.read_text(encoding='utf-8')))
+
+
+class TestTheMarkerContract(Base):
+    """断链降级标记：记录形状与落点的正本在 `spawn/marker.py`。
+
+    标记是人工发现「链断在这里」的唯一入口，所以这一组盯三件事：文件名与记录形状只在正本里拼一次
+    （两个 spawner 都不再自拼落点）、python 侧写它走的是全树那条带重试的原子写、条子那一拍与 spawner
+    那一拍交出的是同一个形状。壳侧那份实现是物理上无法共享的例外（运行点可能没有 python），它的形状
+    由 `cases_cli.py` 的等价性用例钉住。
+    """
+
+    def test_the_marker_is_spelled_in_exactly_one_file(self):
+        owners = sorted({_relative(path)
+                         for path in set(_shipped_sources()) | set(_spawn_sources())
+                         if 'CONDUCT-CALLBACK-FAILED' in path.read_text(encoding='utf-8')})
+        self.assertEqual(['conduct/spawn/marker.py'], owners,
+                         '标记的文件名被抄到了第二处：改一处漏一处的正是这种抄写')
+
+    def test_the_spawners_never_assemble_the_marker_path(self):
+        """`.pf` / `meta` / 文件名模板一个都不该出现在 spawner 侧：落点由 argv 交进来。"""
+        for path in sorted(SPAWN_DIR.glob('*.ps1')):
+            source = path.read_text(encoding='utf-8')
+            for gone in ('.pf', 'meta', 'CONDUCT-CALLBACK-FAILED'):
+                self.assertNotIn(gone, source, f'{path.name} 又自拼起标记的落点了')
+
+    def test_one_shell_serves_both_spawners_and_the_hosts_stay_explicit(self):
+        """外壳一份（`spawn-common.ps1`），宿主差异留各自的薄壳：参数面还是自己的。"""
+        shell = SPAWN_DIR / 'spawn-common.ps1'
+        self.assertTrue(shell.is_file(), '共用外壳不在')
+        sources = {path.name: path.read_text(encoding='utf-8')
+                   for path in sorted(SPAWN_DIR.glob('*.ps1'))}
+        owners = sorted(name for name, source in sources.items()
+                        if 'function Write-CallbackFailureMarker' in source)
+        self.assertEqual(['spawn-common.ps1'], owners, '写标记的实现不止一份')
+
+        dsh, zcode = sources['dsh-spawn.ps1'], sources['zcode-spawn.ps1']
+        for name, source in (('dsh-spawn.ps1', dsh), ('zcode-spawn.ps1', zcode)):
+            self.assertIn("'spawn-common.ps1'", source, f'{name} 没有 dot-source 共用外壳')
+            for shared in ('-CycleId', '-PromptFile', '-WorkspacePath', '-MarkerPath'):
+                self.assertIn(shared, source, f'{name} 少了共用参数 {shared}')
+        self.assertIn('-WebUrl', dsh)
+        self.assertNotIn('-WebUrl', zcode)
+        self.assertIn('-NoVerify', zcode)
+        self.assertNotIn('-NoVerify', dsh)
+
+    def test_the_marker_path_follows_the_ledger_name(self):
+        """`.pf` 一改名，标记跟着记录走 —— 派发侧不再有一份自己的拼法。"""
+        sb = self.make()
+        store = _shared_loader().load_by_path('pf_conduct_state_store',
+                                              CONDUCT_DIR / 'conduct_state' / 'store.py',
+                                              register=True, reuse=True)
+        marker = _marker_module()
+        handoff = _fresh_module('handoff_marker_ledger_case', HANDOFF_PY)
+        self.addCleanup(setattr, store, 'LEDGER_NAME', store.LEDGER_NAME)
+        store.LEDGER_NAME = '.pf-moved'
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            handoff._write_marker(sb.root, 'cyc', 'advance', '搬过家')
+
+        path = marker.marker_path(sb.root, 'cyc')
+        self.assertEqual('.pf-moved', path.parent.parent.name)
+        self.assertTrue(path.is_file(), '标记落在了工具不读的位置（自拼 `.pf` 的那条路）')
+
+    def test_the_two_writers_leave_one_shape(self):
+        """条子那一拍写下的标记，与正本的形状、那句人话一字不差。"""
+        sb = self.make()
+        marker = _marker_module()
+        handoff = _fresh_module('handoff_marker_shape_case', HANDOFF_PY)
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            handoff._write_marker(sb.root, 'cyc', 'advance', '条子那一拍断了')
+
+        written = json.loads(marker.marker_path(sb.root, 'cyc').read_text(encoding='utf-8'))
+        self.assertEqual(sorted(marker.record('cyc', 'advance', 'x')), sorted(written))
+        self.assertEqual(marker.DEFAULT_NOTE, written['note'])
+        self.assertEqual({}, written['extra'], '没有宿主事实时也给一个空槽，形状不随调用方变')
+        self.assertEqual('cyc', written['cycle_id'])
+        self.assertEqual('advance', written['phase'])
+
+    def test_the_write_is_the_retrying_one(self):
+        """写标记走的不是裸 `os.replace`：读者此刻正开着目标文件，重试该把它救回来。"""
+        sb = self.make()
+        marker = _marker_module()
+        path = marker.marker_path(sb.root, 'cyc')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"stale": true}', encoding='utf-8')
+        held = open(path, 'r', encoding='utf-8')
+        self.addCleanup(held.close)
+        threading.Timer(0.2, held.close).start()
+
+        marker.write(path, marker.record('cyc', 'advance', '读者松手了', workspace=sb.root))
+
+        self.assertEqual('读者松手了', json.loads(path.read_text(encoding='utf-8'))['reason'])
 
 
 class TestOneWriterPerRecord(Base):
