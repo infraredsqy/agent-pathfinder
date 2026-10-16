@@ -6,7 +6,7 @@ opened it, a ZCode one inside that host's own store. So an id written on the acc
 is guaranteed dead on every other machine -- it cannot be opened there, and it cannot even be told
 apart from "that session was deleted here". Ids therefore do not ride on the account; they live
 under `.pf/meta/`, which `.pf/.gitignore` keeps out of both the project's history and the ledger's.
-`meta/` is plumbing, and a note is plumbing (`docs/conduct-state.md` §3.6).
+`meta/` is plumbing, and a note is plumbing.
 
     .pf/meta/sessions/<node uuid>.json
 

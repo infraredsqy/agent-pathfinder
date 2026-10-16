@@ -102,7 +102,7 @@ DAG_MANAGE = Path(os.environ.get('DSH_CONDUCT_DAG_MANAGE')
 #: the shipped tree, with `DSH_CONDUCT_ISSUE_MANAGE` for a tree that keeps these scripts elsewhere.
 ISSUE_MANAGE = Path(os.environ.get('DSH_CONDUCT_ISSUE_MANAGE')
                     or CONDUCT.parent / 'issue' / 'issue_manager.py')
-#: Every child process this module starts is bounded by this many seconds (invariant 8). It lives
+#: Every child process this module starts is bounded by this many seconds. It lives
 #: HERE, in the entry module, with the command builders below and `_run`, because those are the
 #: names a caller patches on the loaded module: the test harness replaces `pipeline._run` with its
 #: in-process runner and sets `pipeline.CMD_TIMEOUT` to prove a hung child is reported. The logic

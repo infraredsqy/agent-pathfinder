@@ -17,7 +17,7 @@ this channel existed. That is the regression this feature is built around.
 
 **The graph edit is commands, and never a write from here.** `insertion()` builds them in the DAG
 tool's own vocabulary (`undepend` / `add` / `depend` / `cycle hold`) and `writer.apply` runs
-them: `plan()` stays a pure reader (invariant 6 of the design doc is what makes that matter). The
+them: `plan()` stays a pure reader, and running the commands in one place is what keeps it that way. The
 new node's uuid does not exist until `dag-manage add` has run, so the commands are written against
 the `NEW_NODE` placeholder and the uuid is filled in afterwards -- `writer._capture_new_node` runs
 that one command through the seam's `capture`, the same read-the-child's-stdout move

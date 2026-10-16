@@ -389,7 +389,7 @@ pf fork-worktree <节点id>
 
 ## 派发通路
 
-派发这一棒由 **spawner 脚本**开新会话，**总是带 `-PromptFile`**；哪一份 spawner 由工具回答，不用你挑——最具体的答案赢：`--spawner dsh|zcode|路径`（当场点名）> 这条线的 `spawner` 策略（`pf cycle policy <cycle> spawner dsh|zcode`，随线记录走）> `DSH_CONDUCT_SPAWNER` > 宿主自认。谁调它、断了看哪儿，见 `docs/conduct-dsh-dispatch.md`。
+派发这一棒由 **spawner 脚本**开新会话，**总是带 `-PromptFile`**；哪一份 spawner 由工具回答，不用你挑——最具体的答案赢：`--spawner dsh|zcode|路径`（当场点名）> 这条线的 `spawner` 策略（`pf cycle policy <cycle> spawner dsh|zcode`，随线记录走）> `DSH_CONDUCT_SPAWNER` > 宿主自认（探测答不上来就退到 `dsh`）。谁调它、断了看哪儿，见 `docs/conduct-dsh-dispatch.md`。
 
 派发失败时工具会写一个 `.pf/meta/CONDUCT-CALLBACK-FAILED-<cycle>.json` 并且不清除——人工进来先看这个文件（按线分文件，并行时两条线各看各的），见到就按 cycle id 跑 `next --cycle <id> --spawn` 把它捞回来；spawn 成功会清掉本线的旧标记（标记存在 = 这条链现在是断的）。补发之前工具会自己挡双派发，见到拒绝先查那个节点是不是已经有会话在跑，别硬闯。
 

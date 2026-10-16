@@ -78,7 +78,7 @@ python -m unittest discover -s conduct/tests -t .
 ```
 
 The contract docs live in `docs/` (Chinese for now): state and advancement, dispatch and
-authentication, node tags.
+authentication, node tags, vocabulary.
 
 ## License
 
