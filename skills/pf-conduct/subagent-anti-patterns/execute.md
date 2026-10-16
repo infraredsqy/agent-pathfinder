@@ -2,13 +2,13 @@
 
 执行 spec 前先对照查一遍。
 
-## 执行侧修改 spec.md
+## `conduct-execute-modifies-spec` · 执行侧修改 spec.md
 
 **症状**：觉得 spec 里某条不合理，就按自己的理解改了，或者顺手把某个「待确认」按自己的猜测定了。
 
 **纠正**：spec 对 conduct 这边一律只读。照 spec 执行；确认实现和文件一致后还有问题，走 FAIL 报告（格式见角色卡「停手报告」）。
 
-## 自行补入 spec 范围外的内容
+## `conduct-execute-adds-out-of-scope-work` · 自行补入 spec 范围外的内容
 
 **症状**：读代码看到某个地方「还缺一块」，顺手补了——spec 里其实没有这件事。
 
@@ -19,55 +19,55 @@
 3. 判断某个缺口属于谁：spec 的上下游节点名可以确认；确认不了就报告
 4. 回到 spec 范围内继续执行
 
-## 并行执行期间改动他组文件
+## `conduct-execute-parallel-edits-other-file-group` · 并行执行期间改动他组文件
 
 **症状**：并行执行时改了不属于自己文件组的文件，跟别的 agent 撞车。
 
 **纠正**：并行 agent 只改自己文件组里列出的文件；编译、测试、提交留给集成验证那一次串行做。在共享目录里同时跑构建会撞产物、读到别人没改完的代码。
 
-## 遇阻未停止并上报
+## `conduct-execute-does-not-stop-on-blocker` · 遇阻未停止并上报
 
 **症状**：测试反复失败还一直重试；发现 spec 和实际代码对不上还接着改；拿不准的操作闷头试。
 
 **纠正**：停手的判据与 FAIL 报告的格式都写在角色卡的「停手报告」一节（[`../subagent-prompts/execute.md`](../subagent-prompts/execute.md)）——照着交，别闷头往下试。
 
-## 执行不可逆操作
+## `conduct-execute-runs-irreversible-operations` · 执行不可逆操作
 
 **症状**：打着「修复问题」的旗号做破坏性操作——批量删文件/目录、`git reset --hard`、大范围覆盖、删 `.git`。
 
 **纠正**：超出常规代码修改范围的操作停下来，报 FAIL（格式见角色卡「停手报告」）。
 
-## 测试失败仍继续推进
+## `conduct-execute-continues-past-failing-tests` · 测试失败仍继续推进
 
 **症状**：报告某个测试失败，补一句「不影响后面」。
 
 **纠正**：按 spec 完成判定的档位跑本项目的快档命令（从项目文档取），加本轮碰过的文件的用例（项目是 `minimal` 测试档时，就是它口径里那几条检查），全绿才算做完。失败就修，修完重跑。全量那一档在节点收尾跑一次，由指挥者安排。
 
-## 自行认定失败为既有问题
+## `conduct-execute-assumes-failure-preexisting` · 自行认定失败为既有问题
 
 **症状**：看到失败就下结论「这是之前就有的问题」，跳过去。
 
 **纠正**：把判断和证据一起写进报告。这个说法由 Review 去查 git history 核实，你负责提供事实（哪个测试、什么命令、什么输出），结论留给复审。
 
-## 偏差报告未逐条写清
+## `conduct-execute-vague-deviation-report` · 偏差报告未逐条写清
 
 **症状**：执行中和 spec 有出入，报告里一句「有些小调整」。
 
 **纠正**：偏差逐条写清：哪一处、实际怎么做的、为什么。没有偏差就明确写「无偏差」。
 
-## 将证据材料写入报告正文
+## `conduct-execute-pastes-evidence-into-report` · 将证据材料写入报告正文
 
 **症状**：命令原始输出、合成样本、哈希、长引用这些内容整段贴进 `report.md`；一个交付文件对应一千行的说明。
 
 **纠正**：长内容写成文件落 `.pf/nodes/<节点 uuid>/temp/`，每个文件头一行写清用途；报告里留读数和路径。报告四项每项一行。
 
-## 过期读数只追加不更正
+## `conduct-execute-appends-stale-readings` · 过期读数只追加不更正
 
 **症状**：正文的数字后来变了，就在旁边补一句「**历史读数**：……见 §17.7」，旧读数原地留着。报告从几百行涨到两千多行。
 
 **纠正**：过期读数改掉或删掉。留着它，后面几棒的 agent 会拿旧数当现行值用——实测一个节点收尾时列的「已知未解决」清单里，近半条目出在报告与正文脱同步上。
 
-## 依指挥位说明继续派发 subagent
+## `conduct-execute-dispatches-on-conductor-instructions` · 依指挥位说明继续派发 subagent
 
 **症状**：spec 或方法卡里写着「按改动域分批，每批派 Fix / Review，批过即提交」，你就照它派起了 subagent——一层套一层。
 
@@ -75,7 +75,7 @@
 
 **纠正**：你是不再往下派的那一层。读到要求你派人、分批、重新规划范围的说明，就按角色卡的「停手报告」（[`../subagent-prompts/execute.md`](../subagent-prompts/execute.md)）回报：`REASON` 写清它要的是指挥位动作，`ATTEMPTS` 抄那句话的原文与出处。
 
-## 以"已知未解决"替代交付
+## `conduct-execute-defers-as-delivery` · 以"已知未解决"替代交付
 
 **症状**：spec 里有一条现在做不了，你把它标成"已知未解决"就算交差。
 
