@@ -71,7 +71,7 @@ def cmd_add(args):
         'module': args.module or '',
         'title': args.title or args.id,
         'decision': args.decision or 'unknown',
-        'source': args.source or 'optimize',
+        'source': args.source or 'scan',
         'status': 'open',
         'discovered': now,
         'updated_at': now,
@@ -167,7 +167,7 @@ def cmd_add_from_file(args):
             'module': item.get('module', ''),
             'title': item.get('title', uid),
             'decision': item.get('decision', 'unknown'),
-            'source': item.get('source', 'optimize'),
+            'source': item.get('source', 'scan'),
             'status': 'open',
             'discovered': now,
             'updated_at': now,
@@ -209,7 +209,7 @@ def cmd_list(args):
     if args.decision:
         issues = [i for i in issues if i.get('decision', 'unknown') == args.decision]
     if args.source:
-        issues = [i for i in issues if i.get('source', 'optimize') == args.source]
+        issues = [i for i in issues if i.get('source', 'scan') == args.source]
 
     sev_order = {s: i for i, s in enumerate(sorted(VALID_SEVERITIES))}
     # Stable sort: newest first, then by severity
@@ -345,7 +345,7 @@ def cmd_status(args):
         by_status[st] = by_status.get(st, 0) + 1
         mod = i.get('module', 'unknown')
         by_module[mod] = by_module.get(mod, 0) + 1
-        src = i.get('source', 'optimize')
+        src = i.get('source', 'scan')
         by_source[src] = by_source.get(src, 0) + 1
 
     stale_count = sum(
@@ -373,7 +373,7 @@ def cmd_weight(args):
 
     这是管线自己要的那一格读数：pf-conduct 在节点收尾时拿这个数跟这条线自己的
     `issue_pool_weight_limit` 比。数由这个工具算出来 —— 池子是它的正本；会话报上来的
-    数没人复核得了（历史条子里同一个词被报成过好几种意思）。
+    数没人复核得了。
 
     只算 actionable 的条目（`ACTIONABLE_STATUSES`，跟 `status` 一个口径），再排掉
     `decision == external`：那些的决定权不在 agent 手上（改架构、动模型、改体验），
@@ -540,7 +540,7 @@ def cmd_search(args):
     if args.severity:
         issues = [i for i in issues if i['severity'] == args.severity]
     if args.source:
-        issues = [i for i in issues if i.get('source', 'optimize') == args.source]
+        issues = [i for i in issues if i.get('source', 'scan') == args.source]
 
     try:
         pattern = re.compile(args.query, re.IGNORECASE)
