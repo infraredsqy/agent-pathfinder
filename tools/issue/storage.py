@@ -4,8 +4,7 @@ The pool lives with everything else this project's pipeline records, under `.pf/
 survives a wiped `temp/` and travels wherever the project's work travels. A project either commits
 its `.pf/` or keeps that directory to itself; either way the pool is read and written the same.
 
-`LEDGER_NAME` / `INIT_MARKERS` / `_require_initialized` are the same convention as conduct's and
-dag-manage's, copied: the three tools share no package.
+`LEDGER_NAME` / `INIT_MARKERS` / `_require_initialized` are copies of conduct's and dag-manage's.
 """
 
 import contextlib

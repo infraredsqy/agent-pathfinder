@@ -34,7 +34,7 @@ DEFAULT_TIMEOUT = 300
 SPAWNER = 'dsh-spawn.ps1'
 
 #: Which host each spawner opens its session on: the words `cycle policy spawner` already uses, and
-#: what a node's session note records as `host` (`tools/session-note.py`).
+#: what a node's session note records as `host` (`tools/shared/session-note.py`).
 HOSTS = {'dsh-spawn.ps1': 'dsh', 'zcode-spawn.ps1': 'zcode'}
 
 #: The session id inside a spawner's last line, one pattern per contract shape: `spawned: session
@@ -48,9 +48,9 @@ def host_of(spawner) -> str | None:
     """Which host a spawner opens its session on, by the script's own name.
 
     None for anything that is not one of the two shipped spawners -- a caller's own script, a test's
-    stand-in. A note then falls back to the session id's own shape (`tools/session-note.py`), which
-    is what tells the two hosts apart in any case: the name is the stronger evidence, not the only
-    one.
+    stand-in. A note then falls back to the session id's own shape (`tools/shared/session-note.py`),
+    which is what tells the two hosts apart in any case: the name is the stronger evidence, not the
+    only one.
     """
     return HOSTS.get(Path(spawner).name)
 

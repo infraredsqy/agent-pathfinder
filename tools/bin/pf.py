@@ -34,11 +34,9 @@ HANDOFF = PIPELINE / 'handoff.py'
 CONDUCT_PIPELINE = PIPELINE / 'conduct_pipeline.py'
 LEDGER_MERGE = CONDUCT / 'ledger-merge.py'
 MIGRATE = CONDUCT / 'migrate-ledger.py'
-#: The one file that belongs to no single tool: the session notes both `dag-manage.py` and the
-#: pipeline load by path (`tools/session-note.py`). A checkout missing it still runs -- the notes
-#: are plumbing, and every writer treats a failure to note one as best effort -- which is exactly
-#: why a health check has to name it.
-SESSION_NOTE = TOOLS / 'session-note.py'
+#: Shared plumbing, and every writer treats a missing session note as best effort -- which is exactly
+#: why the doctor has to check it by name.
+SESSION_NOTE = TOOLS / 'shared' / 'session-note.py'
 
 LEDGER_NAME = '.pf'
 MARKERS = ('.gitignore', '.gitattributes')

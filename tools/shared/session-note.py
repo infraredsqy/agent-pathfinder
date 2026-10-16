@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """A node's session note: which conversation produced it, and which ones ran it.
 
-Session ids are machine-local: a DSH session lives under `~/.dsh/sessions/` on the machine that
-opened it, a ZCode one inside that host's own store. So an id written on the account is a value that
-is guaranteed dead on every other machine -- it cannot be opened there, and it cannot even be told
-apart from "that session was deleted here". Ids therefore do not ride on the account; they live
-under `.pf/meta/`, which `.pf/.gitignore` keeps out of both the project's history and the ledger's.
-`meta/` is plumbing, and a note is plumbing.
+Session ids are machine-local -- a DSH session lives under `~/.dsh/sessions/` on the machine that
+opened it, a ZCode one in that host's own store -- so an id written into the shared record is a dead
+value everywhere else. Notes live under `.pf/meta/`, which `.pf/.gitignore` keeps out of both the
+project's history and the ledger's:
 
     .pf/meta/sessions/<node uuid>.json
 
@@ -14,25 +12,17 @@ under `.pf/meta/`, which `.pf/.gitignore` keeps out of both the project's histor
      "discussion": [{"session": "...", "host": "dsh", "at": "..."}],
      "run":        [{"session": "...", "host": "dsh", "at": "..."}]}
 
-Two NAMED lists, not one list carrying a `role` field: a reader that wants "the conversation to
-open" must not be able to pick the discussion one by forgetting a filter. One session can honestly
-be a discussion for one node and a run for another (a conversation that routes a batch can then be
-handed a node), and the role is a property of the fact, not of the session.
+Two named lists rather than one list with a `role` field: a reader that wants "the conversation to
+open" cannot pick the wrong one by forgetting a filter. One session can be a discussion for one node
+and a run for another, so the role belongs to the entry, not to the session.
 
-`host` says who opened it -- the words the pipeline already uses for a spawner (`dsh` / `zcode`,
-`conduct_pipeline.py`'s `SPAWN_SCRIPTS`). A ZCode session cannot be opened by a DSH panel, and its
-ids have their own shape (`sess_…`, the exact prefix `spawn/zcode-spawn.ps1` matches its own session
-line with), which is also how a value imported from the old field is labelled.
+`host` is who opened it (`dsh` / `zcode`, the pipeline's own words for a spawner); `source:
+"ledger"` marks a value imported from the `dsh_session` field an older build wrote into `ideas.json`.
 
-`source: "ledger"` marks a value imported from the `dsh_session` field an older build wrote into
-`ideas.json`. It may name a session on the machine that wrote the ledger, not on this one.
-
-Writers: `dag-manage.py add` (the discussion the node was routed in) and the pipeline's
-`writer.spawn_session` (every run, at spawn time -- the id exists from that moment, and a running
-node is exactly the node whose conversation one wants to open). Readers: `pf session show|list`,
-`pf dag info`, and anything that jumps into a conversation. The three tools share no package, so
-this file is loaded BY PATH by the ones that write it -- the convention every entry point in
-`conduct/` already follows.
+Writers are `dag-manage.py add` (the discussion the node was routed in) and the pipeline's
+`writer.spawn_session` (every run, at spawn time); readers are `pf session show|list` and
+`pf dag info`. No single tool owns this file and there is no package to import it from: it lives in
+`tools/shared/`, and each caller loads it by path.
 """
 
 from __future__ import annotations
@@ -45,9 +35,8 @@ from pathlib import Path
 
 #: The two keys a note is made of, in the order a human reads them.
 ROLES = ('discussion', 'run')
-#: Bumped only when the shape changes incompatibly. A reader that does not know the version treats
-#: the file as absent rather than guessing at it -- a note is disposable plumbing, and guessing is
-#: the one thing that would make it worse than absent.
+#: Bumped only when the shape changes incompatibly. A reader that does not know this version treats
+#: the file as absent rather than guessing at it.
 VERSION = 1
 #: The hosts a session id can belong to, as the pipeline spells them.
 DSH = 'dsh'
@@ -70,7 +59,7 @@ def host_of_session(session: str | None) -> str:
     """Which host opened this id, from the id's shape alone.
 
     The fallback for a caller that has no host of its own to state (an import from the old field).
-    It never overrides a host a writer did state: the writer was there, this function was not.
+    It never overrides a host a writer did state.
     """
     return ZCODE if str(session or '').startswith(ZCODE_ID_PREFIX) else DSH
 
@@ -88,9 +77,9 @@ def read(project, node_id) -> dict:
     """One node's note, always in the canonical shape: both lists, `[]` when nothing is known.
 
     A missing file, an unreadable one and one written by a version this reader does not know all
-    read the same way -- empty. A note is machine-local plumbing that any reader can rebuild from
-    the sessions themselves, so it must never be the reason a tool dies; what it must never do is
-    pretend a value it cannot understand is a value it understands.
+    read the same way -- empty. A note is machine-local plumbing that any reader can rebuild from the
+    sessions themselves, so it must never be the reason a tool dies; what it must never do is pretend
+    a value it cannot understand is a value it understands.
     """
     path = note_path(project, node_id)
     try:
@@ -160,8 +149,7 @@ def append(project, node_id, role: str, session: str, host: str | None = None,
     stores `null` (an import from a record that no longer carries the moment).
 
     The write is atomic (temp file in the same directory, then `os.replace`): readers of a note are
-    other processes, and a half-written JSON is exactly the failure this file's tolerant reader
-    would then hide.
+    other processes, and a half-written JSON is exactly the failure the tolerant reader above hides.
     """
     if role not in ROLES:
         raise ValueError(f'session note role must be one of {ROLES}, got {role!r}')

@@ -5,7 +5,7 @@ not ride on the record: an id in a shared JSON is a value that is guaranteed dea
 machine, and one that cannot even be told apart from "that session was deleted here". They live in
 `.pf/meta/sessions/<node id>.json`, which `.pf/.gitignore` keeps out of both histories. The shape,
 and why it is two named lists rather than one list with a role field, are in
-`tools/session-note.py` -- loaded by path from both this side and `dag-manage.py`.
+`tools/shared/session-note.py`.
 
     show <node> [--json]    one node's note: the discussion it came from, the sessions that ran it
     list [--json]           every note this machine holds, keyed by node id

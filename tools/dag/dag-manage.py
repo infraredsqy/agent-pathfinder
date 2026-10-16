@@ -73,8 +73,8 @@ import msvcrt
 #
 # A `.pf/` the tool created by itself, never init'ed, is the one state that must stay unreachable:
 # the lock's `mkdir` would otherwise leave a directory that is neither tracked nor ignored for the
-# next `git add -A` to sweep up. `_require_initialized` closes that door, and it is the same
-# convention, copied, as conduct's -- the three tools share no package.
+# next `git add -A` to sweep up. `_require_initialized` closes that door; conduct and the issue tool
+# each carry their own copy.
 LEDGER_NAME = '.pf'
 INIT_MARKERS = ('.gitignore', '.gitattributes')
 
@@ -82,8 +82,7 @@ INIT_MARKERS = ('.gitignore', '.gitattributes')
 def _resolve_project_root(cwd: Path) -> Path:
     """cwd 即根，唯一的例外：cwd 是一条 linked worktree 的检出根时，回主树。
 
-    与 `conduct_state.store._resolve_project_root`、issue 侧同名函数是同一份约定摆在三处
-    （三个工具没有共同的包），判定也一致：worktree 根的 `.git` 是文件，指向
+    `conduct_state.store` 与 issue 侧各有一份同样的判定：worktree 根的 `.git` 是文件，指向
     `<主树>/.git/worktrees/<名字>`，`worktrees` 上三级即主树根；`.git/modules/...` 是
     submodule，不算。主树没有 `.pf/` 时不挪，让老错误照老样子响。
     """
@@ -118,17 +117,15 @@ _SESSION_NOTE = None
 
 
 def _session_note():
-    """`tools/session-note.py`, loaded BY PATH.
+    """`tools/shared/session-note.py`, loaded by path.
 
-    Where a node's session ids live since they left the account: `.pf/meta/sessions/<id>.json`. The
-    file is shared with the conduct side (which writes every run's id there), and the three tools
-    share no package -- so it sits above all three and each one loads it the way conduct loads its
-    own entry points.
+    The conduct side writes every run's id to the same file; this side writes the discussion a node
+    was born in, and reads both back for `info`.
     """
     global _SESSION_NOTE
     if _SESSION_NOTE is None:
         import importlib.util
-        path = Path(__file__).resolve().parent.parent / 'session-note.py'
+        path = Path(__file__).resolve().parent.parent / 'shared' / 'session-note.py'
         spec = importlib.util.spec_from_file_location('session_note_dag', path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -614,7 +611,7 @@ def cmd_add(args):
         # 出生 session 不落在记录里：`ideas.json` 是共享的，而 session 只在本机有意义 —— 另一个机器上
         # 它是一个必然打不开的死值，还分不出「那是别台机器」和「这场被删了」。所以它落在
         # `.pf/meta/sessions/<uuid>.json`（`meta/` 由 `.pf/.gitignore` 挡在版本库外），见
-        # `tools/session-note.py`。仍然由工具读环境变量，不由调用方抄一遍 —— 抄的那份总会漏。
+        # `tools/shared/session-note.py`。仍然由工具读环境变量，不由调用方抄一遍 —— 抄的那份总会漏。
         # 写在 `_write(data)` 之后：依赖校验失败会 `_rollback_add`，那一格没落图就不该留便条。
         session = os.environ.get('DSH_SESSION_ID')
 

@@ -6,7 +6,7 @@
 
 - docs/ —— 这套工具的契约正本：状态与推进、派发与鉴权、节点 tag 分流（改 conduct 行为前看）
 - skills/ —— pf-* 技能本体与 shared 公共卡（`install.ps1` 用 junction 挂进 `~/.agents/skills`）
-- tools/ —— `pf` 命令与实现：`bin/` 入口、`conduct/` 管线、`dag/` 图、`issue/` 池
+- tools/ —— `pf` 命令与实现：`bin/` 入口、`conduct/` 管线、`dag/` 图、`issue/` 池、`shared/` 跨工具的公共件（只有库，没有入口）
 - install.ps1 —— 装机与自检：挂技能、`pf` 上 PATH；幂等，重跑即修复
 - .gitignore —— 工作区杂物的黑名单
 
