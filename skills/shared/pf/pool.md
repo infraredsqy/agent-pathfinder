@@ -2,7 +2,7 @@
 
 > `pf-issue-scan` / `pf-issue-repair` / `pf-issue-discuss` 三家共用这一份。命令细节以 `--help` 为准，这里只写口径。
 
-池子住在项目的 `.pf/issues/`（进版本库），是统一的 to-do list。`source` 只说这条是怎么来的：`scan`（扫描入池）、`manual`（机主随手记的）、`conduct`（干活会话撞见的）。
+池子住在项目的 `.pf/issues/`，是统一的 to-do list。`source` 只说这条是怎么来的：`scan`（扫描入池）、`manual`（机主随手记的）、`conduct`（干活会话撞见的）。
 
 ## 只走工具
 
@@ -22,7 +22,3 @@ pf issue weight -v          # 加权和是怎么加出来的
 - `decision`：`autofix`（能自己修）／`external`（取舍还开在机主手里）／`unknown`（还没判，入库时的默认）。**已经拍过板、解法写在条目里的条目一律 `autofix`**——落在别的节点或别的线上也算。
 - **加权和** ＝ P3/P2/P1/P0 = 1/2/4/8，只算 actionable 且 `decision` 不为 `external` 的条目。`unknown` 与 `autofix` 一样压着这条线；判成 `external` 就掉出计数。
 - 严重度（写每条时照它判）：**P0** 重复且带 bug 风险，或踩在业务关键路径上；**P1** 职责越界阻碍迭代（UI 里写业务逻辑、逻辑层碰 DOM、跨层依赖）；**P2** 结构改善提升效率（可提取的重复模式、散落的配置、加一个功能要改 3+ 文件）；**P3** 整洁（命名、过时注释、死代码、格式）。
-
-## 提交
-
-池子是仓库文件：这一趟改过它就收进这一趟的提交；这一趟没有代码提交（纯讨论、纯扫描）就单独发一发（`chore: record issue pool changes`）。

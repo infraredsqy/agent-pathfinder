@@ -18,7 +18,7 @@ argument. Name first (`%P`, then `%A`/`%B`/`%O` for a hand-run), shape second (a
 
 Why a driver at all
 -------------------
-The ledger is committed now, and two machines each run a pipeline against their own copy. Every
+Two machines can each run a pipeline against their own copy of the same records. Every
 writer rewrites its WHOLE file from an in-memory dict (`json.dump(..., indent=2, ensure_ascii=False)`
 -- plus `sort_keys=True` for `ideas.json`, CRLF line endings, no trailing newline), so a line-level
 merge of two ledgers is not a merge: two machines that each touched one field produce two files that

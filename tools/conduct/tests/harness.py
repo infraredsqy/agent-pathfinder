@@ -7,7 +7,7 @@ second pointer, no cell index anywhere. A node's work is done when its signal is
 `next --after <node_id>` call.
 
 **Two roots.** The account -- the DAG, `state.json`, the signals, the instructions account, a
-node's own text -- is the LEDGER at `<project>/.pf/`, and it is what a project commits. Everything
+node's own text -- is the LEDGER at `<project>/.pf/`. Everything
 disposable is the SCRATCH root at `<project>/.pf/`: a node's generated `temp/`, and the
 pipeline's own dispatch plumbing (`meta/launch/`, the broken-chain marker).
 
