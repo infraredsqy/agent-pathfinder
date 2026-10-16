@@ -1,8 +1,8 @@
 """What a dispatch prompt says.
 
-`prompt_for` / `write_prompt_file` / `build_prompt_text` assemble a dispatch prompt. A dispatch
-prompt holds one line -- the invocation -- and the session reads the rest (the node's text, the
-closing commands, the ticket form) from the node and the skill it invokes.
+`write_prompt_file` / `build_prompt_text` assemble a dispatch prompt. A dispatch prompt holds one
+line -- the invocation -- and the session reads the rest (the node's text, the closing commands, the
+ticket form) from the node and the skill it invokes.
 """
 
 from __future__ import annotations
@@ -15,23 +15,6 @@ from .store import _jsonio, meta_dir
 
 
 # ── prompt layer ─────────────────────────────────────────────────────────────
-
-def prompt_for(node_id: str | None = None) -> str:
-    """The invocation line -- the FIRST non-empty line of prompt.txt (hard constraint).
-
-    `/pf-conduct <node_id> [pipeline]`. `[pipeline]` is ALWAYS there: it is how pf-conduct knows it
-    is running inside the pipeline (rather than having been invoked by hand), which is what makes it
-    end with the one closing command instead of reporting to a human. The node's mode is not on this
-    line: it lives in the node's own record, which the session reads with `dag-manage.py info`.
-
-    The node is the work; naming it is the one thing this line does. Nothing else belongs here, and
-    nothing may be prepended as a paragraph above this line. The node's weight, title and spec path
-    live in `dag-manage.py info` / `open`, which the session runs itself.
-    """
-    if not node_id:
-        raise ValueError('a dispatch prompt needs a node id: it is the line the session is told to run')
-    return f'/pf-conduct {node_id} [pipeline]'
-
 
 def launch_dir(project: Path, cycle_id: str) -> Path:
     """`.pf/meta/launch/<cycle>/`: the dispatch plumbing of one line, one directory per node.
@@ -83,18 +66,22 @@ def write_prompt_file(project: Path, cycle_id: str, node_id: str, text: str) -> 
     return path
 
 
-def build_prompt_text(project: Path, cycle: dict, node: dict) -> str:
+def build_prompt_text(node_id: str) -> str:
     """One dispatch prompt: the invocation line, and nothing after it.
 
-    Everything past this line the session reads for itself -- the node (title, weight, spec path,
-    dependencies) with `dag-manage.py info` / `open`, and the closing commands and ticket form with
-    the skill the line invokes. Standing instructions stay out for the same reason they always did:
-    a session reads them itself with `pf instruction list`.
+    `/pf-conduct <node_id> [pipeline]` —— the FIRST non-empty line of prompt.txt（硬约束）。`[pipeline]`
+    ALWAYS there: it is how pf-conduct knows it is running inside the pipeline (rather than having been
+    invoked by hand), which is what makes it end with the one closing command instead of reporting to a
+    human. The node's mode is not on this line: it lives in the node's own record, which the session
+    reads with `dag-manage.py info`.
 
-    `node` is the DAG row with its `id` handed in (the id is the storage key, so it is not a field on
-    the row itself -- see `actions._dispatch_many`).
+    The node is the work; naming it is the one thing this text does, and the id is all it asks for.
+    Nothing else belongs here, and nothing may be prepended as a paragraph above this line: the node's
+    weight, title and spec path live in `dag-manage.py info` / `open`, the closing commands and the
+    ticket form live in the skill the line invokes, and standing instructions stay out because a
+    session reads them itself with `pf instruction list`.
     """
-    node_id = node.get('id')
     if not node_id:
-        raise ValueError('build_prompt_text needs the node id; the row does not carry one')
-    return prompt_for(node_id).rstrip('\n') + '\n'
+        raise ValueError('a dispatch prompt needs a node id: '
+                         'it is the line the session is told to run')
+    return f'/pf-conduct {node_id} [pipeline]\n'

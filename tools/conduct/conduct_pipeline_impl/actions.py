@@ -29,12 +29,11 @@ def _dispatch_many(project: Path, cycle: dict, node_ids: list) -> dict:
     dag = load_dag(project)
     nodes = []
     for node_id in node_ids:
-        node = dict((dag.get('nodes') or {}).get(node_id) or {})
-        node['id'] = node_id
-        nodes.append({'node_id': node_id, 'node_title': node.get('title', ''),
+        row = (dag.get('nodes') or {}).get(node_id) or {}
+        nodes.append({'node_id': node_id, 'node_title': row.get('title', ''),
                       'mode': mode_for(node_id, dag),
                       'prompt': str(launch_prompt_path(project, cycle['id'], node_id)),
-                      'prompt_text': build_prompt_text(project, cycle, node)})
+                      'prompt_text': build_prompt_text(node_id)})
     head = nodes[0]
     return {
         'action': 'dispatch', 'cycle': cycle['id'],
@@ -69,9 +68,7 @@ def _maintenance_due(project: Path, cycle: dict, closed: str, hit: dict, target:
     line will do, just not yet.
     """
     node_id = maintenance.NEW_NODE
-    node = {'id': node_id, 'title': hit['title'], 'description': hit['spec_of'](node_id),
-            'mode': DEFAULT_MODE}
-    text = build_prompt_text(project, cycle, node)
+    text = build_prompt_text(node_id)
     node_target = launch_prompt_path(project, cycle['id'], node_id)
     shown = (f'{hit["value"]:g}{hit["unit"]}')
     line = (f'{hit["at"]:g}{hit["unit"]}')
@@ -86,7 +83,7 @@ def _maintenance_due(project: Path, cycle: dict, closed: str, hit: dict, target:
     return {
         'action': maintenance.MAINTENANCE_ACTION, 'cycle': cycle['id'],
         'node_id': node_id, 'node_title': hit['title'],
-        'mode': node['mode'],
+        'mode': DEFAULT_MODE,
         'prompt': str(node_target), 'prompt_text': text,
         'metric': hit['reading'], 'reading': shown, 'line': line,
         'deferred_node': target['id'], 'deferred_title': target.get('title', ''),

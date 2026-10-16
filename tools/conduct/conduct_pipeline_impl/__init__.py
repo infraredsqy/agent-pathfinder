@@ -41,7 +41,8 @@ from . import writer  # noqa: F401
 
 #: Everything `conduct_pipeline.py` re-exports: one flat surface, exactly what this module had at module
 #: scope before the split, minus the names the entry keeps for itself (its own paths, the seam
-#: functions, and the CLI: `ACTIONS`, `_render_contract`, `main`).
+#: functions, and the CLI: `ACTIONS`, `_render_contract`, `main`). It is the tree's only export list --
+#: the layers keep none of their own, so there is no second list to drift from this one.
 __all__ = [
     # the layers themselves, for a caller that wants to poke at one of them
     'seam', 'store', 'instruct', 'nodes', 'prompts', 'maintenance', 'actions', 'planner', 'writer',
@@ -65,7 +66,7 @@ __all__ = [
     'tag_blocked_ready_nodes', 'holding_ready_nodes', 'blocked_reason', 'pick_node', 'node_spec_path',
 
     # prompts: what a dispatch prompt says
-    'prompt_for', 'write_prompt_file', 'build_prompt_text', 'mode_for', 'started_marker',
+    'write_prompt_file', 'build_prompt_text', 'mode_for', 'started_marker',
 
     # maintenance: the maintenance channel
     'READING_KEYS', 'MAINTENANCE_ACTION', 'METRICS', 'crossed', 'reading_of',
