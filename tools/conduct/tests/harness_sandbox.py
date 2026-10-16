@@ -194,18 +194,23 @@ class Sandbox:
         return cycle_id
 
     def start_cycle(self, cycle_id='cyc', title='test cycle', force=False, tags='coding',
-                    check=True):
+                    parallel=None, check=True):
         """`cycle start`: create the cycle AND point it at the node the rule picks.
 
         `tags` is the cycle's filter set, and it reaches the pick as well as the cycle record. It
         is required by the tool now (see `create_cycle`), so the helper supplies it unless a case
         names its own. The launcher refuses when nothing is ready, so `check=False` returns a
         `CompletedProcess` with the refusal instead of raising.
+
+        `parallel` is how many slots this line starts with: it lands in the cycle's policies and
+        decides how many nodes the start pins, exactly like `cycle policy <cycle> parallel <n>`
+        does for every close after it.
         """
         if tags and not isinstance(tags, str):
             tags = ','.join(tags)
         return self._tool('cycle', 'start', cycle_id, '--title', title,
                           *(['--tags', tags] if tags else []),
+                          *(['--parallel', str(parallel)] if parallel is not None else []),
                           *(['--force'] if force else []), check=check)
 
     def set_cycle_status(self, cycle_id, status, cli=None, check=True):

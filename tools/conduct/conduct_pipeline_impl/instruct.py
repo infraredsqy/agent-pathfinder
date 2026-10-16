@@ -63,9 +63,13 @@ def scope_binding(entry: dict) -> tuple:
     return (None, None)
 
 
-def _scope_facts(project: Path) -> tuple:
-    """The two facts a scope question needs, read once per call: the DAG's nodes, the active cycles."""
-    nodes = load_dag(project).get('nodes') or {}
+def _scope_facts(project: Path, dag: dict | None = None) -> tuple:
+    """The two facts a scope question needs, read once per call: the DAG's nodes, the active cycles.
+
+    `dag` 是调用方已经读过的那一份图：收尾那一趟整份读图一次，scope 判定读的是下传的这一份，
+    不为自己再读一遍盘。不给就自己读（别的入口没有现成的一份）。
+    """
+    nodes = (dag if dag is not None else load_dag(project)).get('nodes') or {}
     active = {c.get('id') for c in active_cycles(load_state(project))}
     return nodes, active
 
@@ -104,7 +108,7 @@ def instruction_in_scope(ins: dict, nodes: dict, active: set, cycle: str | None 
 
 
 def live_instructions(project: Path, target: str | None = None, cycle: str | None = None,
-                      node: str | None = None) -> list:
+                      node: str | None = None, dag: dict | None = None) -> list:
     """Instructions visible from the step being built, newest last.
 
     `target` filters to one delivery channel; the scope filter drops entries whose scope no longer
@@ -114,8 +118,11 @@ def live_instructions(project: Path, target: str | None = None, cycle: str | Non
     `cycle` / `node` are the reader's own place (see `instruction_in_scope`): the close passes the
     line it is settling and the node it is settling, which is how a boundary instruction bound to
     some other node stops capping this one.
+
+    `dag` 是调用方手上已有的那份图：`stop_criterion` 在收尾那一趟把它递进来，scope 判定就不再
+    为同一趟重读一次盘。
     """
-    nodes, active = _scope_facts(project)
+    nodes, active = _scope_facts(project, dag)
     out = []
     for ins in load_instructions(project).get('instructions', []):
         if not instruction_is_live(ins):

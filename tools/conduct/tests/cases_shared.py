@@ -226,6 +226,23 @@ class TestOneSharedDoor(unittest.TestCase):
         owners = sorted(_relative(path) for path, name in _definitions() if name == '_read_json')
         self.assertEqual(['conduct/conduct_state/store.py'], owners)
 
+    def test_the_replace_reaches_the_filesystem_from_one_place(self):
+        """`os.replace` 的调用点只有 `shared/jsonio.py` 一处。
+
+        换名落盘是同一个原语：谁来写、写的是 JSON 还是文本，改的都是那一处（`replace_with_retry`）。
+        各文件自带一份的话，`replace_with_retry` 往后的每一次修改都会漏掉别人。
+        """
+        callers = []
+        for path in _shipped_sources():
+            for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == 'replace'
+                        and isinstance(node.func.value, ast.Name) and node.func.value.id == 'os'):
+                    callers.append(f'{_relative(path)}:{node.lineno}')
+
+        self.assertEqual(1, len(callers), f'调用点不止一处：{callers}')
+        self.assertTrue(callers[0].startswith('shared/jsonio.py:'), callers)
+
 
 class TestOneReaderOneWording(Base):
     """A `.pf/` record that cannot be read: the same words, whichever tool asks."""

@@ -86,7 +86,8 @@ class FastStateManage:
                              '--tags': ('tags', True, None)}),
         'start': (('id',), {'--title': ('title', True, None),
                             '--force': ('force', False, False),
-                            '--tags': ('tags', True, None)}),
+                            '--tags': ('tags', True, None),
+                            '--parallel': ('parallel', True, None)}),
         'rename': (('id',), {'--title': ('title', True, None)}),
         'status': (('id', 'status'), {}),
         'policy': (('id', 'key', 'value'), {}),
@@ -101,7 +102,8 @@ class FastStateManage:
     #: `pf cycle <verb>` -> the `cmd_*` the group's own dispatch calls for it.
     _CYCLE_CALLS = {
         'create': lambda mod, ns: mod.cmd_cycle_create(ns.id, ns.title, ns.force, ns.tags),
-        'start': lambda mod, ns: mod.cmd_cycle_start(ns.id, ns.title, ns.force, ns.tags),
+        'start': lambda mod, ns: mod.cmd_cycle_start(ns.id, ns.title, ns.force, ns.tags,
+                                                     ns.parallel),
         'rename': lambda mod, ns: mod.cmd_cycle_rename(ns.id, ns.title),
         'status': lambda mod, ns: mod.cmd_cycle_status(ns.id, ns.status),
         'policy': lambda mod, ns: mod.cmd_cycle_policy(ns.id, ns.key, ns.value),

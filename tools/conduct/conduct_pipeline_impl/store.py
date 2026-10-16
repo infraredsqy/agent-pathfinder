@@ -73,6 +73,11 @@ def _shared(name, filename):
 # （`tools/shared/loader.py`），在 `sys.modules` 里给这两个文件一个本包自己的包名 —— `cycles.py`
 # 开头那句 `from .store import ...` 需要一个能解析的包，而 `conduct_state/__init__.py` 不必执行
 # （它把写侧每一层都拉进来，这里只要两个文件）。
+#
+# 这条借用的边界：**两个包各自装载同一个文件**（各按自己的名字注册），于是本进程里有两份模块
+# 对象，读出来的表**按值相等**（用例按 `==` 比对钉住 `POLICY_*` 那几张表），跨包的 `is` 不成立
+# —— 谁也不该拿 `is` 去比这两份。要改这张表，改的是 `conduct_state/cycles.py` 那个文件本身，
+# 这一侧跟着变；在这里再抄一份，就是两处分头漂。
 
 _STATE_DIR = Path(__file__).resolve().parent.parent / 'conduct_state'
 _STATE_PKG = 'pf_pipeline_state_source'
@@ -122,7 +127,11 @@ DEFAULT_MODE = 'auto'
 
 
 def normalize_mode(mode: str | None) -> str:
-    """盘上那个词，或（没写时）兜底的 `auto`。"""
+    """盘上那个词，或（没写时）兜底的 `auto` —— 这一条兜底的唯一拼法。
+
+    读盘回填（`load_dag`）、取值（`nodes.mode_for`）、停手判据（`planner.stop_criterion`）都走这里：
+    多一个 mode 词时，这一处改完就齐了。
+    """
     return mode or DEFAULT_MODE
 
 

@@ -273,7 +273,7 @@ def cmd_cycle_policy(cycle_id: str, key: str, value: str) -> None:
 
 
 def cmd_cycle_start(cycle_id: str, title: str | None,
-                    force: bool = False, tags=None) -> None:
+                    force: bool = False, tags=None, parallel=None) -> None:
     """Create a cycle AND pin it on the node the rule picks. One command.
 
     The launcher should not have to know how the DAG is ranked, so the pick happens here, using the
@@ -283,6 +283,10 @@ def cmd_cycle_start(cycle_id: str, title: str | None,
     `--tags` is the filter set this cycle will pick from, and it has to reach the PICK here: the
     pick happens while the cycle is being created, so a set that only landed in the cycle record
     would be too late for the first node.
+
+    `--parallel` 是这条线同时握几格：它落的正是 `policies.parallel` 那一格（`cycle policy` 写的
+    是同一个键），所以开局这一次挑到几格、以后每一次收尾补几格，取的是同一个数。不给就用缺省
+    （一次一格）。
 
     Refuses while another cycle is still active, unless `--force`. The alternative -- two active
     cycles -- makes the next bare `next` an `ask_user`, which an unattended run cannot answer, and
@@ -296,12 +300,15 @@ def cmd_cycle_start(cycle_id: str, title: str | None,
 
     tags = _parse_cycle_tags(tags)
     _require_tags(tags, 'pf cycle start')
+    # 命令行那一格过 `cycle policy` 用的同一个解析口：正整数落盘，`off` 落回缺省。
+    stated = _parse_policy_count('parallel', parallel) if parallel is not None else None
     with _ledger_lock():
         project = _resolve_project_root(Path.cwd())
-        # 开局钉几格与收尾补几格是同一件事：`parallel` 说这条线同时握几个节点。这条线刚落盘，
-        # 记录里还没有 `policies`，所以此刻的 `parallel` 就是缺省值 —— 而这一个数同时是这次
-        # 挑选的 `limit` 与开局钉几格，收尾那条路取的也是它（`cycle_policy` 是唯一来源）。
-        cap = cycle_policy({})['parallel']
+        # 开局钉几格与收尾补几格是同一件事：`parallel` 说这条线同时握几个节点。这一次挑选的
+        # `limit` 与开局钉几格都是它 —— `cycle_policy` 是拿它的唯一来源，命令行给了就先问它一次，
+        # 没给就是这条新线落盘后的那个缺省值。
+        stated_or_default = {'parallel': stated} if stated is not None else {}
+        cap = cycle_policy({'policies': stated_or_default})['parallel']
         ranked = pipeline.ranked_ready_nodes(project, limit=cap, tags=tags)
         if not ranked:
             blocked = pipeline.tag_blocked_ready_nodes(project, tags)
@@ -319,6 +326,8 @@ def cmd_cycle_start(cycle_id: str, title: str | None,
         cmd_cycle_create(cycle_id, title, force=force, tags=tags)
         state = _read_state()
         cycle = _find_cycle(state, cycle_id)
+        if stated is not None:
+            cycle.setdefault('policies', {})['parallel'] = stated
         holding = [{'id': n['id'], 'since': cycle['created_at']} for n in ranked[:cap]]
         _set_holding(cycle, holding)
         _write_state(state)

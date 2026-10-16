@@ -282,6 +282,43 @@ class TestParallelSlots(Base):
         self.assertEqual(cycle.get('policies', {}).get('parallel', 1), 1)
         self.assertEqual(len(sb.holding_ids()), 1, 'the default must pin exactly one node')
 
+    def test_the_start_pins_the_slots_the_line_states(self):
+        """开局就说清这条线握几格：`cycle start --parallel 2` 当场握上两格，一次派发两份 prompt。
+
+        同一个数落在 `policies.parallel` 上（`cycle policy` 写的是那一格），所以开局这一次挑到
+        几格、以后每一次收尾补几格取的是同一个数。
+        """
+        sb = self.make()
+        sb.add_node(NODE, '甲', mode='auto')
+        sb.add_node(NODE2, '乙', mode='auto')
+        sb.start_cycle(tags=['coding'], parallel=2)
+
+        self.assertEqual(sb.cycle()['policies']['parallel'], 2)
+        self.assertEqual(sorted(sb.holding_ids()), sorted([NODE, NODE2]), '开局该握上两格')
+
+        action = sb.next()
+
+        self.assertEqual(action['action'], 'dispatch')
+        self.assertEqual(sorted(n['node_id'] for n in action['nodes']), sorted([NODE, NODE2]))
+        for item in action['nodes']:
+            self.assertTrue(Path(item['prompt']).is_file(), item['prompt'])
+
+    def test_the_start_refuses_a_parallel_that_is_not_a_positive_integer(self):
+        """开局给的那个数按 `cycle policy` 的同一个口径判：0 当场被拒，`off` 落回缺省。"""
+        sb = self.make()
+        sb.add_node(NODE, '甲', mode='auto')
+        sb.add_node(NODE2, '乙', mode='auto')
+
+        refused = sb.start_cycle(tags=['coding'], parallel=0, check=False)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn('parallel', refused.stderr)
+        self.assertEqual([], [c['id'] for c in (sb.state() or {'cycles': []})['cycles']],
+                         '被拒的开局不该留下一条线')
+
+        sb.start_cycle(tags=['coding'], parallel='off')
+        self.assertEqual(len(sb.holding_ids()), 1, '`off` 落回缺省：一次一格')
+        self.assertNotIn('parallel', sb.cycle().get('policies') or {})
+
     def test_parallel_two_pins_two_and_dispatches_one_action_for_both(self):
         """`parallel=2`：开局把两个就绪节点都握上，一次派发同时开出两份 prompt。"""
         sb = self.two_ready(parallel=2)

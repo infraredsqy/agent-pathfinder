@@ -11,8 +11,8 @@ from pathlib import Path
 
 from . import maintenance, seam
 from .store import (_holding_ids, _loader, cycle_policy, find_cycle, load_signal, load_state,
-                    meta_dir, note_session)
-from .prompts import started_marker, write_prompt_file
+                    note_session)
+from .prompts import (launch_dir, launch_prompt_path, started_marker, write_prompt_file)
 from .planner import plan
 
 MAX_SETTLE_STEPS = 8
@@ -110,7 +110,7 @@ def _claim_spawn(project: Path, cycle_id: str, node_id: str) -> tuple[bool, Path
     mtime and judges it from the top. Three rounds, then give up with the refusal; a caller that
     really is alone will win one of them, and a caller that is not must not win any.
     """
-    directory = meta_dir(project) / 'launch' / cycle_id / node_id
+    directory = launch_dir(project, cycle_id) / node_id
     directory.mkdir(parents=True, exist_ok=True)
     claim = directory / 'SPAWN.claim'
     for _ in range(3):
@@ -172,8 +172,8 @@ def spawn_session(project: Path, cycle_id: str, prompt_file: str | None = None,
     if not dry_run and prompt_file:
         prompt_path = Path(prompt_file)
         node_id = prompt_path.parent.name
-        launch_dir = meta_dir(project) / 'launch' / cycle_id / node_id
-        if prompt_path.parent == launch_dir:
+        node_dir = launch_dir(project, cycle_id) / node_id
+        if prompt_path.parent == node_dir:
             got, claim = _claim_spawn(project, cycle_id, node_id)
             if not got:
                 raise RuntimeError(
@@ -236,7 +236,7 @@ def clean_launch_dir(project: Path, cycle_id: str, node_id: str) -> None:
     survive -- which is why this runs only on the success path. The directory itself stays as the
     stamp's home and is reaped by `_prune_launch_dirs` once the node leaves the line.
     """
-    directory = meta_dir(project) / 'launch' / cycle_id / node_id
+    directory = launch_dir(project, cycle_id) / node_id
     try:
         for name in ('prompt.txt', 'SPAWN.claim'):
             f = directory / name
@@ -266,7 +266,7 @@ def _prune_launch_dirs(project: Path, cycle_id: str) -> None:
         return
     keep = set(_holding_ids(cycle)) if cycle else set()
     try:
-        dirs = [d for d in (meta_dir(project) / 'launch' / cycle_id).iterdir()
+        dirs = [d for d in launch_dir(project, cycle_id).iterdir()
                 if d.is_dir()]
     except OSError:
         return
@@ -368,9 +368,7 @@ def apply(project, cycle_id: str | None = None, decision: str | None = None,
                     # The prompt file's path names the node, and the node had no name until now. The
                     # text inside it does not: it is the same three blocks whatever the node turns
                     # out to be called, so it was written above without waiting.
-                    action['prompt'] = str(meta_dir(project)
-                                           / 'meta' / 'launch' / action['cycle']
-                                           / node_id / 'prompt.txt')
+                    action['prompt'] = str(launch_prompt_path(project, action['cycle'], node_id))
                 add_command = None
                 done += 1
                 continue                  # the rebind moved every later command: re-read this slot
