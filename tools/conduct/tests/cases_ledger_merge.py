@@ -105,10 +105,8 @@ def step(node_id, started, ended, result='completed'):
     return {'node': node_id, 'started_at': started, 'ended_at': ended, 'result': result}
 
 
-def cycle(path=(), node_in_hand=None, started=None, status='active', updated='2026-10-01T01:00:00Z',
-          **extra):
-    entry = {'id': 'cyc', 'title': 'cyc', 'status': status,
-             'current_node': node_in_hand, 'current_started_at': started, 'path': list(path),
+def cycle(path=(), status='active', updated='2026-10-01T01:00:00Z', **extra):
+    entry = {'id': 'cyc', 'title': 'cyc', 'status': status, 'holding': [], 'path': list(path),
              'created_at': '2026-09-01T00:00:00Z', 'updated_at': updated}
     entry.update(extra)
     return {'cycles': [entry]}
@@ -387,7 +385,7 @@ class TestIdeasMerge(LedgerCase):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestStateMerge(LedgerCase):
-    """The cycles: `path` is append-only, and the claim pair is one value."""
+    """The cycles: `path` is append-only."""
 
     LEDGER = '.pf/state.json'
     SORT_KEYS = False
@@ -426,32 +424,6 @@ class TestStateMerge(LedgerCase):
         proc, ours_path = self.merge(base, ours, theirs)
 
         self.assertRefused(proc, ours_path, 'path', ours_data=ours)
-
-    def test_the_claim_pair_follows_the_newer_claim(self):
-        base = cycle([], node_in_hand=NODE1, started='2026-10-01T01:00:00Z')
-        theirs = cycle([], node_in_hand=NODE2, started='2026-10-01T09:00:00Z')
-
-        proc, ours_path = self.merge(base, base, theirs)
-
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        entry = self.merged(ours_path)['cycles'][0]
-        self.assertEqual(NODE2, entry['current_node'])
-        self.assertEqual('2026-10-01T09:00:00Z', entry['current_started_at'])
-
-    def test_letting_a_node_go_can_win_over_an_older_claim(self):
-        """`null` is the older state, so the side that closed the node holds the newer fact."""
-        base = cycle([], node_in_hand=NODE1, started='2026-10-01T01:00:00Z')
-        ours = cycle([step(NODE1, '2026-10-01T01:00:00Z', '2026-10-01T05:00:00Z')],
-                     node_in_hand=None, started=None, updated='2026-10-01T05:00:00Z')
-        theirs = cycle([], node_in_hand=NODE1, started='2026-10-01T01:00:00Z',
-                       updated='2026-10-01T02:00:00Z')
-
-        proc, ours_path = self.merge(base, ours, theirs)
-
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        entry = self.merged(ours_path)['cycles'][0]
-        self.assertIsNone(entry['current_node'])
-        self.assertEqual([NODE1], [s['node'] for s in entry['path']])
 
     def test_a_status_only_one_side_changed_is_taken(self):
         base = cycle([], status='active')

@@ -96,11 +96,11 @@ def _is_live(entry: dict) -> bool:
 # ── where the pipeline stands, and what is visible from there ──
 
 def _holding_ids(cycle: dict) -> list:
-    """这条线此刻握着的那组节点（`holding` 的唯一读法；旧单数写法读作只有一项的列表）。"""
+    """这条线此刻握着的那组节点（`holding` 的唯一读法）。"""
     holding = cycle.get('holding')
     if isinstance(holding, list):
         return [item['id'] if isinstance(item, dict) else item for item in holding if item]
-    return [cycle['current_node']] if cycle.get('current_node') else []
+    return []
 
 
 def _cycle_of_node(active: list, node: str) -> str | None:
@@ -149,8 +149,7 @@ def _cycle_statuses(project: str | None = None) -> dict:
     """{cycle id: status}, for the entries whose cycle is no longer the current one.
 
     This reader goes straight to the file (it takes a project root rather than the process cwd), so
-    it reads the word as written: every comparison here is against `active`, and no retired spelling
-    folds into it.
+    it reads the word as written: every comparison here is against `active`.
     """
     state = _read_json(ledger_dir_for(project) / 'state.json', 'state.json') or {}
     return {c.get('id'): c.get('status')

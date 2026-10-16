@@ -16,11 +16,10 @@ path it has walked:
      "tags": [...], "policies": {"when_shelved": "stop", "parallel": 2}}
 
 `holding` is how many nodes this line carries at once: the claim goes in there and `parallel`
-decides how many fit (`_holding_of` / `_holding_ids` are the one reading of it). Older records carry
-the single-node spelling (`current_node` / `current_started_at`) and are read as a one-item list.
+decides how many fit (`_holding_of` / `_holding_ids` are the one reading of it).
 
-There is no second file: `loops/` is gone. How a node's own work is split never was the pipeline's
-business, and neither is how many sessions a node took.
+How a node's own work is split never was the pipeline's business, and neither is how many sessions a
+node took.
 
 A cycle has exactly two statuses, `active` (this line should push forward) and `inactive` (do not
 push); the graph has three, `todo` / `shelved` / `completed`. Two labels are DERIVED and never stored:
@@ -33,13 +32,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 from pathlib import Path
 
 
 # ── the two stored vocabularies, and the derived labels ──────────────────────
-# 没有别名层：读进来的就是盘上那个词，写出去的也是这一个。读到词表外的词说明那份档案没迁移完，
-# 工具照原样读它，绝不替它猜一个词（与 `dag-manage.py` 同一条约定）。
+# 读进来的就是盘上那个词，写出去的也是这一个：词表外的词照字面读，绝不替它猜一个词
+# （与 `dag-manage.py` 同一条约定）。
 #: 节点状态：`todo` 在局中未交付（正在被某条 cycle 跑的节点也还是 todo）、`shelved` 出局等人、
 #: `completed` 已交付。
 #: cycle 状态只有两个：`active` 这条线该往前推、`inactive` 不要推。一条线停下来的原因不值得留
@@ -62,7 +60,7 @@ DEFAULT_MODE = 'auto'
 
 
 def normalize_mode(mode: str | None) -> str:
-    """盘上那个词，或（没写时）兜底的 `auto`。没有别名要折。"""
+    """盘上那个词，或（没写时）兜底的 `auto`。"""
     return mode or DEFAULT_MODE
 
 
@@ -170,21 +168,15 @@ def note_session(project: Path, node_id: str, role: str, session: str, host: str
 
 
 def _read_json(path: Path):
-    # JSON is UTF-8 by spec; older builds wrote these files in the process locale encoding
-    # (gbk on this machine), so keep a fallback rather than dying on a legacy file.
     if not path.exists():
         return None
-    last = None
-    for enc in ('utf-8', os.device_encoding(1) or 'utf-8', 'gbk', 'cp936'):
-        try:
-            with open(path, 'r', encoding=enc) as f:
-                return json.load(f)
-        except UnicodeDecodeError as e:
-            last = e
-            continue
-        except json.JSONDecodeError as e:
-            raise ValueError(f'{path}: not valid JSON: {e}') from e
-    raise ValueError(f'{path}: could not decode ({last})')
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except UnicodeDecodeError as e:
+        raise ValueError(f'{path}: not valid UTF-8: {e}') from e
+    except json.JSONDecodeError as e:
+        raise ValueError(f'{path}: not valid JSON: {e}') from e
 
 
 def load_state(project: Path) -> dict:
@@ -202,9 +194,8 @@ def load_signal(project: Path, cycle_id: str, node_id: str) -> dict | None:
 def load_dag(project: Path) -> dict:
     """The graph, with every node's mode filled in when the record leaves it out.
 
-    The STATUS word is read exactly as it is on disk: there is no alias layer left, because two tools
-    disagreeing about one word is the shape of bug this reader exists to prevent -- so the words are
-    the ones `dag-manage.py` writes, and nothing folds a retired spelling into them.
+    The STATUS word is read exactly as it is on disk: the words are the ones `dag-manage.py` writes,
+    because two tools disagreeing about one word is the shape of bug this reader exists to prevent.
     """
     data = _read_json(ledger_dir(project) / 'ideas.json') or {'nodes': {}}
     for node in (data.get('nodes') or {}).values():
@@ -245,8 +236,7 @@ def find_cycle(state: dict, cycle_id: str | None) -> dict | None:
 def _holding_of(cycle: dict) -> list:
     """这条线此刻握着的那一组节点，规范形 `[{'id':..., 'since':...}, ...]`（可为空）。
 
-    这是认领标记的唯一读法；旧记录的单数 `current_node` / `current_started_at` 读作只有一项的
-    列表。写侧只写 `holding`（见 `conduct_state/store.py` 的 `_set_holding`）。
+    这是认领标记的唯一读法。写侧只写 `holding`（见 `conduct_state/store.py` 的 `_set_holding`）。
     """
     holding = cycle.get('holding')
     if isinstance(holding, list):
@@ -257,9 +247,6 @@ def _holding_of(cycle: dict) -> list:
             elif isinstance(item, str) and item:
                 out.append({'id': item, 'since': None})
         return out
-    legacy = cycle.get('current_node')
-    if legacy:
-        return [{'id': legacy, 'since': cycle.get('current_started_at')}]
     return []
 
 

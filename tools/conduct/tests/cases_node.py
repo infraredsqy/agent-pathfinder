@@ -806,8 +806,6 @@ class TestNodeTags(Base):
         state = sb.state()
         state['cycles'][0].pop('tags', None)
         state['cycles'][0]['holding'] = [{'id': self.W, 'since': '2026-10-01T00:00:00Z'}]
-        state['cycles'][0].pop('current_node', None)
-        state['cycles'][0].pop('current_started_at', None)
         sb.rewrite_state(state)
 
         self.assertNotIn('tags', sb.cycle(), 'the fixture wrote the key back')

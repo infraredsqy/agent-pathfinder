@@ -99,16 +99,13 @@ def chdir(path):
 
 
 def _decode(path: Path):
-    """Read one of the tool's JSON files. JSON is UTF-8; older builds wrote the locale encoding."""
+    """Read one of the tool's JSON files. JSON is UTF-8."""
     if not path.exists():
         return None
-    raw = path.read_bytes()
-    for enc in ('utf-8', 'gbk', 'cp936'):
-        try:
-            return json.loads(raw.decode(enc))
-        except UnicodeDecodeError:
-            continue
-    raise AssertionError(f'{path} is not decodable as utf-8/gbk')
+    try:
+        return json.loads(path.read_bytes().decode('utf-8'))
+    except UnicodeDecodeError:
+        raise AssertionError(f'{path} is not valid UTF-8') from None
 
 
 def _child_env():

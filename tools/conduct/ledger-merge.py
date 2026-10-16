@@ -38,15 +38,6 @@ One record per entry, and what identifies it
 Every rule below runs ONLY when both sides changed a field to different values; `ours == base` takes
 theirs, `theirs == base` takes ours, and a field only one side touched is not a question at all.
 
-`current_node` / `current_started_at` are deliberately SHARED, never localized
--------------------------------------------------------------------------------
-`current_node` 同时是「这条线现在握着哪个节点」的**认领标记**：它不是一份可以按机器各留一份的本地
-指针，而是「这一格已经有人接了」这件事的唯一凭据 —— 另一条 cycle 的 pick 靠它跳过别人手上的节点，
-收尾靠它认领。所以合并时不做本地化，也不把两个字段拆开各取一半：`current_node` /
-`current_started_at` 当成**一个整体**，按 `current_started_at` 较新的那一侧取值（`null` 表示手上
-没有节点，也就是更早的那个状态）。较新的那次认领就是现在的事实 —— 这正是这两格当初留在共享记录
-里、而没有拆到每台机器上的原因。
-
 AUTO-MERGE  (no question asked)
 -------------------------------
   * a field only one side changed                     -> that side
@@ -62,7 +53,6 @@ AUTO-MERGE  (no question asked)
   * state cycle `path` (append-only)                  -> the longer list when one is a prefix of the
                                                          other; else the two tails merged, ordered by
                                                          `ended_at` (`started_at` as fallback)
-  * state cycle `current_node`/`current_started_at`   -> the side whose claim is newer
   * state cycle `status`                              -> the two words are `active` / `inactive`;
                                                          two sides naming different ones is a fight
   * instructions resolution (state + its stamp)       -> the side whose `resolved_at` is newer
@@ -85,7 +75,6 @@ FLAG  (nothing is written, exit 1, a human decides)
     nothing said until somebody runs `dag-manage validate`
   * state cycle: `title` / `tags` / `policies` both changed to different values (`status` is
     reachable only as a real disagreement: two sides naming two different words)
-  * state cycle: the claim pair both changed, with equal-or-missing `current_started_at`
   * instructions: the same `id` added by BOTH sides with different content (an add/add collision)
   * instructions: any field both sides changed, except the resolution group and the applied log
   * instructions: the same `applied` mark (same `at` + `cycle` + `round`) with different contents
@@ -146,8 +135,6 @@ EXIT_USAGE = 2
 
 #: The rungs, low to high: what the graph's three words say about how far along a node is.
 NODE_STATUS_ORDER = ('todo', 'shelved', 'completed')
-#: `current_node` + `current_started_at`: ONE claim, resolved as one value (see the docstring).
-CLAIM_PAIR = ('current_node', 'current_started_at')
 #: One `instruct resolve` writes these together; they are one act and move as one.
 RESOLUTION_GROUP = ('state', 'resolved_at', 'resolved_by', 'superseded_by')
 #: Append-only logs on an instruction entry: one mark per node that honoured the constraint (a
@@ -162,7 +149,7 @@ _MISSING = object()          # the key is not in the record at all (an explicit 
 #: An entry one side DELETED, as a value in a conflict line (`_fmt` knows how to print it).
 _DELETED = object()
 #: `_three_way`'s "no decision" answer. It is NOT `None`: JSON null is a perfectly ordinary value
-#: here (`cycle`, `node`, `resolved_at` and the claim pair are null most of the time), and using
+#: here (`cycle`, `node` and `resolved_at` are null most of the time), and using
 #: `None` for both would turn every pair of equal nulls into a conflict.
 _UNDECIDED = object()
 
@@ -403,31 +390,16 @@ def _both_changed(base_value, ours_value, theirs_value) -> bool:
     return _three_way(base_value, ours_value, theirs_value) is _UNDECIDED
 
 
-def _merge_mapping(base, ours, theirs, rep, entry, resolve, pairs=None) -> dict:
+def _merge_mapping(base, ours, theirs, rep, entry, resolve) -> dict:
     """One record, field by field.
 
-    `resolve(key, base_value, ours_value, theirs_value)` decides an ordinary field. `pairs` maps a
-    tuple of keys to a resolver that receives the three sides' TUPLES: those keys are one value and
-    are written together (or, when they conflict, `_MISSING` and left out -- the file is not written
-    in that case anyway). A field whose winning value is `_MISSING` is absent by design: either the
-    key was deleted on one side, or a rule refused to decide it.
+    `resolve(key, base_value, ours_value, theirs_value)` decides an ordinary field. A field whose
+    winning value is `_MISSING` is absent by design: either the key was deleted on one side, or a
+    rule refused to decide it.
     """
-    pairs = pairs or {}
-    pair_of = {key: pair for pair in pairs for key in pair}
-    resolved: dict = {}
     out = {}
     for key in _keys(ours, theirs):
-        if key in pair_of:
-            pair = pair_of[key]
-            if pair not in resolved:
-                resolved[pair] = pairs[pair](*(tuple(_get(obj, k) for k in pair)
-                                              for obj in (base, ours, theirs)))
-            got = resolved[pair]
-            if got is _MISSING:
-                continue
-            value = got[pair.index(key)]
-        else:
-            value = resolve(key, _get(base, key), _get(ours, key), _get(theirs, key))
+        value = resolve(key, _get(base, key), _get(ours, key), _get(theirs, key))
         if value is not _MISSING:
             out[key] = value
     return out
@@ -683,44 +655,20 @@ def _merge_cycle(label, base, ours, theirs, rep):
             return _stamp(label, key, b, o, t, rep, pick=min)
         return _plain_field(label, key, b, o, t, rep)
 
-    return _merge_mapping(_as_dict(base), _as_dict(ours), _as_dict(theirs), rep, label, resolve,
-                          pairs={CLAIM_PAIR: lambda b, o, t: _claim(label, b, o, t, rep)})
+    return _merge_mapping(_as_dict(base), _as_dict(ours), _as_dict(theirs), rep, label, resolve)
 
 
 def _cycle_status(label, base_value, ours_value, theirs_value, rep):
     """`active` / `inactive`: the account carries exactly these two.
 
-    Nothing folds the words any more, so two sides that name two different ones really do disagree --
-    that is a conflict a human settles, never a coin toss.
+    Two sides that name two different ones really do disagree -- that is a conflict a human settles,
+    never a coin toss.
     """
     got = _three_way(base_value, ours_value, theirs_value)
     if got is not _UNDECIDED:
         return got
     rep.conflict(label, 'status', ours_value, theirs_value, '两侧的 cycle 状态是两个不同的词')
     return _MISSING
-
-
-def _claim(label, base_pair, ours_pair, theirs_pair, rep):
-    """`current_node` + `current_started_at` are ONE claim: the newer claim is the fact.
-
-    `null` is "nothing in hand" -- the older state -- so closing a node (which nulls the pair) can win
-    over an older open claim. See the module docstring: this pair is deliberately shared between
-    machines and is never localized, which is exactly why it is merged as a claim and not per field.
-    """
-    got = _three_way(base_pair, ours_pair, theirs_pair)
-    if got is not _UNDECIDED:
-        return got
-    o_start = ours_pair[1] if isinstance(ours_pair[1], str) else ''
-    t_start = theirs_pair[1] if isinstance(theirs_pair[1], str) else ''
-    if o_start == t_start:
-        rep.conflict(label, 'current_node + current_started_at', ours_pair, theirs_pair,
-                     '两侧的 current_started_at 一样（或都没有），认不出哪次认领更新')
-        return _MISSING
-    ours_wins = o_start > t_start
-    winner = ours_pair if ours_wins else theirs_pair
-    rep.decide(f'{label}: 认领按 current_started_at 较新的一侧整体取值'
-               f'（{"ours" if ours_wins else "theirs"} {max(o_start, t_start)}）')
-    return winner
 
 
 def _path(label, base_value, ours_value, theirs_value, rep):
