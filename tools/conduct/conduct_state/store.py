@@ -213,6 +213,17 @@ def _atomic_write(path: Path, data: dict) -> None:
         sys.exit(1)
 
 
+def record_bytes(data: dict) -> bytes:
+    """这四份记录落盘时的那串字节：格式由写方给出，合并驱动照它比对。
+
+    `state.json` / `instructions.json` / 条子都经 `_atomic_write` 落盘，格式在
+    `tools/shared/jsonio.py`（缩进 2、中文原样、`sort_keys` 留缺省）。合并驱动拿这串字节与盘上
+    那份比对：两串一模一样，那枚文件就原样留着，一个字节都不碰。判据只有写方给得出 —— 驱动若自己
+    `json.dumps` 一遍，这边哪天改了格式，往后每一次合并都会看起来像有改动。
+    """
+    return _shared('pf_shared_jsonio', 'jsonio.py').json_bytes(data)
+
+
 def _read_json(path: Path, label: str) -> dict | None:
     """One record read strict, or the command ends with the reader's own words.
 

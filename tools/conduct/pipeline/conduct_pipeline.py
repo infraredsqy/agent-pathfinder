@@ -78,7 +78,6 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -86,19 +85,6 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CONDUCT = HERE.parent                      # the conduct tool directory
 STATE_MANAGE = HERE / 'state-manage.py'
-# `dag-manage.py` lives in the sibling `dag/` directory of the shipped tree, and that is the only
-# place this module looks for it. A tree that keeps the conduct scripts somewhere else (a review
-# draft, a drill copy) points at the real tool with `DSH_CONDUCT_DAG_MANAGE` rather than relying on
-# this module having a second search path of its own: a silent fallback into `~/.agents` would also
-# hide the failure that matters -- a shipped tree whose sibling `dag/` went missing.
-DAG_MANAGE = Path(os.environ.get('DSH_CONDUCT_DAG_MANAGE')
-                  or CONDUCT.parent / 'dag' / 'dag-manage.py')
-#: `issue_manager.py` owns the issue pool (`.pf/issues/issues.json`) and the one number this side
-#: reads out of it: the pool's weighted debt, which the maintenance channel compares with a line's
-#: `issue_pool_weight_limit`. Same rule as `DAG_MANAGE` above -- the sibling `issue/` directory of
-#: the shipped tree, with `DSH_CONDUCT_ISSUE_MANAGE` for a tree that keeps these scripts elsewhere.
-ISSUE_MANAGE = Path(os.environ.get('DSH_CONDUCT_ISSUE_MANAGE')
-                    or CONDUCT.parent / 'issue' / 'issue_manager.py')
 #: Every child process this module starts is bounded by this many seconds. It lives
 #: HERE, in the entry module, with the command builders below and `_run`, because those are the
 #: names a caller patches on the loaded module: the test harness replaces `pipeline._run` with its
@@ -189,6 +175,31 @@ def _loader():
         _LOADER = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(_LOADER)
     return _LOADER
+
+
+def _tool_path(env_var: str, default):
+    """`tools/shared/toolpath.py`: `<env var>` when it is set, else the neighbour this tree ships.
+
+    The two tools below are the tree's parts this module only calls; one rule, resolved once, is what
+    keeps `DSH_CONDUCT_DAG_MANAGE` and `DSH_CONDUCT_ISSUE_MANAGE` meaning the same thing here as they
+    do in the merge driver.
+    """
+    toolpath = _loader().load_by_path('pf_shared_toolpath', SHARED / 'toolpath.py',
+                                      register=True, reuse=True)
+    return toolpath.tool_path(env_var, default)
+
+
+# `dag-manage.py` lives in the sibling `dag/` directory of the shipped tree, and that is the only
+# place this module looks for it. A tree that keeps the conduct scripts somewhere else (a review
+# draft, a drill copy) points at the real tool with `DSH_CONDUCT_DAG_MANAGE` rather than relying on
+# this module having a second search path of its own: a silent fallback into `~/.agents` would also
+# hide the failure that matters -- a shipped tree whose sibling `dag/` went missing.
+DAG_MANAGE = _tool_path('DSH_CONDUCT_DAG_MANAGE', CONDUCT.parent / 'dag' / 'dag-manage.py')
+#: `issue_manager.py` owns the issue pool (`.pf/issues/issues.json`) and the one number this side
+#: reads out of it: the pool's weighted debt, which the maintenance channel compares with a line's
+#: `issue_pool_weight_limit`. Same rule as `DAG_MANAGE` above -- the sibling `issue/` directory of
+#: the shipped tree, with `DSH_CONDUCT_ISSUE_MANAGE` for a tree that keeps these scripts elsewhere.
+ISSUE_MANAGE = _tool_path('DSH_CONDUCT_ISSUE_MANAGE', CONDUCT.parent / 'issue' / 'issue_manager.py')
 
 
 def _load_impl():
