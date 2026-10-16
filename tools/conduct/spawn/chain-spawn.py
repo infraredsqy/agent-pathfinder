@@ -6,14 +6,22 @@
 The pipeline (`next --spawn` / `dispatch <cycle>`) decides WHAT the next session works on before it
 reaches the spawner. This file is the other caller shape: a chain a skill runs on itself --
 text-repair rounds, say -- where the prompt file already carries the whole handoff (its first line is
-the next invocation line) and no ledger is involved.
-It adds nothing of its own: pick the host's spawner (`spawn/host.py`'s `default_spawner` -- the one
-answer to "which spawner", asked without loading the pipeline), make the one call
-(`conduct_spawn.spawn_session`), print its last line.
+the next invocation line).
 
-The failure-marker policy is the spawners' own, and it is correct here as it stands: this call IS
-the chain advancing, so a failure leaves `.pf/meta/CONDUCT-CALLBACK-FAILED-<cycle-id>.json` on
-disk -- the human's entry point -- and a success clears this chain's stale one.
+It is a CLI over the SAME door: the session is started by the pipeline's `spawn_session`
+(`conduct_pipeline_impl/writer.py`), the one place that starts sessions, so what that door carries comes
+with this call too -- the session note that makes the conversation visible to `session show/list`, the
+marker's write/clear policy (the spawner on the other end writes and clears it), and the spawner's own
+answer to "which one" (`spawn/host.py`'s `default_spawner`, honoring `DSH_CONDUCT_SPAWNER`; a line's
+`spawner` policy is read by `resolve_spawner` inside that door when the caller names a cycle this
+project records).
+
+One guarantee does NOT come with it, and stating it beats assuming it: the spawn claim. A claim is
+taken only for a prompt that sits in the launch directory it belongs to
+(`meta/launch/<cycle>/<node_id>/prompt.txt`), and a skill-run chain keeps its prompt next to itself
+(`.pf/repair/chain/…`), so this path takes no claim -- two concurrent handoffs of the same prompt file
+have no mutual exclusion. That gap is open: the door refuses a double dispatch only where the pipeline
+placed the prompt itself.
 
 Exit codes
 ----------
@@ -61,7 +69,7 @@ def main(argv=None) -> int:
 
     parser = argparse.ArgumentParser(
         prog='chain-spawn.py',
-        description='按 prompt 文件开一个新 session：宿主自动挑 spawner，链在这里交棒。')
+        description='按 prompt 文件开一个新 session：走管线那一道门，链在这里交棒。')
     parser.add_argument('--prompt-file', required=True,
                         help='下一棒的 prompt 全文；第一行是下一棒的调用行')
     parser.add_argument('--cycle-id', default=None,
@@ -75,12 +83,15 @@ def main(argv=None) -> int:
     prompt_file = Path(args.prompt_file).resolve()
     workspace = Path(args.workspace).resolve()
     cycle_id = args.cycle_id or prompt_file.stem
-    spawner = _loaded(HERE / 'host.py', 'conduct_spawn_host').default_spawner()
+    pipeline = _loaded(CONDUCT / 'pipeline' / 'conduct_pipeline.py', 'conduct_pipeline')
     try:
-        output = _loaded(HERE / 'conduct_spawn.py', 'conduct_spawn').spawn_session(
-            workspace, cycle_id, prompt_file, spawner=spawner, dry_run=args.dry_run)
-    except (OSError, RuntimeError) as error:
-        marker = workspace / '.pf' / 'meta' / f'CONDUCT-CALLBACK-FAILED-{cycle_id}.json'
+        # 管线那一道门：开会的口只此一个（`writer.spawn_session`）。spawner 由它的末档回答
+        # （入口算好的宿主自认），会话便条与标记的写、清都在那一道门里；claim 认领的只是落在
+        # launch 目录里的 prompt，这条链拿不到它（见模块说明）。
+        output = pipeline.spawn_session(workspace, cycle_id, str(prompt_file),
+                                        dry_run=args.dry_run)
+    except (OSError, RuntimeError, ValueError) as error:
+        marker = _loaded(HERE / 'marker.py', 'pf_spawn_marker').marker_path(workspace, cycle_id)
         print(f'没开起来：{error}\n'
               f'prompt 还在 {prompt_file}；spawner 若已落降级标记，就在 {marker}。',
               file=sys.stderr)

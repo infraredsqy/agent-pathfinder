@@ -12,8 +12,11 @@
 
 `conduct_pipeline_impl/writer.py` 的 `spawn_session()` 是管线**唯一**开会的口：它经 `spawn/conduct_spawn.py`
 调 `dsh-spawn.ps1`，把 `dispatch` 动作写下的那份 prompt 发出去。入口是 `pf next --spawn`——干活会话收尾
-时那一条；`--plan` 是只读预览，绝不 spawn。conductor 自己不手敲 API：`commands` 一律由工具跑，调用方
-只读 `action`。
+时那一条；`--plan` 是只读预览，绝不 spawn。技能自跑的链（`spawn/chain-spawn.py`）自己只是一个 CLI 壳，
+开会话那一拍同样落在这道门上：会话便条、标记的写与清都由它带着。**claim 那一条它拿不到**：claim 只认领
+落在 launch 目录里的那份 prompt，而技能自跑的链把 prompt 放在自己那一层（`.pf/repair/chain/…`）下——
+同一个 prompt 文件被并发交棒两次时没有互斥，这个缺口还开着。
+conductor 自己不手敲 API：`commands` 一律由工具跑，调用方只读 `action`。
 
 建会话是环境专属动作（HTTP 端点、cookie 鉴权、工作区分组），所以它单独关在一个脚本里。成功时那一行
 `spawned: session <id> (…)` 是这条链唯一说出会话 id 的地方，管线就从它这里把 id 落进那一格的会话便条
@@ -48,9 +51,14 @@ cookie 的门票。
 两节。spawner 这一边只添三件事：
 
 - **旧 session 一律不复活**，每次都是新开一个。
-- `dsh-spawn.ps1` 对每个 API 调用自带重试（退避递增）；全部失败时把事故写进
-  `.pf/meta/CONDUCT-CALLBACK-FAILED-<cycle>.json`，spawn 成功时清除。标记文件存在 = 这条链现在是断的，
-  人工接管的走法见 [`./conduct-state.md`](./conduct-state.md)「恢复」。
+- `dsh-spawn.ps1` 对每个 API 调用自带重试（退避递增）；全部失败时把事故落成一个按线命名的标记文件，
+  spawn 成功时清除。标记存在 = 这条链现在是断的，人工接管的走法见
+  [`./conduct-state.md`](./conduct-state.md)「恢复」。
+- **标记的记录形状与落点有一处正本**（`spawn/marker.py`）：算路径的是它，`conduct_spawn.argv_for` 把结果
+  作为参数交给 spawner，spawner 不自拼 `.pf/meta` 那条路——名字一改，自拼的地方会安静地写到工具不读的
+  位置。python 侧那份写入走全树那条原子写（临时文件 + 同卷改名 + 对「读方此刻正开着目标文件」的重试）；
+  spawner 那一层是**物理上无法共享的例外**：它的运行点可能没有 python，所以它按同一份形状自己写，两份
+  实现的一致性由 `conduct/tests/cases_cli.py` 的等价性用例钉住。这条写入恰恰是不许丢的那条。
 - 排查顺序：401 看 cookie 与凭据文件；404 看方法名是不是点号写法；`result.ok=false` 看
   `result.error`；会话建了但 GUI 里在"未分组"，看是不是错传了 `cwd`。改鉴权路径时务必端到端验
   一次（用一个自检 cycle id 跑通"新会话建立 → prompt 注入 → `/pf-conduct` 被加载"）。
@@ -60,9 +68,13 @@ cookie 的门票。
 同一个位置还有第二份实现：**ZCode 宿主上由 `zcode-spawn.ps1` 开会话**。它不做 HTTP 调用，而是往
 `~/.zcode/v2/tasks-index.sqlite` 的 `automations` 表写一行，交给 ZCode 桌面自己的 cron 调度器去建
 ——只有 GUI 自己建的会话才进它的任务列表，而"看得见、叫得停、进度看得见"正是这条通路存在的理由
-（外部命令行开的会话永远进不去那份列表）。参数、`spawned:` 末行、降级标记三条契约与 `dsh-spawn.ps1`
-完全一致，`conduct_spawn.py` 那份 argv 两边通用；通路细节与"为什么绕这一道"写在 `zcode-dispatch.py`
-的模块说明里。
+（外部命令行开的会话永远进不去那份列表）。**两份脚本共用一个外壳**（`spawn/spawn-common.ps1`）：参数
+校验与缺省、prompt 文件校验、标记的写与清都在那一份里，各自只留宿主差异那一半（中段的 HTTP 调用 /
+排队，以及末行）；`conduct_spawn.py` 那份 argv 两边通用。抽成一份的理由是参数面与降级标记那两条契约没有
+别的办法保持一致——两份逐行同构的副本已经在上面的细节上分开走过；末行 `spawned:` 留在各自那一半里
+（两个宿主的那句话本来就不一样），「任何失败都留下降级标记」由外壳保证 —— 连 ZCode 独有的「找不到
+python」那一拍也照这条写标记再退出。
+通路细节与"为什么绕这一道"写在 `zcode-dispatch.py` 的模块说明里。
 
 **选哪一份由工具回答，不由调用方拼**，最具体的答案赢：当场点名 > 这条线自己的 `spawner` 策略 >
 这台机器的环境变量 > 宿主自认（探测答不上来时退到 `dsh` 那一份）。线策略**只收词、不收路径** ——

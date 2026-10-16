@@ -49,6 +49,16 @@ def _host():
     spec.loader.exec_module(module)
     return module
 
+
+def marker_path(root, cycle):
+    """`spawn/marker.py` 算出的落点：测试跟着正本走，那条路径不在测试里再拼一遍。"""
+    spec = importlib_util.spec_from_file_location('pf_spawn_marker_case',
+                                                  CONDUCT_DIR / 'spawn' / 'marker.py')
+    module = importlib_util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.marker_path(root, cycle)
+
+
 # The two tables the dispatcher touches, as the desktop ships them. Spelled out rather than trimmed:
 # a column this row forgets is exactly the failure the DDL is here to catch.
 AUTOMATIONS_DDL = """
@@ -124,20 +134,53 @@ class TestSpawnerChoice(unittest.TestCase):
             self.assertEqual(host.default_spawner().name, 'dsh-spawn.ps1')
 
     def test_the_probe_lives_next_to_the_scripts_it_names(self):
-        """宿主探测只有 `spawn/host.py` 这一个家，而挑 spawner 的链不必加载整条管线。
+        """宿主探测只有 `spawn/host.py` 这一个家；链自跑的那一发走管线那道门。
 
         接缝那个模块（`conduct_pipeline.py`）是调用方 patch 的那一个：探测与它分开住，任何一次探测
-        的改动才落在自己那份文件里，而不是落在「测试要 patch 接缝」的那份上。`chain-spawn.py` 只要
-        「用哪一份 spawner」这一个答案，为它加载整条管线（连实现包）是另一头的代价。
+        的改动都落在自己那份文件里。`chain-spawn.py` 以前自己问宿主、自己调 `conduct_spawn`；现在它
+        只当 CLI 壳，开会话那一拍落在管线那道门上（会话便条、标记的写与清都由它带着；claim 那一条
+        拿不到 —— 那条链的 prompt 不在 launch 目录里，见 `chain-spawn.py` 的模块说明）。
         """
         entry = (CONDUCT_DIR / 'pipeline' / 'conduct_pipeline.py').read_text(encoding='utf-8')
         imported = {alias.name for node in ast.walk(ast.parse(entry))
                     if isinstance(node, (ast.Import, ast.ImportFrom)) for alias in node.names}
         self.assertNotIn('ctypes', imported, '宿主探测住在接缝模块里')
 
-        chain = (CONDUCT_DIR / 'spawn' / 'chain-spawn.py').read_text(encoding='utf-8')
-        self.assertNotIn('conduct_pipeline', chain, '挑 spawner 要加载整条管线')
-        self.assertIn("'host.py'", chain)
+        tree = ast.parse((CONDUCT_DIR / 'spawn' / 'chain-spawn.py').read_text(encoding='utf-8'))
+        # 第二道门不许在这份文件里留下任何痕迹：别名、内联调用、模块名与路径字符串全算。
+        # 大小写敏感地找，`DSH_CONDUCT_SPAWNER` 那类环境变量名因此分得开。
+        texts = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+        texts |= {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+        texts |= {node.value for node in ast.walk(tree)
+                  if isinstance(node, ast.Constant) and isinstance(node.value, str)}
+        self.assertEqual([text for text in sorted(texts) if 'conduct_spawn' in text], [],
+                         '第二道门：chain-spawn.py 里又出现 conduct_spawn 了')
+
+        # 另一头钉住：开会话那一拍落在管线上。上面那条扫描管「没有再调别的门」，这一条管
+        # 「它调的是那道门」—— 别名换了目标，两条各拦一头。
+        bound = {}
+        for node in sorted((n for n in ast.walk(tree)
+                            if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)
+                            and isinstance(n.value, ast.Call)
+                            and isinstance(n.value.func, ast.Name)
+                            and n.value.func.id == '_loaded' and n.value.args),
+                           key=lambda n: n.lineno):
+            parts = sorted((part for part in ast.walk(node.value.args[0])
+                            if isinstance(part, ast.Constant) and isinstance(part.value, str)),
+                           key=lambda part: (part.lineno, part.col_offset))
+            bound[node.targets[0].id] = parts[-1].value if parts else ''
+        receivers = {node.func.value.id for node in ast.walk(tree)
+                     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                     and node.func.attr == 'spawn_session' and isinstance(node.func.value, ast.Name)}
+        self.assertTrue(receivers, 'chain-spawn 没有调 spawn_session')
+        for name in sorted(receivers):
+            self.assertEqual(bound.get(name), 'conduct_pipeline.py',
+                             f'{name}.spawn_session 那一头要绑在管线门上')
+
+        called = {node.func.attr for node in ast.walk(tree)
+                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
+        self.assertNotIn('default_spawner', called, '挑 spawner 的活归那道门')
+        self.assertNotIn('argv_for', called, 'spawner 的 argv 由 conduct_spawn 拼')
 
     # ── 线策略这一级 ─────────────────────────────────────────────────────────
     # `resolve_spawner` 的整条优先级：CLI 点名 > 这条线的 `spawner` 策略 > 环境变量 > 宿主 >
@@ -358,15 +401,16 @@ class TestSpawnerChoice(unittest.TestCase):
         db, ws, prompt, env = self.sandbox()
         env = {**env, 'DSH_CONDUCT_SPAWN_MODE': 'yolo',
                'DSH_CONDUCT_SPAWN_MODEL': 'deepseek/deepseek-flash$max'}
+        marker = marker_path(ws, 'cyc-case')
         proc = subprocess.run(['pwsh', '-NoProfile', '-File', str(SPAWNER),
                                '-CycleId', 'cyc-case', '-PromptFile', str(prompt),
-                               '-WorkspacePath', str(ws), '-NoVerify'],
+                               '-WorkspacePath', str(ws), '-MarkerPath', str(marker), '-NoVerify'],
                               capture_output=True, text=True, encoding='utf-8', errors='replace',
                               env=env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertTrue(proc.stdout.strip().splitlines()[-1].startswith('spawned: automation '),
                         proc.stdout)
-        self.assertFalse((ws / '.pf' / 'meta' / 'CONDUCT-CALLBACK-FAILED-cyc-case.json').exists())
+        self.assertFalse(marker.exists(), '派发成功之后旧的降级标记还躺在盘上')
         con = sqlite3.connect(str(db))
         mode, selection = con.execute('select mode, model_selection from automations').fetchone()
         con.close()
@@ -379,19 +423,41 @@ class TestSpawnerChoice(unittest.TestCase):
         if not shutil.which('pwsh'):
             self.skipTest('pwsh is not on PATH')
         db, ws, prompt, env = self.sandbox()
+        marker = marker_path(ws, 'cyc-case')
         proc = subprocess.run(['pwsh', '-NoProfile', '-File', str(SPAWNER),
                                '-CycleId', 'cyc-case', '-PromptFile', str(prompt.parent / 'nope.txt'),
-                               '-WorkspacePath', str(ws), '-NoVerify'],
+                               '-WorkspacePath', str(ws), '-MarkerPath', str(marker), '-NoVerify'],
                               capture_output=True, text=True, encoding='utf-8', errors='replace',
                               env=env)
         self.assertNotEqual(proc.returncode, 0)
-        marker = ws / '.pf' / 'meta' / 'CONDUCT-CALLBACK-FAILED-cyc-case.json'
         self.assertTrue(marker.is_file(), 'a failed spawn must leave the marker the pipeline reads')
         record = json.loads(marker.read_text(encoding='utf-8'))
         self.assertEqual(record['cycle_id'], 'cyc-case')
         self.assertEqual(record['phase'], 'read-prompt')
+        # 宿主自己的事实进 `extra` 一个槽：dsh 放 api_base，这里放它排队用的那个库。
+        self.assertEqual(record['extra'], {'db': str(db)})
         self.assertEqual(set(record), {'cycle_id', 'phase', 'attempts', 'reason', 'workspace',
-                                       'db', 'detected_at', 'note'})
+                                       'extra', 'detected_at', 'note'})
+
+    def test_a_host_with_no_python_still_leaves_the_marker(self):
+        """ZCode 那一半要 python 才能排队；找不到的那一拍也照契约②留下降级标记再退出。
+
+        标记由外壳自己写（不经过 python），所以这一拍盘上那份记录是写得出来的 —— 恢复 HEAD
+        那一版就有的保证。
+        """
+        if not shutil.which('pwsh'):
+            self.skipTest('pwsh is not on PATH')
+        _, ws, prompt, env = self.sandbox()
+        no_path = {key: value for key, value in env.items() if key.upper() != 'PATH'}
+        marker = marker_path(ws, 'cyc-case')
+        proc = subprocess.run(['pwsh', '-NoProfile', '-File', str(SPAWNER),
+                               '-CycleId', 'cyc-case', '-PromptFile', str(prompt),
+                               '-WorkspacePath', str(ws), '-MarkerPath', str(marker), '-NoVerify'],
+                              capture_output=True, text=True, encoding='utf-8', errors='replace',
+                              env=no_path)
+        self.assertNotEqual(proc.returncode, 0, '找不到 python 却当成功退出了')
+        self.assertTrue(marker.is_file(), '找不到 python 那一拍没留下降级标记')
+        self.assertEqual('find-python', json.loads(marker.read_text(encoding='utf-8'))['phase'])
 
 
 class TestQueueDedup(unittest.TestCase):

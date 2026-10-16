@@ -10,7 +10,8 @@ marker.
 
 This file sits next to the two scripts it names, and it is the one place "which host am I" is asked.
 Its callers are the entry module -- once, for the value the seam hands `writer.spawn_session` -- and
-`chain-spawn.py`, which wants that answer alone and has no ledger to load.
+that same writer, for the spawner's own name and for the pid question a spawn claim asks. Nobody else
+asks here: every session start, `chain-spawn.py`'s included, goes through that one door.
 
 `pid_alive` is here for the same reason: it is the same question about a process instead of about the
 host ("is that thing still there"), asked of the same OS API set, and it carries the same

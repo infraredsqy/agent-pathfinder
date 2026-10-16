@@ -229,17 +229,23 @@ class TestHandoff(Base):
         self.assertEqual(sb.holding_ids(), [NODE, NODE2], '这一拍动了手里那两格')
 
     def test_it_reads_the_next_step_instead_of_driving_it(self):
-        """交条子读下一步走的是只读的 `plan`；`record` 那条写方在这条命令的路外。
+        """交条子读下一步走的是只读的 `plan`；写方那条 `record` 在这条命令的路外。
 
         `record` 是 conductor 的机械例行：它 apply、它替手里的格补 prompt。交条子的会话读一遍
-        下一步就交回去 —— 收格、挑下一格、落下一份 prompt 都是收尾那一拍的事。上面那条钉住这一
-        拍的效果，这条钉住落笔那条路压根不在它手上。
+        下一步就交回去 —— 收格、挑下一格、落下一份 prompt 都是收尾那一拍的事。它自己落笔的那一处
+        是降级标记（`marker.record`）：条子写不下去时留给人工接手的记号。
         """
-        called = {node.func.attr for node in ast.walk(ast.parse(
-            HANDOFF_PY.read_text(encoding='utf-8')))
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
-        self.assertNotIn('record', called, 'handoff.py 调上了写方：交条子会落笔')
-        self.assertIn('plan', called, 'handoff.py 没读下一步')
+
+        def receiver(node):
+            """被调用那一头是怎么写的（`marker.record` 里的 `marker`）。"""
+            return getattr(node.value, 'id', getattr(node.value, 'attr', ''))
+
+        calls = {f'{receiver(node.func)}.{node.func.attr}'
+                 for node in ast.walk(ast.parse(HANDOFF_PY.read_text(encoding='utf-8')))
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
+        self.assertEqual(sorted(call for call in calls if call.endswith('.record')), ['marker.record'],
+                         'handoff.py 调上了写方那条 record：交条子会落笔')
+        self.assertIn('pipeline.plan', calls, 'handoff.py 没读下一步')
 
 
 class TestSignalGuards(Base):

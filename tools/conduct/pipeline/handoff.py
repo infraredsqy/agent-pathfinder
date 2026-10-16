@@ -45,7 +45,6 @@ import argparse
 import importlib.util
 import json
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -67,11 +66,6 @@ def _loader():
         _LOADER = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(_LOADER)
     return _LOADER
-
-
-def _shared(name, filename):
-    """One file out of `tools/shared/`, the same module for every caller in this process."""
-    return _loader().load_by_path(name, SHARED / filename, register=True, reuse=True)
 
 
 def _load(name: str, path):
@@ -107,6 +101,17 @@ def _project_root(project: Path) -> Path:
     return _store()._resolve_project_root(project)
 
 
+def _marker():
+    """`spawn/marker.py`: 断链降级标记的落点与记录形状，一处长成。
+
+    `spawn/` 与 `pipeline/` 是同簇的两半（spawner 那一层按同一份形状自己写，那条例外写在 `marker.py`
+    的说明里），加载方式与别的邻居一样走装载器。
+    """
+    return _loader().load_by_path('conduct_spawn_marker',
+                                  CONDUCT / 'spawn' / 'marker.py',
+                                  register=True, reuse=True)
+
+
 def _ledger_name() -> str:
     """`.pf` 的那一个名字。跟根判定一样从 store 借，不复制第二份。"""
     return _store().LEDGER_NAME
@@ -120,22 +125,14 @@ def _write_marker(project: Path, cycle: str, phase: str, reason: str, attempts: 
     # cycle: two lines run side by side under parallel=2, and a successful spawn on line B must not
     # erase line A's "chain broke here" flag (the spawners clear the marker of their OWN cycle on
     # success).
-    path = project / _ledger_name() / 'meta' / f'CONDUCT-CALLBACK-FAILED-{cycle}.json'
+    #
+    # 落点、记录形状与那句人话以 `spawn/marker.py` 为正本（spawner 那一层按同一份形状自己写：
+    # 见 `marker.py` 的说明），这里只交出这一拍知道的事：哪条线、断在哪一步、那一拍的原话。
+    marker = _marker()
+    path = marker.marker_path(project, cycle)
     try:
-        record = {
-            'cycle_id': cycle,
-            'phase': phase,
-            'attempts': attempts,
-            'reason': reason,
-            'workspace': str(project),
-            'detected_at': datetime.now(timezone.utc).isoformat(),
-            'note': note or ('链条断在这里：这一格的条子已经写下，但那个节点没有人收尾，管线不会自己'
-                             '往前走。手动跑 pf next --after <node_id> 接管；'
-                             '确认无碍后删掉本文件。'),
-        }
-        # 临时文件 + 原子替换：并发读者要么读到整份、要么读不到，永远不撞见半截 JSON。
-        # 写这份标记的原语是 `tools/shared/jsonio.py` 的：全树写一份 JSON 都走同一条。
-        _shared('pf_shared_jsonio', 'jsonio.py').atomic_write_json(path, record)
+        marker.write(path, marker.record(cycle, phase, reason, attempts=attempts,
+                                         workspace=project, note=note))
         print(f'WARNING: conduct handoff failed; wrote {path}', file=sys.stderr)
     except OSError as e:  # never let the marker itself become the failure
         print(f'WARNING: could not write the handoff failure marker: {e}', file=sys.stderr)
