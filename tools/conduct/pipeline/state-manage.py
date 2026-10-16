@@ -1,0 +1,544 @@
+#!/usr/bin/env python3
+"""Manage the conduct pipeline's state: one directory, `.pf/`, per project.
+
+Provides read/write operations on `state.json`, so agents never need to read raw JSON directly.
+
+Usage:
+    state-manage.py init [--commit|--local] [--no-own-repo] [--project D]
+                                                  Put `.pf/` in place. `--local` (the default)
+                                                  keeps it out of the project's repository; `--commit`
+                                                  lets it go in with everything else instead. Local
+                                                  mode gives the directory a repository of its own
+                                                  unless `--no-own-repo`. Run this once per project,
+                                                  before anything else touches `.pf/`
+    state-manage.py register [--project D]        Write the ledger's git merge driver into the
+                                                  project's git config
+    state-manage.py clean-temp [--yes] [--force]  List every node's temp/ (probes, raw output,
+                                                  snapshots); --yes removes those directories whole.
+                                                  A node a cycle is holding right now is skipped;
+                                                  --force takes it anyway
+    state-manage.py fork-worktree <node>          Fork one node's parallel-mode worktree
+    state-manage.py dispatch <cycle>              Start the session for the node this cycle holds.
+                                 [--project D]    [--json]  The prompt is the one the closing call
+                                                  already wrote (`.pf/meta/launch/<cycle>/<node>/
+                                                  prompt.txt`). Run it after `git push`: settling a
+                                                  node and starting the next session are two commands
+                                                  on purpose
+    state-manage.py next [--cycle <id>]           Show/do the next pipeline action:
+                              [--plan]            --plan   read-only, writes nothing
+                              [--after <node_id>] the worker closing its own node: settle the node
+                                                  whose work just finished against the signal it
+                                                  wrote, then say whether the next step is `dispatch`
+                                                  or `stop_pipeline` (it starts nothing: see
+                                                  `dispatch`)
+                              [--spawn]           ... and start that session in the same breath (the
+                                                  one-shot closing call)
+                              [--continue|--stop] [--node ID] [--note "..."]
+                                                  the closing call's answers: keep going, stop here,
+                                                  or name the node to run next. Refused without
+                                                  `--after` or `--plan`: there is no settle for them
+                                                  to answer
+                              [--project D]       Project root (default: current directory)
+                                                  (no --after: drive to the next stable action)
+
+    state-manage.py cycle <verb> ...              One line of work, and everything done to it:
+        create <id> [--title t] [--force] [--tags a,b]
+                                                  Create a new cycle [--force past an active cycle]
+        start <id> [--title t] [--force] [--tags a,b]
+                                                  Create a cycle AND pin it on the node the rule
+                                                  picks (one command for the launcher). Refuses on
+                                                  an empty graph, and while another cycle is active
+        rename <id> --title <t>                   Rename a cycle
+        status <id> <st>                          Put the line in or out of service:
+                                                  active | inactive (the old paused / completed /
+                                                  failed are still accepted and land as inactive)
+        policy <id> <key> <value>                 Write one of the line's own policies, and print
+                                                  the effective set. `when_shelved` = stop (default) |
+                                                  continue: a node that came back not delivered
+                                                  (it goes `shelved`) stops this line, or the line
+                                                  carries on with the next node
+        list                                      Show all cycles
+        current                                   Show the lines that matter now: every active
+                                                  one, and every one holding a node
+        show <cycle> <node>                       One node's standing: signal + cycle pointer
+        hold <cycle> <node_id>                    Pin the cycle on a node (this is how work is
+                                                  claimed: another cycle's pick skips it)
+        close <cycle> <node> --result completed|failed|stopped
+                                                  Record the step on the cycle's path and let the
+                                                  node go
+        retry <cycle> <node> [--drop]             Overwrite a node's signal as running (retries);
+                                                  --drop leaves no ticket at all
+
+    state-manage.py instruction add|list|resolve  Standing user instructions (scope x target)
+                                                  `list` defaults to the constraints view: the
+                                                  global ones still in force, as plain sentences
+                                                  `list --node <id>`: 同项目并行两条 active cycle
+                                                  时，用你手上的节点说明你站在哪一条线上
+                                                  `add --cycle <id>`: 同理，记在哪条线上要自己点名；
+                                                  绑不上的 cycle/node 条目拒收（它会被读成人人可见）
+    state-manage.py config list|get|set|unset      This machine's and this project's settings.
+                                  [--global]       Built-in defaults (one table in the code), then
+                                                   `~/.pf/config.json` (global), then
+                                                   `<project>/.pf/config.json` (project): the last
+                                                   layer that names a key wins. A layer with no file
+                                                   reads as "never changed the default". `get`
+                                                   prints the value alone. `set` / `unset` write the
+                                                   project layer unless --global says otherwise.
+
+A cycle picks ONE DAG node at a time and repeats until the graph has no ready node left.
+pf-route is NOT in the pipeline (human-facing DAG designer only); how pf-conduct splits a node's
+own work is that session's business, not a tracked stage.
+"""
+
+import argparse
+import importlib.util
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+CONDUCT = HERE.parent                      # the conduct tool directory
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  The implementation package, loaded by path
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _load_impl():
+    """Load `conduct_state/` by path, fresh, and hand it back.
+
+    By PATH, not by name, and with the name dropped from `sys.modules` first: this file is loaded
+    more than once in a process -- the test harness loads a fresh copy per sandbox, so that two
+    throwaway projects never share one `.pf/` -- and a by-name import would hand the second copy
+    the first copy's package, and its paths with it. Inside the package, `from . import store`
+    resolves through the registration below.
+    """
+    pkg = 'conduct_state'
+    for stale in [n for n in sys.modules if n == pkg or n.startswith(pkg + '.')]:
+        del sys.modules[stale]
+    spec = importlib.util.spec_from_file_location(
+        pkg, CONDUCT / pkg / '__init__.py', submodule_search_locations=[str(CONDUCT / pkg)])
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[pkg] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_impl = _load_impl()
+
+# Everything the package exports, reachable from here: `python state-manage.py <verb>` and a caller
+# that loads this module in process see one flat surface -- exactly the one this file offered at
+# module scope before the split. `.pf/` itself is deliberately not among them: it belongs to
+# `store` and is read at call time, and `bind_paths` is how a caller aims this copy at a project.
+globals().update({name: getattr(_impl, name) for name in _impl.__all__})
+
+
+def main() -> None:
+    # 中文 everywhere：stdout 是给调用方解析的，stderr 是给人看的报错。两个流都按 UTF-8 走，
+    # 否则控制台代码页（这台机器默认 GBK）会把字节写歪，按 UTF-8 解码的父进程直接炸在读线程上。
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8', errors='replace')
+    parser = argparse.ArgumentParser(description='Manage conduct pipeline state')
+    sub = parser.add_subparsers(dest='command')
+
+    p_cyc = sub.add_parser(
+        'cycle',
+        help='One line of work: create / start / rename / status / policy / list / current / show / '
+             'hold / close / retry',
+        description='A cycle is one line of work: it picks ONE DAG node at a time, hands it to a '
+                    'session, and records the step when that session reports back. This group owns '
+                    'the line itself -- its identity, whether it is in service, its policies, which '
+                    'nodes it is holding, and the path it has walked.',
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    cyc_sub = p_cyc.add_subparsers(dest='cycle_command')
+
+    p_cc = cyc_sub.add_parser('create', help='Create a new cycle')
+    p_cc.add_argument('id')
+    p_cc.add_argument('--title', help='Cycle title (auto-generated if omitted)')
+    p_cc.add_argument('--force', action='store_true',
+                      help='Create it while another cycle is still active')
+    p_cc.add_argument('--tags', default=None,
+                      help='Comma-separated filter set for what this cycle picks from: '
+                           'writing / coding / art (engineering = coding). Required -- a '
+                           'call without it is refused: an empty scope leaves this line '
+                           'nothing to pick from')
+
+    p_cst_ = cyc_sub.add_parser('start',
+                                help='Create a cycle AND pin it on the node the rule picks '
+                                     '(one command for the launcher). Refuses on an empty graph, and '
+                                     'refuses while another cycle is still active unless --force')
+    p_cst_.add_argument('id')
+    p_cst_.add_argument('--title', default=None, help='The user\'s words, verbatim')
+    p_cst_.add_argument('--tags', default=None,
+                        help='Comma-separated filter set for this cycle: it decides which nodes '
+                             'the first pick and every later pick may take '
+                             '(writing / coding / art; engineering = coding). Required -- a '
+                             'call without it is refused: an empty scope leaves this line '
+                             'nothing to pick from')
+    p_cst_.add_argument('--force', action='store_true',
+                        help='Start anyway while another cycle is active (a bare `next` will then '
+                             'have to be told which cycle)')
+
+    p_crn = cyc_sub.add_parser('rename', help='Rename an existing cycle')
+    p_crn.add_argument('id')
+    p_crn.add_argument('--title', required=True, help='New title')
+
+    p_cstt = cyc_sub.add_parser('status',
+                                help='Put the line in or out of service: active | inactive')
+    p_cstt.add_argument('id')
+    p_cstt.add_argument('status', choices=sorted(CYCLE_VALID_STATUSES))
+
+    p_cpo = cyc_sub.add_parser('policy',
+                               help="Write one of a line's own policies (the effective set is echoed "
+                                    "back)")
+    p_cpo.add_argument('id')
+    p_cpo.add_argument('key', choices=sorted(set(POLICY_VALUES) | set(POLICY_NUMBERS)
+                                             | set(POLICY_COUNTS) | set(POLICY_WORDS)))
+    p_cpo.add_argument('value',
+                       help='when_shelved: ' + ' | '.join(POLICY_VALUES['when_shelved'])
+                            + ' (stop = a node that came back not delivered stops this line and '
+                              'waits for a human; continue = mark it shelved and carry on with the '
+                              'next node). Default: ' + POLICY_DEFAULTS['when_shelved']
+                            + '. ' + ' | '.join(POLICY_COUNTS)
+                            + ': a positive integer (how many nodes this line holds and runs at '
+                              'once; default ' + str(POLICY_DEFAULTS['parallel']) + '), or `off`'
+                            + '. ' + ' | '.join(POLICY_NUMBERS)
+                            + ': a positive number (the last acceptable reading; the close of a '
+                              'coding-tagged cycle inserts a maintenance node once a ticket '
+                              'reaches it), or `off` to clear it'
+                            + '. ' + ' | '.join(POLICY_WORDS)
+                            + ': ' + ' | '.join(POLICY_WORD_CHOICES['spawner'])
+                            + ' (which spawner opens this line\'s sessions; overrides the host '
+                              'probe and DSH_CONDUCT_SPAWNER, loses to a per-call --spawner), '
+                              'or `off` to clear it')
+
+    cyc_sub.add_parser('list', help='Show all cycles (state.json)')
+    cyc_sub.add_parser('current', help='Show the active cycle and the node it holds')
+
+    p_csh = cyc_sub.add_parser('show', help="One node's standing in a cycle: signal + path step")
+    p_csh.add_argument('id')
+    p_csh.add_argument('node')
+
+    p_chd = cyc_sub.add_parser('hold', help='Pin the cycle on a node: this is how work is claimed')
+    p_chd.add_argument('id')
+    p_chd.add_argument('node')
+
+    p_ccl = cyc_sub.add_parser('close',
+                               help="Record the step on the cycle's path and let the node go")
+    p_ccl.add_argument('id')
+    p_ccl.add_argument('node')
+    p_ccl.add_argument('--result', required=True, choices=sorted(VALID_NODE_RESULTS),
+                       help='completed | failed | stopped (what the worker reported)')
+
+    p_crt = cyc_sub.add_parser('retry',
+                               help='Take a node signal out of the way (retries): rewrite it as '
+                                    'running, or --drop to leave no ticket at all')
+    p_crt.add_argument('id')
+    p_crt.add_argument('node')
+    p_crt.add_argument('--summary', help='Why the node was restarted')
+    p_crt.add_argument('--drop', action='store_true',
+                       help='Leave no ticket at all. A `running` ticket is a red light: `next` '
+                            'waits on it forever, so dropping it is what lets the retry be '
+                            'dispatched')
+
+    p_ins = sub.add_parser(
+        'instruction', help='Standing user instructions (append-only account)',
+        description='Three scopes. Whether an entry can be read is decided by WHERE it was recorded, '
+                    'not by anyone remembering to resolve it: global = readable anywhere, by every '
+                    'session and in every cycle; cycle = readable while the cycle it was recorded in '
+                    'is active, and unreadable once that cycle ends; node = readable while the node '
+                    'it was recorded in is unfinished. `add` binds the cycle/node from the state, or '
+                    'takes the binding from `--cycle` / `--node` when the state cannot name one (two '
+                    'active cycles side by side); a cycle/node entry with nothing to bind to is '
+                    'refused, because an unbound entry is read as visible everywhere and never goes '
+                    'out of sight. Nothing is injected into a dispatch prompt: `list` is how a '
+                    'session reads the account, and running it among its first commands is what '
+                    'makes an instruction reach it. What `resolve` is still for: a human taking an '
+                    'instruction off (withdrawn), and recording that a global entry was honoured '
+                    '(applied).')
+    ins_sub = p_ins.add_subparsers(dest='instruction_command')
+    p_ia = ins_sub.add_parser('add', help='Append one instruction, verbatim')
+    p_ia.add_argument('--text', required=True, help='The sentence, EXACTLY as the user said it')
+    p_ia.add_argument('--scope', dest='scope', default='global', choices=list(VALID_SCOPES),
+                      help='Where this instruction is visible from (`instruction --help`): global = '
+                           'everywhere; cycle = the cycle it is recorded in, out of sight once that '
+                           'cycle ends; node = the node it is recorded in, out of sight once that '
+                           'node is completed. The cycle/node it binds to come from the state, or '
+                           'from --cycle / --node when the state cannot name one; a cycle/node entry '
+                           'that nothing binds is refused. (default: global -- the noisy side of a '
+                           'coin flip is the safe one)')
+    p_ia.add_argument('--cycle', default=None,
+                      help='The line this entry belongs to. Needed while two active cycles run side '
+                           'by side, where the state has no single current one; a cycle-scoped entry '
+                           'with nothing to bind to is refused (it would be read as visible '
+                           'everywhere, forever). Default: the single active cycle')
+    p_ia.add_argument('--node', default=None,
+                      help='The node this entry belongs to, for --scope node. Default: the node the '
+                           'cycle is holding')
+    p_ia.add_argument('--target', choices=list(VALID_TARGETS), default='stage',
+                      help='stage = a constraint every worker must see; boundary = rhythm, read '
+                           'only when a node closes (default: stage)')
+    p_ia.add_argument('--said-by', default='user')
+    p_ia.add_argument('--note', default=None)
+    p_ia.add_argument('--stop-after-nodes', type=int, default=None,
+                      help='Optional machine-checkable cap: stop once this many nodes have run')
+    p_il = ins_sub.add_parser(
+        'list', help='What the user asked for, as seen from where you stand (the instruction '
+                     'channel: nothing is injected into a prompt)',
+        description='This is how an instruction reaches a session: run it among your first commands '
+                    'and read the answer. The default output is computed from WHERE the pipeline '
+                    'stands -- global entries always, a cycle entry while its cycle is the current '
+                    'one, a node entry while its node is the one in hand, and anything it cannot '
+                    'judge -- as plain sentences, with ids and bookkeeping folded away. '
+                    '`--json` is the same answer for a machine (an empty array when there is '
+                    'nothing). `--all`, `--live` and `--scope` ask for the ACCOUNT instead: the raw '
+                    'rows, retired entries included when `--all` says so.')
+    p_il.add_argument('--json', action='store_true')
+    p_il.add_argument('--live', action='store_true',
+                      help='Account view: only the entries whose state is live')
+    p_il.add_argument('--all', dest='all_entries', action='store_true',
+                      help='Account view: the whole account, retired entries included')
+    p_il.add_argument('--scope', dest='scope', default=None, choices=list(VALID_SCOPES),
+                      help='Account view narrowed to one scope. `--scope global` reads out the '
+                           'global entries')
+    p_il.add_argument('--project', default=None,
+                      help='Project root. Default: the current directory. Pass it explicitly when '
+                           'your cwd may not be the project root -- the ledger root is resolved at '
+                           'import time, so a wrong cwd silently reads an empty account')
+    p_il.add_argument('--node', default=None,
+                      help='The DAG node you are working on: with two active cycles side by side it '
+                           'is how this read knows which line you stand on (`cycle` entries go to '
+                           'their own line only). Default: not asked')
+    p_ir = ins_sub.add_parser('resolve', help='Record what became of one instruction')
+    p_ir.add_argument('ins_id')
+    p_ir.add_argument('--state', required=True,
+                      choices=['done', 'superseded', 'withdrawn', 'applied', 'n/a'],
+                      help='withdrawn = the owner takes an instruction off; applied|n/a = this '
+                           'global entry was honoured here / nothing here falls under it, and it '
+                           'stays in force. A cycle/node entry needs no resolve at all: it goes out '
+                           'of sight on its own, so done|superseded are only for tidying an account '
+                           'by hand')
+    p_ir.add_argument('--note', default=None)
+    p_ir.add_argument('--superseded-by', dest='superseded_by', default=None)
+    p_ir.add_argument('--project', default=None, help='Project root (default: current directory)')
+
+    p_cfg = sub.add_parser(
+        'config',
+        help="This machine's and this project's settings: built-in defaults, then the global and "
+             "project overrides, the last one written winning",
+        description='Three keys. max_agents: how many subagents one session may have in flight at '
+                    'once. test_tier: full (the whole suite) or minimal (the project\'s own few '
+                    'checks). worktree_mode: off / fork / reuse (whether a node\'s work gets its '
+                    'own worktree). A value lives in one of two override layers: '
+                    '`~/.pf/config.json` (global, travels with the person and the machine, never '
+                    'generated for you) and `<project>/.pf/config.json` (travels with the project; '
+                    '`init` puts an empty `{}` there). A layer with no file reads as "never '
+                    'changed the default". `list` prints every effective value and the layer it '
+                    'came from; `get` prints the value alone, which is what a skill reads. '
+                    '`set` / `unset` write the project layer unless --global says otherwise.',
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    cfg_sub = p_cfg.add_subparsers(dest='config_command')
+    cfg_sub.add_parser('list', help='Every effective value, and the layer it came from')
+    p_cfg_get = cfg_sub.add_parser('get', help='Print one effective value, and nothing else')
+    p_cfg_get.add_argument('key', choices=sorted(CONFIG_SPEC))
+    p_cfg_set = cfg_sub.add_parser('set', help='Write one override (the project layer by default)')
+    p_cfg_set.add_argument('key', choices=sorted(CONFIG_SPEC))
+    p_cfg_set.add_argument('value')
+    p_cfg_set.add_argument('--global', dest='global_', action='store_true',
+                           help='Write the global layer (~/.pf/config.json) instead of the project one')
+    p_cfg_set.add_argument('--project', default=None, help='Project root (default: current directory)')
+    p_cfg_unset = cfg_sub.add_parser('unset',
+                                     help='Drop one override, letting the default take over again')
+    p_cfg_unset.add_argument('key', choices=sorted(CONFIG_SPEC))
+    p_cfg_unset.add_argument('--global', dest='global_', action='store_true',
+                             help='Drop it from the global layer instead of the project one')
+    p_cfg_unset.add_argument('--project', default=None, help='Project root (default: current directory)')
+
+    p_sess = sub.add_parser(
+        'session',
+        help='Which conversation produced a node, and which ones ran it: show / list / import',
+        description='A session id is machine-local -- a conversation lives on the machine that '
+                    'opened it -- so the ids live in `.pf/meta/sessions/<node id>.json` instead of '
+                    'on the record: guaranteed dead on another machine, and impossible to tell apart '
+                    'from "that session was deleted here". `show` reads one node\'s note, `list` '
+                    'reads every note this machine holds (keyed by node id, for a panel), and '
+                    '`import` folds the older `dsh_session` field into notes once per machine -- '
+                    'writing notes and nothing else.',
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    sess_sub = p_sess.add_subparsers(dest='session_command')
+
+    p_ss = sess_sub.add_parser('show', help='One node\'s note: its discussion, and the sessions that ran it')
+    p_ss.add_argument('node', help='Node id, or as much of its start as names one node')
+    p_ss.add_argument('--json', action='store_true', help='Print raw JSON')
+    p_ss.add_argument('--project', default=None, help='Project root (default: current directory)')
+
+    p_sl = sess_sub.add_parser('list', help='Every note this machine holds, keyed by node id')
+    p_sl.add_argument('--json', action='store_true', help='Print raw JSON')
+    p_sl.add_argument('--project', default=None, help='Project root (default: current directory)')
+
+    p_si = sess_sub.add_parser('import',
+                               help='Fold the older `dsh_session` field into notes (once per machine)')
+    p_si.add_argument('--dry-run', dest='dry_run', action='store_true',
+                      help='Say what would be noted; write nothing')
+    p_si.add_argument('--project', default=None, help='Project root (default: current directory)')
+
+    p_next = sub.add_parser(
+        'next', help='Show (or do) the next pipeline action',
+        description='The one entry point. plan: read-only, writes nothing. apply (no --plan): '
+                    "drive the pipeline to its next stable action -- consume a finished node's "
+                    'signal, do the bookkeeping, stop at the first thing a caller can act on. '
+                    'The actions a caller may have to act on are `dispatch` (spawn this node), '
+                    '`wait` (read its note / close_with and run that one command), `ask_user`, '
+                    '`stop_pipeline`. The returned action NEVER carries commands to run: the '
+                    'tool runs them.',
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    p_next.add_argument('--cycle', help='Cycle id (default: the single active cycle)')
+    p_next.add_argument('--project', default=None, help='Project root (default: current directory)')
+    p_next.add_argument('--plan', action='store_true',
+                        help='Read-only: never write prompt files or touch state')
+    p_next.add_argument('--json', action='store_true', help='Print raw JSON')
+    dec = p_next.add_mutually_exclusive_group()
+    dec.add_argument('--continue', dest='cont', action='store_true',
+                     help='Closing call: keep going (a stop rule that says stop still wins)')
+    dec.add_argument('--stop', dest='stop', action='store_true',
+                     help='Closing call: stop here (parks the cycle)')
+    p_next.add_argument('--node', help='Closing call: which ready node to run next')
+    p_next.add_argument('--note', default='', help='Why the closing call decided that')
+    p_next.add_argument('--after', dest='after', default=None, metavar='NODE_ID',
+                        help='The worker closing its own node: settle the node whose work just '
+                             'finished against the signal it already wrote, then dispatch or stop. '
+                             'A node still in flight answers `wait` instead of being read as '
+                             'delivered')
+    p_next.add_argument('--spawn', action='store_true',
+                        help='If the resulting action is a dispatch, start that session too '
+                             '(makes the closing call one-and-done: settle, then spawn)')
+    p_next.add_argument('--spawner', default=None, metavar='KIND|PATH',
+                        help='Which spawner opens that session: `dsh`, `zcode`, or a path. '
+                             'Default: whichever host this shell runs under.')
+
+    # The action vocabulary is `next`'s own contract: the keys a caller branches on, and the one
+    # invariant that goes with them. `--help` prints it, computed from the single source
+    # (`conduct_pipeline.ACTIONS`) rather than restated here -- and only when help was asked for, so an
+    # ordinary run never pays for loading the pipeline module.
+    if 'next' in sys.argv[1:] and any(a in ('-h', '--help') for a in sys.argv[1:]):
+        p_next.epilog = _load_pipeline()._render_contract()
+
+    p_disp = sub.add_parser(
+        'dispatch',
+        help='Start the session for the node this cycle is holding (what `next --after` wrote)',
+        description='Dispatch and nothing else: read the node this cycle holds, then start the '
+                    'session whose prompt the closing call already wrote at '
+                    '.pf/meta/launch/<cycle>/<node>/prompt.txt. No bookkeeping and no state change '
+                    '-- that is what makes "commit and push first, then dispatch" expressible: the '
+                    'next session boots in the same worktree and pulls. '
+                    'DSH_CONDUCT_SPAWN_DRY_RUN=1 makes the call and reports it without opening a '
+                    'session.',
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    p_disp.add_argument('id', help='Cycle id')
+    p_disp.add_argument('--project', default=None, help='Project root (default: current directory)')
+    p_disp.add_argument('--json', action='store_true', help='Print raw JSON')
+    p_disp.add_argument('--spawner', default=None, metavar='KIND|PATH',
+                        help='Which spawner opens that session: `dsh`, `zcode`, or a path. '
+                             'Default: whichever host this shell runs under.')
+
+    p_init = sub.add_parser(
+        'init',
+        help='Put `.pf/` in place: the one setup act, run once per project',
+        description='Write `.pf/.gitignore` and `.pf/.gitattributes`, and decide whether this '
+                    'project commits its `.pf/` or keeps that directory to itself. `--local` (the '
+                    'default) writes one line into the repository\'s `info/exclude` -- a per-clone '
+                    'file, so no teammate ever sees a line about a directory that does not exist '
+                    'for them -- and gives `.pf/` its own repository unless `--no-own-repo`. '
+                    '`--commit` takes the exclude line back out and lets `.pf/` travel with the '
+                    'project. Idempotent: re-running it never does anything twice, and switching '
+                    'modes is just running it again with the other flag.',
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    p_init.add_argument('--project', default=None, help='Project root (default: current directory)')
+    p_mode = p_init.add_mutually_exclusive_group()
+    p_mode.add_argument('--local', dest='mode', action='store_const', const='local',
+                        help='Keep `.pf/` out of the project\'s repository (the default)')
+    p_mode.add_argument('--commit', dest='mode', action='store_const', const='commit',
+                        help='Let `.pf/` go into the project\'s repository')
+    p_init.add_argument('--own-repo', dest='own_repo', action='store_true', default=True,
+                        help='Local mode only: give `.pf/` a repository of its own (the default)')
+    p_init.add_argument('--no-own-repo', dest='own_repo', action='store_false',
+                        help='Local mode only: leave `.pf/` as plain ignored files')
+
+    p_reg = sub.add_parser(
+        'register',
+        help='Write the ledger\'s git merge driver into this project\'s git config',
+        description='Set `merge.pf.name` and `merge.pf.driver` in the project\'s git config. `init` '
+                    'already does this as part of its one setup act; the verb is here so a project '
+                    'can be brought forward, or a moved checkout re-pointed, without re-running '
+                    'setup. `pf register` calls exactly this.',
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    p_reg.add_argument('--project', default=None, help='Project root (default: current directory)')
+
+    p_ct = sub.add_parser('clean-temp',
+                          help='List (or with --yes, remove) every node\'s temp/ directory')
+    p_ct.add_argument('--project', default=None, help='Project root (default: current directory)')
+    p_ct.add_argument('--node', default=None, help='Only this node id (prefix is enough)')
+    p_ct.add_argument('--yes', action='store_true',
+                      help='Actually delete; without it, only list')
+    p_ct.add_argument('--force', action='store_true',
+                      help='Also clear a node a cycle is holding right now (its session is gone '
+                           'and the claim was never released)')
+
+    p_fork = sub.add_parser(
+        'fork-worktree',
+        help='Fork one node\'s parallel-mode worktree: `.pf/worktrees/<短id>` on branch '
+             '`pf/<短id>`',
+        description='The parallel mode\'s fork, as one command (SKILL「并行：worktree」): refuses '
+                    'while the main tree is dirty (another line may be mid-merge-back) and while '
+                    'the node\'s short id is already taken (worktree directory or branch '
+                    '`pf/<短id>` exists); otherwise `git worktree add`s the checkout and writes '
+                    '`.pf/meta/FORK-<短id>.json` -- the record the closing call gates on, so a '
+                    'node whose merge-back never finished cannot be settled. Works from a worktree '
+                    'cwd too: the main tree is resolved the same way the record commands do it.',
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    p_fork.add_argument('node', help='The DAG node this worktree is for; its first 8 characters '
+                                     'name the worktree directory and the branch')
+
+    args = parser.parse_args()
+
+    cmds = {
+        'init':             lambda: cmd_init(getattr(args, 'project', None),
+                                            getattr(args, 'mode', None) or 'local',
+                                            getattr(args, 'own_repo', True)),
+        'register':         lambda: cmd_register(getattr(args, 'project', None)),
+        'cycle':            lambda: _dispatch_cycle(args),
+        'instruction':      lambda: _dispatch_instruction(args),
+        'config':           lambda: _dispatch_config(args),
+        'session':          lambda: _dispatch_session(args),
+        'clean-temp':       lambda: cmd_clean_temp(getattr(args, 'project', None),
+                                                   getattr(args, 'node', None),
+                                                   getattr(args, 'yes', False),
+                                                   getattr(args, 'force', False)),
+        'next':             lambda: cmd_next(getattr(args, 'cycle', None),
+                                             'plan' if getattr(args, 'plan', False) else 'apply',
+                                             getattr(args, 'json', False),
+                                             'continue' if getattr(args, 'cont', False)
+                                             else 'stop' if getattr(args, 'stop', False) else None,
+                                             getattr(args, 'node', None),
+                                             getattr(args, 'note', ''),
+                                             getattr(args, 'spawn', False),
+                                             getattr(args, 'after', None),
+                                             getattr(args, 'spawner', None),
+                                             getattr(args, 'project', None),
+                                             bool(getattr(args, 'cont', False)
+                                                  or getattr(args, 'stop', False))),
+        'dispatch':         lambda: cmd_dispatch(args.id, getattr(args, 'json', False),
+                                                 getattr(args, 'project', None),
+                                                 getattr(args, 'spawner', None)),
+        'fork-worktree':    lambda: cmd_fork_worktree(args.node),
+    }
+    fn = cmds.get(args.command)
+    if fn:
+        fn()
+    else:
+        parser.print_help()
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,9 @@
+#!/bin/sh
+# The shim an agent's shell and git's own sh both find on PATH.
+# It resolves its own directory, so the checkout may live anywhere.
+d=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+if command -v python >/dev/null 2>&1; then P=python
+elif command -v py >/dev/null 2>&1; then P=py
+else echo "pf: python not found on PATH" >&2; exit 127
+fi
+exec "$P" -X utf8 "$d/pf.py" "$@"
