@@ -40,7 +40,7 @@
 
 **症状**：一整批改完、复审也过了，就接着开下一批，没有 commit。
 
-**纠正**：批过即提交是 checkpoint，也是下一批的干净边界。提交带上池子改动（`.pf/issues/`）；这一批只动了池子就单独发一发（`chore: record issue pool changes`）。
+**纠正**：批过即提交是 checkpoint，也是下一批的干净边界。
 
 ## `issue-repair-widens-scope` · 超出指定范围扩展修复面
 

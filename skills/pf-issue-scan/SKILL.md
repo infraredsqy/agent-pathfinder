@@ -44,8 +44,6 @@ disable-model-invocation: true
 5. 清掉 `.pf/meta/scan/` 下的临时文件
 6. 汇报：新增 N 条（按严重度分档）、核对结果、candidates 名单
 
-池子改动收进这一趟的提交（纯扫描就单独发一发，见 pool.md）。
-
 ## 边界
 
 - **只能由用户或指挥位跑**：这份卡要派 subagent；被派来的手段位读到它，停手回报

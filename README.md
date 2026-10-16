@@ -10,7 +10,7 @@ node that matters most right now, gives it to a fresh agent session, and records
 The session works under the `pf-conduct` skill — prepare, execute, independent review, fix, close
 — and hands back one line saying whether it delivered.
 
-Everything the pipeline knows lives in `.pf/`, inside the project's own git history.
+Everything the pipeline knows lives in `.pf/`.
 
 ## Status
 
