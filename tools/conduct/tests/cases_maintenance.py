@@ -201,6 +201,45 @@ class TestMaintenanceChannel(Base):
         self.assertTrue(Path(action['prompt']).is_file())
         self.assertEqual(Path(action['prompt']).parent.name, made)
 
+    def test_the_reported_prompt_path_is_what_the_writer_wrote(self):
+        """维护那一格报出来的 prompt 路径，与写口算出来的那一处逐字相同。
+
+        新节点的 uuid 是 `dag-manage add` 现场才有的，所以这条路径在收尾那一趟被算过两回：写
+        prompt 的那一回与报给调用方的那一回。两处必须落在同一个文件上。
+        """
+        sb = self.two_coding_nodes(reading=self.LINE + 40)
+
+        action = sb.close_round(NODE)
+
+        made = sb.current_node()
+        expected = pipeline.prompts.launch_prompt_path(sb.root, 'cyc', made)
+        self.assertEqual(Path(action['prompt']), expected)
+        self.assertTrue(expected.is_file())
+        self.assertEqual(sb.prompt_of(action), f'/pf-conduct {made} [pipeline]\n')
+
+    def test_the_generated_spec_lands_where_the_one_path_says(self):
+        """生成 spec 的落点由 `nodes.node_spec_path` 一处定。
+
+        写下去的那一份、spec 末尾自己报的那一句、写口算出来的那一处，三者是同一个文件。
+        """
+        sb = self.two_coding_nodes(reading=self.LINE + 40)
+
+        sb.close_round(NODE)
+
+        made = sb.current_node()
+        landed = Path(pipeline.nodes.node_spec_path(sb.root, made))
+        self.assertTrue(landed.is_file(), f'{landed} 不在写口说的那个地方')
+        self.assertIn(f'（本 spec 落在：{landed.as_posix()}）',
+                      landed.read_text(encoding='utf-8'))
+
+    def test_the_spec_path_is_built_in_one_file(self):
+        """实现包里拼 `spec.md` 这一段的文件只有 `nodes.py`。"""
+        impl = TOOLS_DIR / 'conduct' / 'conduct_pipeline_impl'
+        sites = sorted(path.name for path in sorted(impl.glob('*.py'))
+                       if "'spec.md'" in path.read_text(encoding='utf-8'))
+
+        self.assertEqual(['nodes.py'], sites)
+
     def test_a_crossed_line_only_defers_the_node_it_picked(self):
         """多格线撞上维护：延后的只有被挑中的那一格，同一趟补上来的其余格照常钉在手里。
 
@@ -317,6 +356,22 @@ class TestMaintenanceThresholds(Base):
 
         self.assertEqual(pipeline.thresholds_for(sb.cycle()), {})
         self.assertIsNone(sb.cycle().get('policies'))
+
+    def test_the_numeric_lines_come_from_the_one_policy_table(self):
+        """数值型那两条线取自 `conduct_state.cycles.POLICY_NUMBERS` 那一份正本。
+
+        整数型的 `parallel` 是同格的另一类键，不在其中；一个数值线都没配时这份读数是空的 ——
+        `crossed` 的非空门靠的就是它。
+        """
+        stated = {'parallel': 3, 'test_seconds_limit': 120}
+        self.assertEqual(pipeline.thresholds_for({'id': 'c', 'policies': stated}),
+                         {'test_seconds_limit': 120}, '`parallel` 不是这条通道读的键')
+        self.assertEqual(pipeline.thresholds_for({'id': 'c', 'policies': {'parallel': 3}}), {},
+                         '只配了整数型策略时这份读数该是空的')
+        self.assertEqual(
+            pipeline.thresholds_for({'id': 'c', 'policies': {'test_seconds_limit': 1,
+                                                            'issue_pool_weight_limit': 2}}),
+            {'test_seconds_limit': 1, 'issue_pool_weight_limit': 2})
 
 
 class TestMaintenanceScope(Base):

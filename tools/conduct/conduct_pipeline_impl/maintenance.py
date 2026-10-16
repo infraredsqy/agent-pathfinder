@@ -31,9 +31,10 @@ import re
 from pathlib import Path
 
 from . import seam
-from .store import _state_module, cycle_policy, load_dag
+from .nodes import node_spec_path
+from .store import POLICY_NUMBERS, cycle_policy, load_dag
 
-__all__ = ['POLICY_NUMERIC_KEYS', 'READING_KEYS', 'MAINTENANCE_ACTION', 'NEW_NODE', 'METRICS',
+__all__ = ['READING_KEYS', 'MAINTENANCE_ACTION', 'NEW_NODE', 'METRICS',
            'crossed', 'reading_of', 'thresholds_for', 'asked_readings', 'pool_weight', 'insertion',
            'is_add_slot', 'read_new_node_id', 'maintenance_spec', 'maintenance_title', 'substitute',
            'write_spec', 'maintenance_nodes_of_metric', 'maintenance_tag']
@@ -99,9 +100,6 @@ METRICS = (
     },
 )
 
-#: Every numeric policy this channel reads: `conduct_state.cycles.POLICY_NUMBERS` 的正本，按写侧
-#: 那个次序。名字说的是这条通道读的哪一类键（`parallel` 那样的整数键不在其中），表本身只有一处。
-POLICY_NUMERIC_KEYS = _state_module('cycles').POLICY_NUMBERS
 #: The ticket-sourced readings, in METRICS order: the ones a worker is asked for. `asked_readings`
 #: narrows this to the lines a given cycle actually carries.
 READING_KEYS = tuple(metric['reading'] for metric in METRICS if metric['source'] == 'ticket')
@@ -154,9 +152,13 @@ def thresholds_for(cycle: dict | None) -> dict:
     They are the line's own rules, in the same slot `when_shelved` lives in (`state-manage.py
     cycle policy`), which is why nobody has to write a sentence to configure one -- and why a line
     that has nothing to do with code simply does not carry them.
+
+    「配了数值型策略」= `conduct_state.cycles.POLICY_NUMBERS` 那张表里、这条线的记录上真写着的键
+    （`parallel` 那样的整数键不在其中）；一个都没配时这份读数是空的，`crossed` 的空门就靠它 ——
+    非空即「这条线至少配了一个度量」。表本身只有一处，取的就是写侧那一份。
     """
     policy = cycle_policy(cycle or {})
-    return {key: policy[key] for key in POLICY_NUMERIC_KEYS if key in policy}
+    return {key: policy[key] for key in POLICY_NUMBERS if key in policy}
 
 
 def asked_readings(cycle: dict | None) -> list:
@@ -208,7 +210,7 @@ def _wired(metric: dict, reading: dict, thresholds: dict):
     return None
 
 
-def crossed(project, cycle: dict | None, sig: dict | None):
+def crossed(project, cycle: dict | None, sig: dict | None, dag: dict | None = None):
     """The metric to insert a maintenance node for, or `None` (the common case).
 
     `None` covers every way this channel stays shut: no number for the metric, no line on this
@@ -234,7 +236,7 @@ def crossed(project, cycle: dict | None, sig: dict | None):
     for metric in METRICS:
         got = _wired(metric, values, thresholds)
         if got is not None:
-            if maintenance_nodes_of_metric(project, metric['reading']):
+            if maintenance_nodes_of_metric(project, metric['reading'], dag):
                 continue
             value, line = got
             hit = {**metric, 'value': value, 'at': line}
@@ -242,7 +244,7 @@ def crossed(project, cycle: dict | None, sig: dict | None):
             # A CALLABLE, not the text: the node's uuid decides where its spec lands, and the uuid
             # does not exist until `dag-manage add` has run (`writer._capture_new_node`).
             hit['spec_of'] = lambda node_id, _hit=hit: maintenance_spec(
-                _hit, _spec_path(project, node_id))
+                _hit, node_spec_path(project, node_id))
             return hit
     return None
 
@@ -252,16 +254,18 @@ def maintenance_tag(reading_key: str) -> str:
     return f'maint:{reading_key}'
 
 
-def maintenance_nodes_of_metric(project, reading_key: str) -> list:
+def maintenance_nodes_of_metric(project, reading_key: str, dag: dict | None = None) -> list:
     """图上这个度量还没了结的维护节点（`todo` 状态），按 id 排。
 
     「没了结」= 节点还在局中（`todo`）：`completed` 说明这一趟债已经结了、`shelved` 说明它出局等人
     ——两种都不该拦住下一次插入，否则人一直 revive 不动，这条通道就永远哑了。
     判定发生在收尾命令落盘之前，所以**正在被收掉的那个维护节点在这里仍是 `todo`、也照样拦住自己
     的重复插入**——一个度量同时只有一个维护节点在跑，这一条不受收尾进度影响。
+
+    `dag` 是收尾入口读下的那一份图：这一趟判定读的是它，收尾不再为这一个问题重读一次盘。
     """
     tag = maintenance_tag(reading_key)
-    nodes = (load_dag(project).get('nodes') or {})
+    nodes = (dag if dag is not None else load_dag(project)).get('nodes') or {}
     out = []
     for uid, node in (nodes or {}).items():
         if not isinstance(node, dict):
@@ -370,22 +374,13 @@ def write_spec(project, node_id: str, spec: str) -> Path:
     if not re.fullmatch(r'[0-9a-fA-F-]{36}', node_id or ''):
         raise RuntimeError(f'refusing to write a spec under a node id that is not a uuid: '
                            f'{node_id!r}')
-    path = Path(project) / '.pf' / 'nodes' / node_id / 'spec.md'
+    path = Path(node_spec_path(project, node_id))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(spec, encoding='utf-8')
     return path
 
 
 # ── the graph edit, as commands ──────────────────────────────────────────────
-
-def _spec_path(project, node_ref: str) -> str:
-    """Where the spec will land, phrased for a human: the ledger's node directory.
-
-    `node_ref` is the placeholder at the time this is built -- the real uuid does not exist yet.
-    """
-    from .store import ledger_dir
-    return (ledger_dir(project) / 'nodes' / node_ref / 'spec.md').as_posix()
-
 
 def insertion(project, closed: str, target: str, cycle_id: str, hit: dict,
               spec_of, close_commands: list | None = None) -> dict:

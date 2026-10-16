@@ -13,14 +13,18 @@ that no longer exists.
 
 from __future__ import annotations
 
+import ast
 import importlib.util as importlib_util
 import json
 import sys
+import traceback
+import types
+from pathlib import Path
 
 from cases_base import NODE, NODE2, NODE3, Base, added, pipeline, skill_of
-from harness import (Closer, DAG_MANAGE, Driver, STATE_MANAGE, WorkerSession, finish_node,
-                     run_dag, stop_after)
-from harness_env import _fresh_module
+from harness import (Closer, DAG_MANAGE, Driver, STATE_MANAGE, WorkerSession, _dag_hook,
+                     finish_node, run_dag, stop_after)
+from harness_env import CONDUCT_DIR, _fresh_module
 
 
 def _state_cycles_module():
@@ -987,6 +991,21 @@ class TestNodeTags(Base):
         self.assertEqual(dag_mod.VALID_TAGS, ('writing', 'coding', 'art'))
         self.assertEqual(dag_mod.VALID_TAGS, cycles_mod.VALID_TAGS)
 
+    def test_the_borrowed_cycle_policy_tables_read_the_same_by_value(self):
+        """impl 借的是 `conduct_state/cycles.py` 那一份正本，两个包各自装载同一个文件。
+
+        这里钉的是那条边界：两份读数**按值相等**（`==`）。两个包各按自己的名字装载，拿到的是两个
+        模块对象，所以跨包 `is` 不成立，谁也不该拿 `is` 去比这两份；要改这张表，改的是
+        `conduct_state/cycles.py` 那个文件本身。
+        """
+        cycles_mod = _state_cycles_module()
+
+        self.assertEqual(pipeline.POLICY_DEFAULTS, cycles_mod.POLICY_DEFAULTS)
+        self.assertEqual(pipeline.POLICY_VALUES, cycles_mod.POLICY_VALUES)
+        self.assertEqual(pipeline.POLICY_NUMBERS, cycles_mod.POLICY_NUMBERS)
+        self.assertEqual(pipeline.POLICY_COUNTS, cycles_mod.POLICY_COUNTS)
+        self.assertEqual(pipeline.POLICY_WORDS, cycles_mod.POLICY_WORDS)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Cycle selection
@@ -1113,3 +1132,262 @@ class TestNodeWeight(Base):
 
         self.assertEqual(self.invocation_line(sb),
                          f'/pf-conduct {NODE} [pipeline]')
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  节点没写 mode：兜底一处，四道门同一个词
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestTheModeWord(Base):
+    """`store.normalize_mode` 是这条兜底的唯一拼法。
+
+    读盘回填（`load_dag`）、取值（`nodes.mode_for`）、挑选（`dag_ready_nodes`）、停手判据
+    （`planner.stop_criterion`）四道门报出来的词必须一样：两处各持一份默认值时，加一个 mode 词
+    就会分头漂。
+    """
+
+    def nodes_without_the_key(self):
+        """一个记录里根本没有 `mode` 这个键的节点（手改的、老机器写的）。"""
+        sb = self.make()
+        sb.add_node(NODE, '界面设计')
+        dag = sb.dag()
+        del dag['nodes'][NODE]['mode']
+        sb.write_dag(dag['nodes'])
+        return sb
+
+    def test_the_fallback_is_spelled_once_in_the_package(self):
+        """源码里 `or DEFAULT_MODE` 只有一处 —— 加一个 mode 词时改的就是它。"""
+        sites = []
+        for path in sorted((CONDUCT_DIR / 'conduct_pipeline_impl').glob('*.py')):
+            tree = ast.parse(path.read_text(encoding='utf-8'))
+            sites += [f'{path.name}:{node.lineno}' for node in ast.walk(tree)
+                      if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or)
+                      and any(isinstance(value, ast.Name) and value.id == 'DEFAULT_MODE'
+                              for value in node.values)]
+
+        self.assertEqual(1, len(sites), f'兜底写了好几处：{sites}')
+        self.assertTrue(sites[0].startswith('store.py:'), sites)
+
+    def test_a_node_that_leaves_the_key_out_reads_as_auto_everywhere(self):
+        """记录里没这个键时，四道门读出来的是同一个词。"""
+        sb = self.nodes_without_the_key()
+        sb.start_cycle()
+
+        dag = pipeline.store.load_dag(sb.root)
+        self.assertEqual('auto', dag['nodes'][NODE]['mode'], '读盘时没有回填')
+        self.assertEqual('auto', pipeline.nodes.mode_for(NODE, dag), '取值那道门')
+        self.assertEqual('auto', pipeline.dag_ready_nodes(sb.root)[0]['mode'], '就绪集里那一格')
+
+        action = sb.next()
+        self.assertEqual('dispatch', action['action'], action)
+        self.assertEqual('auto', action['mode'], '派发报出来的那一格')
+
+        must_stop, why = pipeline.stop_criterion(sb.root, sb.cycle(), {'id': NODE})
+        self.assertFalse(must_stop, f'停手判据没走到 auto：{why}')
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  prompt 的落点：一处算法，报出来的那一份就是写下来的那一份
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestThePromptPath(Base):
+    """`.pf/meta/launch/…` 在实现包里只有 `prompts.launch_dir` 一处拼法。"""
+
+    def test_the_launch_path_is_built_in_one_file(self):
+        """拼 `launch` 这一段的文件只有 `prompts.py`。"""
+        sources = {path.name: path.read_text(encoding='utf-8')
+                   for path in sorted((CONDUCT_DIR / 'conduct_pipeline_impl').glob('*.py'))}
+        sites = sorted(name for name, text in sources.items()
+                       if "'launch'" in text or '"launch"' in text)
+
+        self.assertEqual(['prompts.py'], sites)
+
+    def test_the_dispatch_reports_the_path_the_writer_uses(self):
+        """派发报出来的 prompt 路径，与写口算出来的那一处逐字相同。"""
+        sb = self.make()
+        sb.add_node(NODE, '界面设计')
+        sb.start_cycle()
+
+        action = sb.next()
+
+        expected = pipeline.prompts.launch_prompt_path(sb.root, 'cyc', NODE)
+        self.assertEqual('dispatch', action['action'], action)
+        self.assertEqual(Path(action['prompt']), expected)
+        self.assertTrue(expected.is_file(), '报出来的那一份就是写下来的那一份')
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  收尾这一趟：整份读图一次
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestTheCloseReadsTheGraphOnce(Base):
+    """收尾入口读一次图，判定按参数下传 —— 几条分支走的是同一份。"""
+
+    def graph_readers(self):
+        """把实现包**每一层自己绑定的** `load_dag` 都换成计数的包装，用例退出时还原。
+
+        层是从手上这个入口模块的全局里找的，不写死名单，也不看 `sys.modules`：这个包每被装载一次
+        就换一套模块对象（`fresh=True`），`sys.modules` 里那一份未必是这里跑的那一份。漏掉一层，
+        那一层的读就数不着 —— 指令那一趟的 scope 判定（`instruct._scope_facts`）正是这样被漏计过
+        一次。每一层拿的都是自己 import 时绑定的那个函数对象，所以每一趟整份读图恰好记一次。记的
+        是调用者的函数名（不记行号，改一行注释不该判红）。
+        """
+        callers = []
+        real = {}
+        layers = [value for value in vars(pipeline).values()
+                  if isinstance(value, types.ModuleType) and hasattr(value, 'load_dag')]
+        self.assertGreaterEqual(len(layers), 5, f'没找全读图的层：{layers}')
+        for layer in layers:
+            real[layer] = layer.load_dag
+
+            def counted(project, _real=real[layer], _callers=callers):
+                frame = next(f for f in reversed(traceback.extract_stack())
+                             if 'conduct_pipeline_impl' in f.filename and f.name != 'counted')
+                _callers.append(frame.name)
+                return _real(project)
+
+            layer.load_dag = counted
+        self.addCleanup(lambda: [setattr(layer, 'load_dag', fn) for layer, fn in real.items()])
+        return callers
+
+    def test_a_close_with_nothing_left_reads_the_graph_once(self):
+        """手里最后一格收掉、图里没有活：这一趟只读一次图，读它的就是收尾入口。"""
+        sb = self.make()
+        sb.add_node(NODE, '界面设计')
+        sb.start_cycle()
+        sb.write_signal('cyc', NODE, 'completed', 'done')
+
+        callers = self.graph_readers()
+        action = sb.close_round(NODE)
+
+        self.assertEqual('stop_pipeline', action['action'], action)
+        self.assertEqual({'_close_own_node'}, set(callers), f'读图的调用者：{callers}')
+
+    def test_a_close_that_stops_reads_the_graph_once_however_many_branches_it_walks(self):
+        """停手这一趟走的分支最多（就绪集、blocked 理由、点名节点的 tag、停手判据里指令那一趟的
+        scope 判定、attention 名单），读图的仍然只有收尾入口那一处。"""
+        sb = self.make()
+        sb.add_node(NODE, '界面设计')
+        sb.add_node(NODE2, '出局等人', status='shelved')
+        sb.start_cycle(tags=['coding'])
+        sb.write_signal('cyc', NODE, 'completed', 'done')
+
+        callers = self.graph_readers()
+        action = sb.close_round(NODE, node=NODE2)
+
+        self.assertEqual('stop_pipeline', action['action'], action)
+        self.assertTrue(action['attention'], action)
+        self.assertEqual({'_close_own_node'}, set(callers), f'读图的调用者：{callers}')
+
+    def test_a_close_with_another_node_still_in_flight_reads_the_graph_once(self):
+        """多格线手里还有一格在飞：这一格收掉、补不上第二格 → 停在「手里还有谁」那句上，读图一次。"""
+        sb = self.make()
+        sb.add_node(NODE, '甲')
+        sb.add_node(NODE2, '乙')
+        sb.start_cycle(parallel=2)
+        sb.write_signal('cyc', NODE, 'completed', 'done')
+
+        callers = self.graph_readers()
+        action = sb.close_round(NODE)
+
+        self.assertEqual('stop_pipeline', action['action'], action)
+        self.assertIn(NODE2[:8], action['reason'], 'reason 该点名手里还有谁')
+        self.assertEqual([NODE2], sb.holding_ids(), '在飞的那一格还握着')
+        self.assertEqual({'_close_own_node'}, set(callers), f'读图的调用者：{callers}')
+
+    def test_a_multi_slot_close_that_cannot_fill_reads_the_graph_once(self):
+        """多格线手里就一格、图里没有第二格可补：走 blocked 理由那一支，读图一次。"""
+        sb = self.make()
+        sb.add_node(NODE, '甲')
+        sb.start_cycle(parallel=2)
+        sb.write_signal('cyc', NODE, 'completed', 'done')
+
+        callers = self.graph_readers()
+        action = sb.close_round(NODE)
+
+        self.assertEqual('stop_pipeline', action['action'], action)
+        self.assertEqual('图里没有就绪节点了', action['reason'])
+        self.assertEqual({'_close_own_node'}, set(callers), f'读图的调用者：{callers}')
+
+    def test_a_close_that_fills_a_slot_reads_the_graph_once(self):
+        """补格那一趟：收尾读一次，当场补上来的那份 dispatch 自己再读一次。
+
+        第二次读的是**派发那一格**（`_dispatch_many` 为 node 的标题与 mode 读图），与收尾这一趟
+        无关；收尾自己的判定一律用下传的那一份。
+        """
+        sb = self.make()
+        sb.add_node(NODE, '甲')
+        sb.add_node(NODE2, '乙')
+        sb.add_node(NODE3, '丙')
+        sb.start_cycle()
+        sb.set_policy('cyc', 'parallel', 2)
+        sb.set_current_node(NODE2)
+        sb.write_signal('cyc', NODE, 'completed', 'done')
+
+        callers = self.graph_readers()
+        action = sb.close_round(NODE)
+
+        self.assertEqual('dispatch', action['action'], action)
+        self.assertEqual(sorted(sb.holding_ids()), sorted([NODE2, NODE3]), '腾出来的那一格补上了')
+        self.assertEqual({'_close_own_node', '_dispatch_many'}, set(callers),
+                         f'读图的调用者：{callers}')
+
+    def test_the_pick_path_reads_the_graph_once_too(self):
+        """手里没有节点的那条路（开局挑人）也是一个入口读一次：过滤集挡住了就绪节点时，
+        它走 blocked 理由与 attention，读图的仍然只有 `_pick_next` 一处。"""
+        sb = self.make()
+        sb.add_node(NODE, '写文案', tags=['writing'])
+        sb.create_cycle('cyc', tags=['coding'])
+
+        callers = self.graph_readers()
+        action = sb.plan()
+
+        self.assertEqual('stop_pipeline', action['action'], action)
+        self.assertIn('writing', action['reason'])
+        self.assertEqual({'_pick_next'}, set(callers), f'读图的调用者：{callers}')
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  就绪集：读取端不替调用方截断
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestTheReadySetIsWhole(Base):
+    """`ranked_ready_nodes` 不问就给整份就绪集：一次拿几格是线自己的事（`parallel`）。
+
+    这两条直接调读取端，不经过沙箱的规划入口，所以自己套一层 `_dag_hook`：排序照旧由 dag-manage
+    自己的 `cmd_list` 回答（同一份实现），省掉的只是一次次进程启动。
+    """
+
+    def nine_ready(self):
+        """九个互不依赖的就绪节点 —— 比任何「顺手写下的缺省行数」都多。"""
+        sb = self.make()
+        ids = [f'n{i}-0000-4000-8000-00000000000{i}' for i in range(9)]
+        for i, uid in enumerate(ids):
+            sb.add_node(uid, f'节点 {i}')
+        return sb, ids
+
+    def test_the_reader_hands_over_the_whole_ranking(self):
+        """不问 limit 就是整份；要几行由调用方点名。"""
+        sb, ids = self.nine_ready()
+
+        with _dag_hook(sb.root):
+            whole = pipeline.ranked_ready_nodes(sb.root)
+            same = pipeline.ranked_ready_nodes(sb.root, tags=[])
+            three = pipeline.ranked_ready_nodes(sb.root, limit=3)
+
+        self.assertEqual(9, len(whole))
+        self.assertEqual(9, len(same))
+        self.assertEqual(3, len(three))
+
+    def test_a_named_node_beyond_the_head_is_still_picked(self):
+        """`--node` 点名的节点排在第几个都认：它就绪、名字又对得上，选出来的就是它。"""
+        sb, ids = self.nine_ready()
+        tail = ids[-1]
+
+        with _dag_hook(sb.root):
+            whole = pipeline.ranked_ready_nodes(sb.root)
+            chosen = pipeline.pick_node(sb.root, tail)
+
+        self.assertEqual(tail, whole[-1]['id'], '这条用例要的是排名尾巴上的那个节点')
+        self.assertIsNotNone(chosen, '点名的节点在排名尾巴上就读不到了')
+        self.assertEqual(tail, chosen['id'])

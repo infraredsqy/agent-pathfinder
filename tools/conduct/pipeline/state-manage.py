@@ -111,7 +111,8 @@ _ROUTES = {
                                                     getattr(a, 'tags', None)),
     ('cycle', 'start'): lambda a: cmd_cycle_start(a.id, a.title,
                                                   getattr(a, 'force', False),
-                                                  getattr(a, 'tags', None)),
+                                                  getattr(a, 'tags', None),
+                                                  getattr(a, 'parallel', None)),
     ('cycle', 'rename'): lambda a: cmd_cycle_rename(a.id, a.title),
     ('cycle', 'status'): lambda a: cmd_cycle_status(a.id, a.status),
     ('cycle', 'policy'): lambda a: cmd_cycle_policy(a.id, a.key, a.value),
@@ -220,6 +221,12 @@ def main(argv=None) -> None:
                              '(writing / coding / art). Required -- a '
                              'call without it is refused: an empty scope leaves this line '
                              'nothing to pick from')
+    p_cst_.add_argument('--parallel', default=None,
+                        help='How many nodes this line holds and runs at once: pin that many of '
+                             'the ready set right here, and write it down as the line\'s '
+                             '`parallel` policy (same slot `cycle policy <id> parallel <n>` '
+                             'writes). A positive integer, or `off` for the default '
+                             + str(POLICY_DEFAULTS['parallel']))
     p_cst_.add_argument('--force', action='store_true',
                         help='Start anyway while another cycle is active (a bare `next` will then '
                              'have to be told which cycle)')

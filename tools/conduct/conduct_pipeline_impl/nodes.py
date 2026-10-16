@@ -10,13 +10,12 @@ import json
 from pathlib import Path
 
 from . import seam
-from .store import (DEFAULT_MODE, _holding_ids, ledger_dir, load_dag, load_state,
-                    normalize_mode)
+from .store import _holding_ids, ledger_dir, load_dag, load_state, normalize_mode
 
 
 # ── DAG ──────────────────────────────────────────────────────────────────────
 
-def dag_ready_nodes(project: Path, assume_completed=()) -> list:
+def dag_ready_nodes(project: Path, assume_completed=(), dag: dict | None = None) -> list:
     """Ready = a `todo` node whose every dependency is completed (or absent).
 
     The dependency rule is mirrored from `dag-manage._is_ready` on purpose: two tools answering "is
@@ -32,9 +31,12 @@ def dag_ready_nodes(project: Path, assume_completed=()) -> list:
     is "the node just worked on is done -- is there anything left?", and the close command is what
     writes that status.
 
+    `dag` is the already-read graph when the caller has one: the close reads the graph once and hands
+    the same copy to everything it asks on that path.
+
     **被 tag 挡住不是依赖没满足**：一条 cycle 的过滤集（`node_in_tag_scope`）只删行，DAG 不为它动。
     """
-    nodes = load_dag(project).get('nodes', {})
+    nodes = (dag if dag is not None else load_dag(project)).get('nodes', {})
     assumed = {n for n in assume_completed if n}
     out = []
     for uid, n in nodes.items():
@@ -43,7 +45,7 @@ def dag_ready_nodes(project: Path, assume_completed=()) -> list:
         deps = n.get('dependencies', []) or []
         if all((nodes.get(d) or {}).get('status') == 'completed'
                or d in assumed or d not in nodes for d in deps):
-            out.append({'id': uid, 'title': n.get('title', ''), 'mode': n.get('mode') or DEFAULT_MODE,
+            out.append({'id': uid, 'title': n.get('title', ''), 'mode': normalize_mode(n.get('mode')),
                         'tags': [t for t in (n.get('tags') or []) if isinstance(t, str)]})
     return out
 
@@ -103,7 +105,8 @@ def cross_line_reason(tags, blocked: list) -> str:
     return '\n'.join([head, *tag_blocked_lines(blocked), tail])
 
 
-def _rank_ready_nodes(project: Path, exclude=None, exclude_many=(), assume_completed=()) -> list:
+def _rank_ready_nodes(project: Path, exclude=None, exclude_many=(), assume_completed=(),
+                      dag: dict | None = None) -> list:
     """The ready set in the DAG's own priority order, unfiltered and untruncated.
 
     **The ready set comes from `dag_ready_nodes`, and the ranking comes from `dag-manage`.**
@@ -121,7 +124,7 @@ def _rank_ready_nodes(project: Path, exclude=None, exclude_many=(), assume_compl
 
     `exclude` / `exclude_many` drop ids outright (the nodes a line holds, the node being closed).
     """
-    ready = dag_ready_nodes(project, assume_completed=assume_completed)
+    ready = dag_ready_nodes(project, assume_completed=assume_completed, dag=dag)
     drop = set(exclude_many or ())
     if exclude:
         drop.add(exclude)
@@ -183,24 +186,28 @@ def _free_ready(project: Path, ranked: list, mine=None) -> list:
     return [n for n in ranked if n.get('id') in keep or n.get('id') not in holders]
 
 
-def ranked_ready_nodes(project: Path, limit: int = 8, exclude=None, exclude_many=(),
-                       assume_completed=(), tags=None) -> list:
+def ranked_ready_nodes(project: Path, limit: int | None = None, exclude=None, exclude_many=(),
+                       assume_completed=(), tags=None, dag: dict | None = None) -> list:
     """The ready set a cycle may pick from, in the DAG's own priority order.
 
     `tags` is the cycle's filter set. It only drops rows off the DAG's ranking; the ranking itself
     stays `dag-manage`'s. `None`/empty means the whole graph is in range, exactly as before tags
     existed. Nodes another cycle is holding are not in the set at all: the DAG calls them ready
     (their dependencies are met) and they are not available.
+
+    `limit` left out hands over the whole ranking: 一条线一次拿几格是调用方的事（`parallel` 策略，
+    以及 `cycle start` 自己钉的那几格）。读取端拿一个自己的数去截断，「我点名的那个节点在不在」
+    与「图里还有没有活」这两个问题都会答错。
     """
     ranked = _rank_ready_nodes(project, exclude=exclude, exclude_many=exclude_many,
-                               assume_completed=assume_completed)
+                               assume_completed=assume_completed, dag=dag)
     ranked = _free_ready(project, ranked, [x for x in (exclude, *exclude_many) if x])
     visible = [n for n in ranked if node_in_tag_scope(n, tags)]
-    return visible[:limit]
+    return visible if limit is None else visible[:limit]
 
 
 def tag_blocked_ready_nodes(project: Path, tags, exclude=None, exclude_many=(),
-                            assume_completed=()) -> list:
+                            assume_completed=(), dag: dict | None = None) -> list:
     """The ready nodes this cycle's filter set hides -- the other half of the same ranking.
 
     They are what turns "no node to pick" into a sentence a human can act on: the work is right
@@ -211,11 +218,12 @@ def tag_blocked_ready_nodes(project: Path, tags, exclude=None, exclude_many=(),
     if not tags:
         return []
     ranked = _rank_ready_nodes(project, exclude=exclude, exclude_many=exclude_many,
-                               assume_completed=assume_completed)
+                               assume_completed=assume_completed, dag=dag)
     return [n for n in ranked if not node_in_tag_scope(n, tags)]
 
 
-def holding_ready_nodes(project: Path, exclude=None, exclude_many=(), assume_completed=()) -> list:
+def holding_ready_nodes(project: Path, exclude=None, exclude_many=(), assume_completed=(),
+                        dag: dict | None = None) -> list:
     """Ready nodes another cycle is holding right now: work this cycle cannot pick.
 
     A line holds them, a tag never blocked them -- the two read differently to a human, and
@@ -226,7 +234,7 @@ def holding_ready_nodes(project: Path, exclude=None, exclude_many=(), assume_com
     if exclude:
         drop.add(exclude)
     ranked = _rank_ready_nodes(project, exclude=exclude, exclude_many=exclude_many,
-                               assume_completed=assume_completed)
+                               assume_completed=assume_completed, dag=dag)
     return [n for n in ranked if n.get('id') not in drop and n.get('id') in holders]
 
 
@@ -254,7 +262,7 @@ def blocked_reason(project: Path, tags, tagged: list, holding: list) -> str:
 
 
 def pick_node(project: Path, override: str | None = None, exclude=None, exclude_many=(),
-              assume_completed=(), tags=None) -> dict | None:
+              assume_completed=(), tags=None, dag: dict | None = None) -> dict | None:
     """The next node: an explicit instruction wins, otherwise the top of the ready ranking.
 
     `--node <id>` is the owner naming a node by hand, so the filter set has no say over it: a node
@@ -264,7 +272,7 @@ def pick_node(project: Path, override: str | None = None, exclude=None, exclude_
     a name that is not ready at all, which is the meaning this flag already had.
     """
     ranked = ranked_ready_nodes(project, exclude=exclude, exclude_many=exclude_many,
-                                assume_completed=assume_completed, tags=tags)
+                                assume_completed=assume_completed, tags=tags, dag=dag)
     if override:
         for n in ranked:
             # Exact match only: a prefix (`--node ab` hitting `abc...`) would aim a round at a
@@ -275,7 +283,7 @@ def pick_node(project: Path, override: str | None = None, exclude=None, exclude_
             # Named and ready, but outside the filter set: look again in the unfiltered ranking
             # rather than reading "no such ready node".
             for n in ranked_ready_nodes(project, exclude=exclude, exclude_many=exclude_many,
-                                        assume_completed=assume_completed):
+                                        assume_completed=assume_completed, dag=dag):
                 if n['id'] == override:
                     return n
         # Named but not ready/present: refuse rather than silently substituting another node.
@@ -284,7 +292,12 @@ def pick_node(project: Path, override: str | None = None, exclude=None, exclude_
 
 
 def node_spec_path(project: Path, node_id: str) -> str:
-    return str(ledger_dir(project) / 'nodes' / node_id / 'spec.md')
+    """`<project>/.pf/nodes/<id>/spec.md`，按人读的方式写（正斜杠）。
+
+    这是这条路径唯一的一处算法：生成的 spec 末尾报它，`maintenance.write_spec` 往它写，维护节点
+    的目录也建在它旁边。`.pf` 本身由 `store.ledger_dir` 定。
+    """
+    return (ledger_dir(project) / 'nodes' / node_id / 'spec.md').as_posix()
 
 
 def mode_for(node_id: str | None, dag: dict) -> str:
@@ -292,9 +305,7 @@ def mode_for(node_id: str | None, dag: dict) -> str:
 
     Nothing overrides it: the node's mode decides on its own whether the line keeps going after it
     (see `planner.stop_criterion`), so there is no line-level mode left to take precedence over.
+    兜底走 `normalize_mode`；读的是交进来的那份图，调用方不会再为这一个值重读一次盘。
     """
-    if node_id:
-        node = (dag.get('nodes') or {}).get(node_id)
-        if node and node.get('mode'):
-            return normalize_mode(node['mode'])
-    return DEFAULT_MODE
+    node = ((dag.get('nodes') or {}).get(node_id) or {}) if node_id else {}
+    return normalize_mode(node.get('mode'))

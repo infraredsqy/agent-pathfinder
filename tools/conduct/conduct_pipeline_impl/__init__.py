@@ -68,16 +68,16 @@ __all__ = [
     'prompt_for', 'write_prompt_file', 'build_prompt_text', 'mode_for', 'started_marker',
 
     # maintenance: the maintenance channel
-    'POLICY_NUMERIC_KEYS', 'READING_KEYS', 'MAINTENANCE_ACTION', 'METRICS', 'crossed', 'reading_of',
+    'READING_KEYS', 'MAINTENANCE_ACTION', 'METRICS', 'crossed', 'reading_of',
     'thresholds_for', 'asked_readings', 'pool_weight', 'insertion', 'read_new_node_id',
     'maintenance_spec', 'maintenance_title', 'substitute',
 
     # actions: state -> an action package, and an action package as the caller reads it
-    '_ask', '_dispatch', '_dispatch_many', '_maintenance_due', 'attention_items', '_ticket_wait',
+    '_ask', '_dispatch_many', '_maintenance_due', 'attention_items', '_ticket_wait',
     '_retry_wait', '_sessions_wait', '_close_commands', '_stop_action', 'render_action',
 
     # planner: plan() and the node's own close
-    'stop_criterion', 'plan', 'node_mode', '_close_own_node', '_named_node_outside_scope',
+    'stop_criterion', 'plan', '_close_own_node', '_named_node_outside_scope',
 
     # writer: apply() / record()
     'MAX_SETTLE_STEPS', '_snapshot', 'resolve_spawner', 'spawn_session', 'clean_launch_dir',

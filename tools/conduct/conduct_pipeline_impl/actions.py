@@ -1,6 +1,6 @@
 """The action builders: state -> one action package.
 
-`_ask`, `_dispatch`, the two `wait` answers, the close command list, and the stop package -- plus
+`_ask`, `_dispatch_many`, the two `wait` answers, the close command list, and the stop package -- plus
 `render_action`, the other end of the same contract: an action package as the caller reads it.
 """
 
@@ -11,36 +11,12 @@ from pathlib import Path
 
 from . import maintenance, seam
 from .nodes import mode_for, node_spec_path
-from .prompts import build_prompt_text
-from .store import DEFAULT_MODE, load_dag, load_signal, meta_dir
+from .prompts import build_prompt_text, launch_dir, launch_prompt_path
+from .store import DEFAULT_MODE, load_dag
 
 
 def _ask(question: str, **extra) -> dict:
     return {'action': 'ask_user', 'cycle': None, 'question': question, 'commands': [], **extra}
-
-
-def _dispatch(project: Path, cycle: dict, node_id: str) -> dict:
-    dag = load_dag(project)
-    # A DAG node is stored under its own id (the id is the dict KEY), so the id has to be handed in
-    # rather than read back out of the row.
-    node = dict((dag.get('nodes') or {}).get(node_id) or {})
-    node['id'] = node_id
-    text = build_prompt_text(project, cycle, node)
-    target = (meta_dir(project) / 'launch' / cycle['id'] / node_id
-              / 'prompt.txt')
-    return {
-        'action': 'dispatch', 'cycle': cycle['id'],
-        'node_id': node_id, 'node_title': node.get('title', ''),
-        'nodes': [{'node_id': node_id, 'node_title': node.get('title', ''),
-                   'mode': mode_for(node_id, dag),
-                   'prompt': str(target), 'prompt_text': text}],
-        'mode': mode_for(node_id, dag),
-        'prompt': str(target), 'prompt_text': text,
-        'steps': [f'write prompt text to {target}',
-                  'DSH: spawn one session with prompt.txt (`dispatch <cycle>` does this; '
-                  '`next --spawn` is the one-shot spelling of the same call)'],
-        'commands': [],
-    }
 
 
 def _dispatch_many(project: Path, cycle: dict, node_ids: list) -> dict:
@@ -52,14 +28,12 @@ def _dispatch_many(project: Path, cycle: dict, node_ids: list) -> dict:
     """
     dag = load_dag(project)
     nodes = []
-    root = meta_dir(project) / 'launch' / cycle['id']
     for node_id in node_ids:
         node = dict((dag.get('nodes') or {}).get(node_id) or {})
         node['id'] = node_id
-        target = root / node_id / 'prompt.txt'
         nodes.append({'node_id': node_id, 'node_title': node.get('title', ''),
                       'mode': mode_for(node_id, dag),
-                      'prompt': str(target),
+                      'prompt': str(launch_prompt_path(project, cycle['id'], node_id)),
                       'prompt_text': build_prompt_text(project, cycle, node)})
     head = nodes[0]
     return {
@@ -72,7 +46,8 @@ def _dispatch_many(project: Path, cycle: dict, node_ids: list) -> dict:
         'mode': head['mode'],
         'prompt': head['prompt'] if len(nodes) == 1 else '',
         'prompt_text': head['prompt_text'] if len(nodes) == 1 else '',
-        'steps': [f'write each node\'s prompt text to its own prompt.txt under {root}',
+        'steps': [f'write each node\'s prompt text to its own prompt.txt under '
+                  f'{launch_dir(project, cycle["id"])}',
                   'DSH: spawn one session per node (`dispatch <cycle>` does all of them; '
                   '`next --spawn` is the one-shot spelling of the same call)'],
         'commands': [],
@@ -87,19 +62,17 @@ def _maintenance_due(project: Path, cycle: dict, closed: str, hit: dict, target:
     is there, create the maintenance node, wire the two edges, and pin the cycle on it. Nothing is
     written here -- `apply` is the only writer, and `plan` must stay byte-for-byte read-only.
 
-    It is shaped like `_dispatch` on purpose ("走法和 dispatch 一样"): the same `prompt` /
+    It is shaped like `_dispatch_many` on purpose ("走法和 dispatch 一样"): the same `prompt` /
     `prompt_text` / `mode` fields, so `dispatch <cycle>` and `next --spawn` need no second case. The
     difference is WHICH node is pinned -- the one just inserted, not the one the close had picked --
     and that the picked node is named in `deferred_node`, because it is still the next thing the
     line will do, just not yet.
     """
-    dag = load_dag(project)
     node_id = maintenance.NEW_NODE
     node = {'id': node_id, 'title': hit['title'], 'description': hit['spec_of'](node_id),
             'mode': DEFAULT_MODE}
     text = build_prompt_text(project, cycle, node)
-    node_target = (meta_dir(project) / 'launch' / cycle['id'] / node_id
-                   / 'prompt.txt')
+    node_target = launch_prompt_path(project, cycle['id'], node_id)
     shown = (f'{hit["value"]:g}{hit["unit"]}')
     line = (f'{hit["at"]:g}{hit["unit"]}')
     note = (f'{hit["subject"]} 读到 {shown}，达到这条线策略里的线 {line}'
@@ -232,7 +205,8 @@ def _close_commands(project: Path, cycle: dict, node_id: str, outcome: str,
 
 
 def _stop_action(project: Path, cycle: dict, reason: str, cmds: list,
-                 node_id: str | None = None, shelved_nodes=(), stop_line: bool = True) -> dict:
+                 node_id: str | None = None, shelved_nodes=(), stop_line: bool = True,
+                 dag: dict | None = None) -> dict:
     return {'action': 'stop_pipeline', 'cycle': cycle['id'], 'node_id': node_id,
             'reason': reason,
             'note': ('cycle parked; nothing more to do without a human' if stop_line else
@@ -240,11 +214,11 @@ def _stop_action(project: Path, cycle: dict, reason: str, cmds: list,
                      'own closes run'),
             # The run is ending, so this is the last place the human-facing loose ends can be
             # handed over. `attention: []` when there is nothing to look at.
-            'attention': attention_items(project, cycle, shelved_nodes),
+            'attention': attention_items(project, cycle, shelved_nodes, dag=dag),
             'commands': cmds}
 
 
-def attention_items(project: Path, cycle: dict, shelved_nodes=()) -> list:
+def attention_items(project: Path, cycle: dict, shelved_nodes=(), dag: dict | None = None) -> list:
     """The things a human has to look at, carried by the stop package.
 
     Two sources, collected in this order:
@@ -264,7 +238,7 @@ def attention_items(project: Path, cycle: dict, shelved_nodes=()) -> list:
     以及 `signal.py` 的 `failed`，说的是判决，照旧。
     """
     out = []
-    nodes = load_dag(project).get('nodes') or {}
+    nodes = (dag if dag is not None else load_dag(project)).get('nodes') or {}
     shelved = list(dict.fromkeys(list(shelved_nodes) + [uid for uid, n in nodes.items()
                                                        if n.get('status') == 'shelved']))
     for uid in shelved:
