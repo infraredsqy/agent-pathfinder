@@ -9,7 +9,6 @@ Three verbs belong to `pf` itself:
 
     pf doctor [--fix]   read the health of this checkout and this project; --fix runs the setup act
     pf version          print where this checkout lives
-    pf migrate [...]    bring a project's ledger over from `.nav/` (see migrate-ledger.py)
 
 Everything else forwards to a tool, keeping the tool's own subcommand names so the docs stay
 greppable. `pf init` and `pf register` are forwards too: the registration logic lives next to the
@@ -33,7 +32,6 @@ STATE_MANAGE = PIPELINE / 'state-manage.py'
 HANDOFF = PIPELINE / 'handoff.py'
 CONDUCT_PIPELINE = PIPELINE / 'conduct_pipeline.py'
 LEDGER_MERGE = CONDUCT / 'ledger-merge.py'
-MIGRATE = CONDUCT / 'migrate-ledger.py'
 #: Shared plumbing, and every writer treats a missing session note as best effort -- which is exactly
 #: why the doctor has to check it by name.
 SESSION_NOTE = TOOLS / 'shared' / 'session-note.py'
@@ -59,7 +57,8 @@ pf -- the agent pipeline's own command
   verbs:    init                        put .pf/ in place (run once per project)
             register                    write the ledger's git merge driver into this project
             doctor [--fix]              report the health of this checkout and this project
-            migrate [--dry-run]         bring a project's ledger over from .nav/
+            migrate                     inactive for now -- it reopens when this system itself
+                                        needs migrating
             version                     print where this checkout lives
             next [--plan|--after <node>]
                                         show (or do) the next pipeline action: `--plan` is the
@@ -136,7 +135,7 @@ def cmd_doctor(fix: bool = False) -> int:
     ledger = root / LEDGER_NAME
     print(f'项目根：{root}')
     if not ledger.is_dir():
-        print(f'  · 这里还没有 {LEDGER_NAME}/（新项目跑 `pf init`；旧记录跑 `pf migrate`）')
+        print(f'  · 这里还没有 {LEDGER_NAME}/（新项目跑 `pf init`）')
         return 1 if problems else 0
 
     gaps = []
@@ -191,7 +190,8 @@ def main(argv: list[str]) -> int:
     if verb == 'doctor':
         return cmd_doctor(fix='--fix' in rest)
     if verb == 'migrate':
-        return _run(str(MIGRATE), *rest)
+        print('migrate：这个口子现在关着 —— 没有要迁移的东西；等这套体系自己要迁移时再开。')
+        return 0
     if verb == 'merge-ledger':
         return _run(str(LEDGER_MERGE), *rest)
     if verb == 'handoff':
