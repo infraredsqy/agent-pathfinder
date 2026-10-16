@@ -43,26 +43,45 @@ Weight:
 
 import argparse
 import contextlib
+import importlib.util
 import json
 import os
 import shutil
 import sys
-import tempfile
-import time
 import uuid as uuid_mod
 from datetime import datetime, timezone
 from pathlib import Path
-
-try:
-    import fcntl
-except ImportError:   # Windows; the lock's POSIX branch degrades to no-op
-    fcntl = None
-import msvcrt
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Paths & Constants
 # ═══════════════════════════════════════════════════════════════════════════════
+
+# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
+# loaded by path through `loader.py`. These two functions are that bootstrap, identical in every file
+# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+SHARED = Path(__file__).resolve().parent.parent / 'shared'
+
+_LOADER = None
+
+
+def _loader():
+    """`tools/shared/loader.py`: the one loader, for the modules this tree keeps outside `shared/`."""
+    global _LOADER
+    if _LOADER is None:
+        spec = importlib.util.spec_from_file_location('pf_shared_loader', SHARED / 'loader.py')
+        _LOADER = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_LOADER)
+    return _LOADER
+
+
+def _shared(name, filename):
+    """One file out of `tools/shared/`, the same module for every caller in this process.
+
+    Loaded for use, not copied: the ledger lock's reentrancy record is one per process, and a second
+    copy of that module would give two of them.
+    """
+    return _loader().load_by_path(name, SHARED / filename, register=True, reuse=True)
 
 # One directory per project: `.pf/` holds the graph, each node's own text (`spec.md`, reports), and
 # the cycle book the conduct side keeps. A project either commits it or keeps it to itself -- the
@@ -112,24 +131,14 @@ DATA_DIR = LEDGER_DIR
 NODES_DIR = DATA_DIR / 'nodes'
 IDEAS_JSON = DATA_DIR / 'ideas.json'
 
-_SESSION_NOTE = None
-
 
 def _session_note():
-    """`tools/shared/session-note.py`, loaded by path.
+    """`tools/shared/session-note.py` -- one module for every caller in this process.
 
     The conduct side writes every run's id to the same file; this side writes the discussion a node
     was born in, and reads both back for `info`.
     """
-    global _SESSION_NOTE
-    if _SESSION_NOTE is None:
-        import importlib.util
-        path = Path(__file__).resolve().parent.parent / 'shared' / 'session-note.py'
-        spec = importlib.util.spec_from_file_location('session_note_dag', path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        _SESSION_NOTE = module
-    return _SESSION_NOTE
+    return _shared('pf_shared_sessionnote', 'session-note.py')
 
 
 def _note_session(node_id: str, session: str) -> None:
@@ -184,52 +193,40 @@ def _now() -> str:
 
 
 def _read() -> dict:
-    """Read ideas.json; auto-create on first use. Exits on JSON error."""
-    if not IDEAS_JSON.exists():
-        return {'nodes': {}}
-    # JSON is UTF-8 by spec. A file that is not is a corrupt record, not an older build's.
+    """Read ideas.json; auto-create on first use.
+
+    The read itself -- absent file, bytes that are not UTF-8, text that is not JSON, and the words
+    each of those gets -- is `tools/shared/jsonio.py`'s. This layer is the CLI, so a record that
+    cannot be read ends the command with that message, plus the one hint this tool has for it.
+    """
+    jsonio = _shared('pf_shared_jsonio', 'jsonio.py')
     try:
-        with IDEAS_JSON.open('r', encoding='utf-8') as f:
-            data = json.load(f)
-    except UnicodeDecodeError as e:
-        print(f'Error: ideas.json is not valid UTF-8: {e}', file=sys.stderr)
+        data = jsonio.read_json_strict(IDEAS_JSON, 'ideas.json') or {'nodes': {}}
+    except jsonio.JsonReadError as e:
+        print(f'Error: {e}', file=sys.stderr)
+        if isinstance(e.__cause__, json.JSONDecodeError):
+            print('Hint: run "validate" for details.', file=sys.stderr)
         sys.exit(1)
-    except json.JSONDecodeError as e:
-        print(f'Error: ideas.json parse failure: {e}', file=sys.stderr)
-        print('Hint: run "validate" for details.', file=sys.stderr)
-        sys.exit(1)
-    if 'nodes' not in data:
-        data['nodes'] = {}
+    data.setdefault('nodes', {})
     return data
 
 
 def _write(data: dict) -> None:
-    """Atomically write ideas.json (write temp, rename, with a bounded retry on a live reader)."""
+    """Atomically write ideas.json: temp file, fsync, a replace that tolerates a live reader.
+
+    The write is `tools/shared/jsonio.py`'s, the same one every other record in this tree goes
+    through; `sort_keys` is this file's own habit, so a rewritten graph reads the same way twice.
+    """
     _ensure_dirs()
-    fd, tmp = tempfile.mkstemp(dir=str(DATA_DIR), suffix='.tmp')
-    try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False, sort_keys=True)
-            f.flush()
-            os.fsync(f.fileno())
-        _replace_with_retry(tmp, str(IDEAS_JSON))
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    _shared('pf_shared_jsonio', 'jsonio.py').atomic_write_json(IDEAS_JSON, data, sort_keys=True)
 
 
 # ── the cross-process ledger lock ─────────────────────────────────────────────
 # ideas.json is whole-file read-modify-write; two processes walking that at once means the later
 # write erases the earlier one. Every MUTATING command body holds the project's one lock across
-# its read → write -- the same `.pf/meta/ledger.lock` file conduct and the issue tool use, so
-# writes exclude each other across all three tools. The lock lives in `meta/`, which
-# `.pf/.gitignore` keeps out of the history in both commit modes. Reentrant per process (a command
-# body never nests today, but the guard is free).
-_LEDGER_LOCK_TIMEOUT = 10.0
-_LEDGER_LOCK_DEPTH = 0
+# its read → write -- the same `.pf/meta/ledger.lock` file conduct, the issue tool and a session
+# note's own writer use, so writes exclude each other across all of them. Reentrant per process
+# (this body writes a node's note inside its own read-modify-write).
 
 
 def _require_initialized() -> None:
@@ -246,62 +243,20 @@ def _require_initialized() -> None:
 
 
 @contextlib.contextmanager
-def _ledger_lock(timeout: float = _LEDGER_LOCK_TIMEOUT):
-    global _LEDGER_LOCK_DEPTH
-    if _LEDGER_LOCK_DEPTH:
-        _LEDGER_LOCK_DEPTH += 1
-        try:
-            yield
-        finally:
-            _LEDGER_LOCK_DEPTH -= 1
-        return
-    _require_initialized()
-    path = LEDGER_DIR / 'meta' / 'ledger.lock'
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle = open(path, 'a+')
-    deadline = time.monotonic() + timeout
+def _ledger_lock(timeout: float | None = None):
+    """Hold the project's ledger lock for the duration of one read-modify-write.
+
+    The lock itself is `tools/shared/ledgerlock.py`. A caller that cannot get it within `timeout` is
+    told loudly and exits 1 -- wedging silently is the one failure this must not have.
+    """
+    lock = _shared('pf_shared_ledgerlock', 'ledgerlock.py')
+    kwargs = {} if timeout is None else {'timeout': timeout}
     try:
-        while True:
-            try:
-                if os.name == 'nt' and msvcrt is not None:
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                elif fcntl is not None:
-                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except OSError:
-                if time.monotonic() >= deadline:
-                    print(f'Error: the ledger lock {path} stayed busy for {timeout:g}s; '
-                          f'another process is mid-write. Nothing was changed.', file=sys.stderr)
-                    sys.exit(1)
-                time.sleep(0.05)
-        _LEDGER_LOCK_DEPTH = 1
-        try:
+        with lock.ledger_lock(LEDGER_DIR, gate=_require_initialized, **kwargs):
             yield
-        finally:
-            _LEDGER_LOCK_DEPTH = 0
-            try:
-                if os.name == 'nt' and msvcrt is not None:
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-                elif fcntl is not None:
-                    fcntl.flock(handle, fcntl.LOCK_UN)
-            except OSError:
-                pass
-    finally:
-        handle.close()
-
-
-def _replace_with_retry(tmp: str, path: str, attempts: int = 4) -> None:
-    """`os.replace`, tolerating a reader that holds the target open this instant (Windows)."""
-    for attempt in range(attempts):
-        try:
-            os.replace(tmp, path)
-            return
-        except PermissionError:
-            if attempt == attempts - 1:
-                raise
-            time.sleep(0.05 * (attempt + 1))
+    except TimeoutError as e:
+        print(f'Error: {e}', file=sys.stderr)
+        sys.exit(1)
 
 
 def _resolve_uuid(uid: str, data: dict) -> str:

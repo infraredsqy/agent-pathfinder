@@ -22,16 +22,45 @@ and a run for another, so the role belongs to the entry, not to the session.
 Writers are `dag-manage.py add` (the discussion the node was routed in) and the pipeline's
 `writer.spawn_session` (every run, at spawn time); readers are `pf session show|list` and
 `pf dag info`. No single tool owns this file and there is no package to import it from: it lives in
-`tools/shared/`, and each caller loads it by path.
+`tools/shared/`, and its callers load it by path through `loader.py`.
+
+Every write goes through the project's ledger lock (`.pf/meta/ledger.lock`, the one lock every
+writer of a `.pf/` record holds) and the tree's atomic JSON write, so two writers noting two
+sessions on one node cannot lose one another.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
-import os
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
+# loaded by path through `loader.py`. These two functions are that bootstrap, identical in every file
+# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+SHARED = Path(__file__).resolve().parent
+
+_LOADER = None
+
+
+def _loader():
+    """`tools/shared/loader.py`: the one loader, for the modules this tree keeps outside `shared/`."""
+    global _LOADER
+    if _LOADER is None:
+        spec = importlib.util.spec_from_file_location('pf_shared_loader', SHARED / 'loader.py')
+        _LOADER = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_LOADER)
+    return _LOADER
+
+
+def _shared(name, filename):
+    """One file out of `tools/shared/`, the same module for every caller in this process.
+
+    Loaded for use, not copied: the ledger lock's reentrancy record is one per process, and a second
+    copy of that module would give two of them.
+    """
+    return _loader().load_by_path(name, SHARED / filename, register=True, reuse=True)
 
 #: The two keys a note is made of, in the order a human reads them.
 ROLES = ('discussion', 'run')
@@ -148,35 +177,31 @@ def append(project, node_id, role: str, session: str, host: str | None = None,
     `at` left out means now (a writer noting what just happened); `at=None` means "not known" and
     stores `null` (an import from a record that no longer carries the moment).
 
-    The write is atomic (temp file in the same directory, then `os.replace`): readers of a note are
-    other processes, and a half-written JSON is exactly the failure the tolerant reader above hides.
+    The read and the write are one act, and this function takes the project's ledger lock for it:
+    two writers noting two sessions on one node would otherwise read the same note and the later
+    write would erase the earlier entry. The lock is the one every writer of a `.pf/` record holds,
+    and the write is the tree's atomic JSON write (temp file in the same directory, fsync, a replace
+    that waits out a reader holding the file open): readers of a note are other processes, and a
+    half-written JSON is exactly the failure the tolerant reader above hides. A caller that already
+    holds the lock -- a dag command writing a node's note inside its own read-modify-write -- may
+    call this; the lock is reentrant per process.
     """
     if role not in ROLES:
         raise ValueError(f'session note role must be one of {ROLES}, got {role!r}')
     if not session:
         raise ValueError('a session note entry needs a session id')
-    note = read(project, node_id)
-    if session in sessions_of(note, role):
-        return False
-    entry = {'session': session, 'host': host or host_of_session(session),
-             'at': _now() if at is NOW else at}
-    if source:
-        entry['source'] = source
-    note[role].append(entry)
-    path = note_path(project, node_id)
-    body = json.dumps({'v': VERSION, **{r: note[r] for r in ROLES}}, ensure_ascii=False, indent=2) + '\n'
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix='.tmp')
-    try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            f.write(body)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-        raise
+    lock = _shared('pf_shared_ledgerlock', 'ledgerlock.py')
+    with lock.ledger_lock(Path(project) / '.pf'):
+        note = read(project, node_id)
+        if session in sessions_of(note, role):
+            return False
+        entry = {'session': session, 'host': host or host_of_session(session),
+                 'at': _now() if at is NOW else at}
+        if source:
+            entry['source'] = source
+        note[role].append(entry)
+        body = {'v': VERSION, **{r: note[r] for r in ROLES}}
+        _shared('pf_shared_jsonio', 'jsonio.py').atomic_write_json(note_path(project, node_id), body)
     return True
 
 

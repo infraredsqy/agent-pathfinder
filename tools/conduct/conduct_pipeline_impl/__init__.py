@@ -47,7 +47,7 @@ __all__ = [
     'seam', 'store', 'instruct', 'nodes', 'prompts', 'maintenance', 'actions', 'planner', 'writer',
 
     # store: the read layer, and the door to the session notes under `.pf/meta/sessions/`
-    'ledger_dir', 'meta_dir', '_read_json', 'load_state', 'load_signal', 'load_dag',
+    'ledger_dir', 'meta_dir', 'load_state', 'load_signal', 'load_dag',
     'load_instructions',
     'active_cycles', 'find_cycle', 'cycle_path',
     'POLICY_DEFAULTS', 'POLICY_VALUES', 'POLICY_NUMBERS', 'POLICY_COUNTS',

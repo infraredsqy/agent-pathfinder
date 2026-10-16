@@ -124,6 +124,23 @@ HERE = Path(__file__).resolve().parent
 DAG_MANAGE = Path(os.environ.get('DSH_CONDUCT_DAG_MANAGE')
                   or HERE.parent / 'dag' / 'dag-manage.py')
 
+# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
+# loaded by path through `loader.py`. This function is that bootstrap, the same shape in every file
+# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+SHARED = HERE.parent / 'shared'
+
+_LOADER = None
+
+
+def _loader():
+    """`tools/shared/loader.py`: the one loader, for the modules this tree keeps outside `shared/`."""
+    global _LOADER
+    if _LOADER is None:
+        spec = importlib.util.spec_from_file_location('pf_shared_loader', SHARED / 'loader.py')
+        _LOADER = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_LOADER)
+    return _LOADER
+
 KIND_IDEAS = 'ideas'
 KIND_STATE = 'state'
 KIND_INSTRUCTIONS = 'instructions'
@@ -162,14 +179,13 @@ _STORE = None
 _DAG = None
 
 
-def _load_by_path(name: str, path: Path, package_dir: Path | None = None):
-    """Load a module (or package) by path, registered so relative imports resolve."""
-    kwargs = {'submodule_search_locations': [str(package_dir)]} if package_dir else {}
-    spec = importlib.util.spec_from_file_location(name, path, **kwargs)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod                      # a package needs this before exec_module
-    spec.loader.exec_module(mod)
-    return mod
+def _load_by_path(name: str, path: Path, **kwargs):
+    """Load a module (or package) by path through the tree's one loader.
+
+    `package_dir` names a package's own directory; the loader registers that, which is what makes
+    the package's relative imports resolve. `register` leaves a plain module in `sys.modules`.
+    """
+    return _loader().load_by_path(name, path, **kwargs)
 
 
 def store():
@@ -181,7 +197,7 @@ def store():
     global _STORE
     if _STORE is None:
         pkg = _load_by_path('pf_ledger_conduct_state', HERE / 'conduct_state' / '__init__.py',
-                            HERE / 'conduct_state')
+                            package_dir=HERE / 'conduct_state')
         _STORE = pkg.store
     return _STORE
 
@@ -192,7 +208,7 @@ def dag_manage():
     if _DAG is None:
         if not DAG_MANAGE.exists():
             raise FileNotFoundError(f'dag-manage.py not found at {DAG_MANAGE}')
-        _DAG = _load_by_path('pf_ledger_dag_manage', DAG_MANAGE)
+        _DAG = _load_by_path('pf_ledger_dag_manage', DAG_MANAGE, register=True)
     return _DAG
 
 

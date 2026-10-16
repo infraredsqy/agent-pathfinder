@@ -8,13 +8,12 @@ surface and the code that answers it are one list.
 
 import json
 import sys
-import time
 from pathlib import Path
 
 from .store import (CYCLE_VALID_STATUSES, PARALLEL_DEFAULT, VALID_NODE_RESULTS,
                     _find_cycle, _holding_ids, _holding_of, _ledger_lock, _now, _read_signal,
-                    _read_state, _resolve_project_root, _set_holding, _signal_path, _write_signal,
-                    _write_state, meta_dir_for)
+                    _read_state, _resolve_project_root, _set_holding, _signal_path, _shared,
+                    _write_signal, _write_state, meta_dir_for)
 from .pipeline_loader import _load_pipeline
 
 
@@ -448,15 +447,16 @@ def cmd_cycle_retry(cycle_id: str, node_id: str, summary: str | None,
         state = _read_state()
         _find_cycle(state, cycle_id)
         sp = _signal_path(cycle_id, node_id)
+        remove = _shared('pf_shared_jsonio', 'jsonio.py').unlink_with_retry
         if drop:
             if sp.exists():
-                _unlink_with_retry(sp)
+                remove(sp)
             # 会话那条记号也一并抹掉：留着它，重试根本派不出去（派发会把这一格跳过，见 nextcmd）。
-            _unlink_with_retry(_launch_dir(cycle_id, node_id) / 'started')
+            remove(_launch_dir(cycle_id, node_id) / 'started')
             print(f'Signal dropped (no ticket left): {sp}')
             return
         if sp.exists():
-            _unlink_with_retry(sp)
+            remove(sp)
         p = _write_signal(cycle_id, node_id, 'pending',
                           summary or 'Node restarted (previous signal cleared)', {})
     print(f'Signal cleared and rewritten as pending: {p}')
@@ -528,28 +528,11 @@ def cmd_cycle_rename(cycle_id: str, title: str) -> None:
     print(f'RENAMED: "{cycle_id}" → "{title}"')
 
 
-# ── the launch dir, and one unlink that tolerates a reader ───────────────────
+# ── the launch dir ───────────────────────────────────────────────────────────
 
 def _launch_dir(cycle_id: str, node_id: str) -> Path:
     """`.pf/meta/launch/<cycle>/<node>/` —— 派发那一格的落点（prompt / claim / started 都在里面）。"""
     return meta_dir_for(None) / 'launch' / cycle_id / node_id
-
-
-def _unlink_with_retry(path, attempts: int = 4) -> None:
-    """`unlink`, tolerating a reader that holds the file open this instant.
-
-    Same shape as store's `_replace_with_retry`: on Windows a plain `open()` for reading does not
-    carry FILE_SHARE_DELETE, so a concurrent reader mid-read makes the unlink fail with
-    PermissionError. The window is tiny and the retry is bounded well under a second.
-    """
-    for attempt in range(attempts):
-        try:
-            path.unlink(missing_ok=True)
-            return
-        except PermissionError:
-            if attempt == attempts - 1:
-                raise
-            time.sleep(0.05 * (attempt + 1))
 
 
 # ── the group's own dispatch ─────────────────────────────────────────────────
