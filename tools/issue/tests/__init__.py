@@ -1,0 +1,1 @@
+"""Tests for the issue tooling (the pool's own shape, in process)."""

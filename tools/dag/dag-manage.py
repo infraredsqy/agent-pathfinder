@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Manage a dependency graph (DAG) of project ideas/features.
 
-The verbs, their flags and their values are this file's parser: `dag-manage.py --help` prints them.
+The verbs, their flags and their values are this file's parser: `dag-manage.py --help` and
+`dag-manage.py help` print them.
 
 Tags:
     节点可以带 tag，也可以不带，也可以带多个。tag 说的是一件事属于哪一类活
@@ -33,7 +34,6 @@ import os
 import shutil
 import sys
 import uuid as uuid_mod
-from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -44,7 +44,8 @@ from pathlib import Path
 # `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
 # loaded by path through `loader.py`. These two functions are that bootstrap, identical in every file
 # that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
-SHARED = Path(__file__).resolve().parent.parent / 'shared'
+HERE = Path(__file__).resolve().parent
+SHARED = HERE.parent / 'shared'
 
 _LOADER = None
 
@@ -109,11 +110,52 @@ def _resolve_project_root(cwd: Path) -> Path:
     return cwd
 
 
-PROJECT_ROOT = _resolve_project_root(Path.cwd())
-LEDGER_DIR = PROJECT_ROOT / LEDGER_NAME
-DATA_DIR = LEDGER_DIR
-NODES_DIR = DATA_DIR / 'nodes'
-IDEAS_JSON = DATA_DIR / 'ideas.json'
+#: 这个模块此刻指着哪一个项目：`configure()` 一次定下，CLI 在 `main()` 里按 cwd 解析一次。
+#: 导入这份文件时不绑项目 —— 模块指向哪，由调用方说一句。
+LEDGER_DIR = None
+DATA_DIR = None
+NODES_DIR = None
+IDEAS_JSON = None
+
+
+def configure(project_root) -> None:
+    """把记录目录钉在一个项目上：`<root>/.pf/`，它下面的 `ideas.json` 与 `nodes/`。
+
+    这是路径进这个模块的那道门：CLI 在 `main()` 里用 cwd 调一次，进程内的调用方自己点名。
+    """
+    global LEDGER_DIR, DATA_DIR, NODES_DIR, IDEAS_JSON
+    LEDGER_DIR = Path(project_root) / LEDGER_NAME
+    DATA_DIR = LEDGER_DIR
+    NODES_DIR = DATA_DIR / 'nodes'
+    IDEAS_JSON = DATA_DIR / 'ideas.json'
+
+
+def _project_root() -> Path:
+    """记录目录的上一层：`<root>/.pf` 的那个 `<root>`，便条的落点按它算。"""
+    return LEDGER_DIR.parent
+
+
+def _require_configured() -> None:
+    """还没点过名就说清楚：读哪个项目的记录，得先由调用方说一句。"""
+    if IDEAS_JSON is None:
+        print('Error: 这个模块还没指向任何项目；先调 configure(项目根)。', file=sys.stderr)
+        sys.exit(1)
+
+
+#: 节点 spec 的落点：`conduct_pipeline_impl/nodes.py` 一处算它，这个工具照着取。
+CONDUCT_IMPL = HERE.parent / 'conduct' / 'conduct_pipeline_impl'
+
+
+def _spec_path(uid: str) -> str:
+    """`<root>/.pf/nodes/<uid>/spec.md`，落点由 `nodes.node_spec_path` 给出。
+
+    这条路径的算法只有一处：`add` 报的、`open` 印的、管线往那儿写 spec 的，都是这同一个值。
+    那个包按路径取，名字专用（`pf_dag_conduct_impl`），同一个进程里谁另载一份都互不打扰。
+    """
+    pkg_dir = CONDUCT_IMPL
+    pkg = _loader().load_by_path('pf_dag_conduct_impl', pkg_dir / '__init__.py',
+                                 package_dir=pkg_dir, register=True, reuse=True)
+    return pkg.nodes.node_spec_path(_project_root(), uid)
 
 
 def _session_note():
@@ -125,6 +167,10 @@ def _session_note():
     return _shared('pf_shared_sessionnote', 'session-note.py')
 
 
+# ── the session note: best effort, both ways ──────────────────────────────────
+# 便条是管道物：写不成、删不成，都只警告一行，图上那一笔已经落下的改动不因此回退。节点是正事，
+# 便条照着手边的会话重新补得回来。
+
 def _note_session(node_id: str, session: str) -> None:
     """Note the session this node was born in -- best effort, and never in the way.
 
@@ -133,9 +179,22 @@ def _note_session(node_id: str, session: str) -> None:
     the point, and the note is plumbing that can be rebuilt by hand.
     """
     try:
-        _session_note().append(PROJECT_ROOT, node_id, 'discussion', session)
+        _session_note().append(_project_root(), node_id, 'discussion', session)
     except (OSError, ValueError) as e:
         print(f'Warning: the session note for {node_id} was not written: {e}', file=sys.stderr)
+
+
+def _forget_session(node_id: str) -> None:
+    """Forget a node's note after `rm` took the node off the graph -- same best effort as writing one.
+
+    The node is already gone by the time this runs, so the command has done what the caller asked;
+    a note this module cannot remove is a stray file, and failing over it would turn a completed
+    removal into a failed command.
+    """
+    try:
+        _session_note().drop(_project_root(), node_id)
+    except (OSError, ValueError) as e:
+        print(f'Warning: the session note for {node_id} was not removed: {e}', file=sys.stderr)
 
 #: 卡片状态只有三个词，写出去的就是这三个：`todo` 在局中未交付、`shelved` 出局等人、
 #: `completed` 已交付。读到一个词表外的词就照原样读它，绝不替它猜一个词。
@@ -159,8 +218,6 @@ DEFAULT_WEIGHT = 'standard'
 # 三个词，固定。它是一份给人看的约定，engine 只拿它拼那句警告：词表外的 tag 警告一行就收下，
 # 真的冒出第四类工作时写进去就能用。过滤一律按字面比，不查词表。
 VALID_TAGS = ('writing', 'coding', 'art')
-#: 词表外的 tag 照收、警告一行，只能和写了同一个词的过滤集对上（见 `_parse_tags`）。
-ISO_FMT = '%Y-%m-%dT%H:%M:%S.%fZ'
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -173,7 +230,8 @@ def _ensure_dirs() -> None:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime(ISO_FMT)
+    """`tools/shared/clock.py`: the moment a record is written with, in the tree's one shape."""
+    return _shared('pf_shared_clock', 'clock.py').now()
 
 
 def _read() -> dict:
@@ -184,6 +242,7 @@ def _read() -> dict:
     cannot be read ends the command with that message, plus the one hint this tool has for it.
     """
     jsonio = _shared('pf_shared_jsonio', 'jsonio.py')
+    _require_configured()
     try:
         data = jsonio.read_json_strict(IDEAS_JSON, 'ideas.json') or {'nodes': {}}
     except jsonio.JsonReadError as e:
@@ -211,6 +270,7 @@ def _write(data: dict) -> None:
     The write is `tools/shared/jsonio.py`'s, the same one every other record in this tree goes
     through; `sort_keys` is this file's own habit, so a rewritten graph reads the same way twice.
     """
+    _require_configured()
     _ensure_dirs()
     _shared('pf_shared_jsonio', 'jsonio.py').atomic_write_json(IDEAS_JSON, data, sort_keys=True)
 
@@ -226,8 +286,7 @@ def _write(data: dict) -> None:
 def _require_initialized() -> None:
     """没有 init 过的 `.pf/` 什么都不许写：锁的 `mkdir` 是唯一会把它造出来的东西。
 
-    读的是 `LEDGER_DIR` 而不是 `PROJECT_ROOT`：这个模块的路径在进程内可以被调用方重新绑到
-    另一个项目上（测试夹具就是这么做的），根却冻在导入那一刻。
+    读的是 `LEDGER_DIR`，也就是 `configure()` 点过的那个记录目录。
     """
     if LEDGER_DIR.is_dir() and all((LEDGER_DIR / m).is_file() for m in INIT_MARKERS):
         return
@@ -254,24 +313,18 @@ def _ledger_lock(timeout: float | None = None):
 
 
 def _resolve_uuid(uid: str, data: dict) -> str:
-    """Resolve to full UUID (pass-through or prefix match); assumes _get already validated."""
+    """`uid`（全 id，或它的前缀）→ 记录里那个全 id；对不上就停在这里。
+
+    前缀只在唯一对得上时算数：多义的前缀一次拒掉，请调用方把 id 写全 —— 让工具替你猜一格，
+    猜错了就是改坏另一格记录。每条命令都拿这个返回值当 `data['nodes']` 的键，同一个前缀于是
+    在所有动词上走到同一个裁决。
+    """
     if uid in data['nodes']:
         return uid
-    for k in data['nodes']:
-        if k.startswith(uid):
-            return k
-    return uid  # unreachable if _get was called first
-
-
-def _get(uid: str, data: dict) -> dict:
-    """Look up a node by UUID (exact or prefix match); print error and exit if missing."""
-    node = data['nodes'].get(uid)
-    if node is not None:
-        return node
     # Prefix matching for convenience (e.g. "7a6aab2c" → full UUID)
     matches = [k for k in data['nodes'] if k.startswith(uid)]
     if len(matches) == 1:
-        return data['nodes'][matches[0]]
+        return matches[0]
     if len(matches) > 1:
         print(f'Error: "{uid}" matches multiple nodes ({", ".join(matches)})',
               file=sys.stderr)
@@ -327,22 +380,15 @@ def _in_tag_scope(node: dict, wanted) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Graph algorithms
+#  Graph
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _adjacency(nodes: dict) -> dict:
-    """Build {uid: [dep_uid, ...]} from a nodes dict."""
-    return {uid: list(n.get('dependencies', [])) for uid, n in nodes.items()}
+def _graph():
+    """`tools/dag/graph.py`: this tool's graph algorithms, loaded by path like every neighbour.
 
-
-def _reverse_adj(adj: dict) -> dict:
-    """Reverse adjacency: {uid: [dependent_uid, ...]}."""
-    rev = {u: [] for u in adj}
-    for u, deps in adj.items():
-        for v in deps:
-            if v in rev:
-                rev[v].append(u)
-    return rev
+    纯函数、不碰 IO，所以那一份能整份 import 起来单独测（`tests/test_graph.py`）。
+    """
+    return _loader().load_by_path('pf_dag_graph', HERE / 'graph.py', register=True, reuse=True)
 
 
 def _nc_nodes(data: dict) -> dict:
@@ -351,153 +397,11 @@ def _nc_nodes(data: dict) -> dict:
             if v.get('status') != 'completed'}
 
 
-def _can_reach(adj: dict, start: str, target: str,
-               visited: set = None):
-    """Return (bool, path) whether target is reachable from start."""
-    if visited is None:
-        visited = set()
-    if start == target:
-        return True, [target]
-    if start in visited:
-        return False, []
-    visited.add(start)
-    for v in adj.get(start, []):
-        if v not in adj:          # dangling reference -- skip
-            continue
-        ok, path = _can_reach(adj, v, target, visited)
-        if ok:
-            return True, [start] + path
-    return False, []
-
-
-def _topological_sort(adj: dict) -> list:
-    """Kahn topological sort; return [uid, ...] with dependencies before dependents."""
-    rev = _reverse_adj(adj)
-    in_deg = {}
-    for u in adj:
-        count = 0
-        for v in adj[u]:
-            if v in adj:
-                count += 1
-        in_deg[u] = count
-
-    order = []
-    queue = [u for u in in_deg if in_deg[u] == 0]
-    while queue:
-        u = queue.pop(0)
-        order.append(u)
-        for v in rev.get(u, []):
-            if v in in_deg:
-                in_deg[v] -= 1
-                if in_deg[v] == 0:
-                    queue.append(v)
-
-    # Any remaining nodes (cycles) appended at the end
-    for u in adj:
-        if u not in order:
-            order.append(u)
-    return order
-
-
-def _urgency_scores(adj: dict) -> dict:
-    """Return {uid: urgency} where higher = more urgent = fewer blockers.
-
-    Normalized so the least urgent node in the graph gets 0.
-    """
-    topo = _topological_sort(adj)
-    dep_set = {}
-    for u in topo:
-        s = {u}
-        for v in adj[u]:
-            if v in dep_set:
-                s |= dep_set[v]
-        dep_set[u] = s
-    raw = {u: -(len(s) - 1) for u, s in dep_set.items()}
-    if not raw:
-        return raw
-    offset = -min(raw.values())
-    return {u: v + offset for u, v in raw.items()}
-
-
-def _importance_scores(adj: dict) -> dict:
-    """Reverse-set DP: count transitive dependents (excl. self).
-
-    Higher = more nodes depend on this = more important.
-    """
-    topo = _topological_sort(adj)
-    rev = _reverse_adj(adj)
-    dep_set = {}
-    for u in reversed(topo):
-        s = {u}
-        for v in rev.get(u, []):
-            if v in dep_set:
-                s |= dep_set[v]
-        dep_set[u] = s
-    return {u: len(s) - 1 for u, s in dep_set.items()}
-
-
-def _is_ready(deps: list, all_nodes: dict) -> bool:
-    """A node is ready when every dependency is completed or absent."""
-    for d in deps:
-        n = all_nodes.get(d)
-        if n is not None and n.get('status') != 'completed':
-            return False
-    return True
-
-
-def _node_ready(node: dict, all_nodes: dict) -> bool:
-    """`ready` 的唯一定义：节点自己是 `todo`，且每个依赖都已 `completed`（或不存在）。
-
-    `completed` 的节点不该被推荐（活已经交了），`shelved` 的节点在等人。这比 _is_ready 更窄：
-    依赖满足了但节点自己不是 `todo`，照旧不 ready。
-
-    另一半是**管线的事，这个工具不碰**：一条 cycle 正拿在手上的节点，管线那边自己不挑
-    （那是 state.json 里的记录）。所以这里不读 state.json，也不知道 cycle 是什么 ——
-    `ready` 只说这张图。调用方传进来的 node 就是盘上那个词。
-    """
-    return node.get('status') == 'todo' and _is_ready(node.get('dependencies', []), all_nodes)
-
-
-def _detect_cycle(adj: dict):
-    """Three-colour DFS cycle detection. Returns (has_cycle, path_list)."""
-    WHITE, GRAY, BLACK = 0, 1, 2
-    colour = {u: WHITE for u in adj}
-    parent = {}
-    out_path = []
-
-    def dfs(u):
-        colour[u] = GRAY
-        for v in adj.get(u, []):
-            if v not in colour:
-                continue
-            if colour[v] == GRAY:                     # back edge
-                path = [v]
-                cur = u
-                while cur != v:
-                    path.append(cur)
-                    cur = parent.get(cur)
-                    if cur is None:
-                        break
-                path.append(v)
-                path.reverse()
-                out_path.extend(path)
-                return True
-            if colour[v] == WHITE:
-                parent[v] = u
-                if dfs(v):
-                    return True
-        colour[u] = BLACK
-        return False
-
-    for u in adj:
-        if colour[u] == WHITE:
-            if dfs(u):
-                return True, out_path
-    return False, []
-
+# ── dependency edits ──────────────────────────────────────────────────────────
 
 def _try_add_dep(data: dict, uid: str, dep: str) -> None:
     """Add dep to uid's dependencies; check cycles. Exits on failure."""
+    graph = _graph()
     if dep == uid:
         print('Error: self-dependency is not allowed', file=sys.stderr)
         sys.exit(1)
@@ -505,8 +409,8 @@ def _try_add_dep(data: dict, uid: str, dep: str) -> None:
     if dep in deps:
         return              # already present -- no-op
     deps.append(dep)
-    adj = _adjacency(data['nodes'])
-    found, path = _can_reach(adj, dep, uid)
+    adj = graph._adjacency(data['nodes'])
+    found, path = graph._can_reach(adj, dep, uid)
     if found:
         cycle_str = ' → '.join([uid] + path)
         print(f'Error: cycle detected: {cycle_str}', file=sys.stderr)
@@ -558,7 +462,7 @@ def cmd_add(args):
 
         node_dir = NODES_DIR / uid
         node_dir.mkdir(parents=True, exist_ok=True)
-        spec_path = str(node_dir / 'spec.md')
+        spec_path = _spec_path(uid)
 
         # Process --depends-on
         if args.depends_on:
@@ -590,12 +494,12 @@ def _rollback_add(data: dict, uid: str) -> None:
 def cmd_rm(args):
     with _ledger_lock():
         data = _read()
-        _get(args.uuid, data)
+        uid = _resolve_uuid(args.uuid, data)
 
         # Check for dependents
         dependents = []
         for nid, node in data['nodes'].items():
-            if args.uuid in node.get('dependencies', []):
+            if uid in node.get('dependencies', []):
                 dependents.append((nid, node.get('title', '')))
 
         if dependents and not args.force:
@@ -609,25 +513,25 @@ def cmd_rm(args):
         # Remove this UUID from every other node's dependencies
         for node in data['nodes'].values():
             deps = node.get('dependencies', [])
-            if args.uuid in deps:
-                deps.remove(args.uuid)
+            if uid in deps:
+                deps.remove(uid)
 
-        del data['nodes'][args.uuid]
+        del data['nodes'][uid]
         _write(data)
 
-        node_dir = NODES_DIR / args.uuid
+        node_dir = NODES_DIR / uid
         if node_dir.exists():
             shutil.rmtree(node_dir)
         # 便条跟着节点走：节点从图上没了，它的那场对话也就不再是"这一格的"对话。
-        _session_note().drop(PROJECT_ROOT, args.uuid)
+        _forget_session(uid)
 
-        print(f'Removed {args.uuid}')
+        print(f'Removed {uid}')
 
 
 def cmd_update(args):
     with _ledger_lock():
         data = _read()
-        node = _get(args.uuid, data)
+        node = data['nodes'][_resolve_uuid(args.uuid, data)]
         if args.tags is not None and args.clear_tags:
             print('Error: --tags 和 --clear-tags 一次只给一个（前者换一组，后者摘干净）',
                   file=sys.stderr)
@@ -673,35 +577,56 @@ def cmd_depend(args):
         data = _read()
         uid = _resolve_uuid(args.uuid, data)
         dep = _resolve_uuid(args.on, data)
-        _get(uid, data)
-        _get(dep, data)
         _try_add_dep(data, uid, dep)
         data['nodes'][uid]['updated_at'] = _now()
         _write(data)
 
 
+def _dependency_to_remove(dep: str, deps: list, data: dict) -> str | None:
+    """要摘的那条边的全 id；`None` = 这条边本来就不在，没什么可摘的。
+
+    裁决与节点那一侧同一个规矩（唯一对得上就用它，多义列出候选并停手，对不上就说对不上），
+    只是先在这条边的清单里找：图上已经被人删掉的节点，它留下的那条边还写在记录里，而那正是
+    合并驱动的修复提示叫人来摘的东西。三条路都不通的就报错 —— 静默不摘边是这条命令从前最坏
+    的样子：调用方以为边没了，记录里还留着。
+    """
+    if dep in deps:
+        return dep
+    named = [d for d in deps if str(d).startswith(dep)]
+    if len(named) > 1:
+        print(f'Error: "{dep}" matches multiple dependencies ({", ".join(named)})',
+              file=sys.stderr)
+        sys.exit(1)
+    if len(named) == 1:
+        return named[0]
+    # 清单里没有这个 id：它认得出来是图上哪一格（那一格上就没有这条边）时才算没东西可摘；
+    # 认不出来 —— 打错了，或既不在图上也不在这条边的清单里 —— 由 `_resolve_uuid` 出声停手。
+    _resolve_uuid(dep, data)
+    return None
+
+
 def cmd_undepend(args):
     with _ledger_lock():
         data = _read()
-        _get(args.uuid, data)
+        uid = _resolve_uuid(args.uuid, data)
         dep_uuid = args.from_
         if args.dep:
             dep_uuid = args.dep
         if not dep_uuid:
             print('Error: specify dependency to remove via positional arg or --from', file=sys.stderr)
             sys.exit(1)
-        deps = data['nodes'][args.uuid].get('dependencies', [])
-        if dep_uuid in deps:
-            deps.remove(dep_uuid)
-            data['nodes'][args.uuid]['updated_at'] = _now()
+        deps = data['nodes'][uid].get('dependencies', [])
+        target = _dependency_to_remove(dep_uuid, deps, data)
+        if target is not None:
+            deps.remove(target)
+            data['nodes'][uid]['updated_at'] = _now()
             _write(data)
-        # No-op if dep-uuid not in dependencies array (or doesn't exist)
 
 
 def cmd_status(args):
     with _ledger_lock():
         data = _read()
-        node = _get(args.uuid, data)
+        node = data['nodes'][_resolve_uuid(args.uuid, data)]
         status = args.status
         if status not in VALID_STATUSES:
             print(
@@ -734,7 +659,7 @@ def cmd_revive(args):
         play" command for both -- a plain release with nothing to weigh is `status <uuid> todo`.
         """
         data = _read()
-        node = _get(args.uuid, data)
+        node = data['nodes'][_resolve_uuid(args.uuid, data)]
         status = node.get('status')
         if status != 'shelved':
             print(f'Error: node is not shelved (status={status!r}); '
@@ -747,6 +672,7 @@ def cmd_revive(args):
 
 
 def cmd_list(args):
+    graph = _graph()
     data = _read()
 
     # Filter by status(es) if --status given: a literal match against the word on disk.
@@ -757,13 +683,13 @@ def cmd_list(args):
     else:
         nodes = data['nodes']  # all
 
-    rev = _reverse_adj(_adjacency(nodes))
+    rev = graph._reverse_adj(graph._adjacency(nodes))
 
     # Compute urgency/importance on non-completed subgraph (philosophy rule)
     nc = _nc_nodes(data)
-    adj = _adjacency(nc)
-    urgency_scores = _urgency_scores(adj)
-    imp_scores = _importance_scores(adj)
+    adj = graph._adjacency(nc)
+    urgency_scores = graph._urgency_scores(adj)
+    imp_scores = graph._importance_scores(adj)
 
     result = []
     for uid, node in nodes.items():
@@ -778,7 +704,7 @@ def cmd_list(args):
             'mode': node.get('mode', DEFAULT_MODE),
             # `ready` 就是 _node_ready 那一条：自己是 todo、依赖都 done。这个字段和 `--ready`
             # 过滤器说的必须是同一件事，否则过滤器一句话就被绕过。
-            'ready': _node_ready(node, data['nodes']),
+            'ready': graph._node_ready(node, data['nodes']),
         }
         # tag 回显：读这份清单的人要一眼看出这个节点归哪一类活、为什么它进/不进某个过滤集。
         # 没打过 tag 的节点不落这个键 —— 整张图都没 tag 时，输出与今天逐字节相同。
@@ -827,10 +753,11 @@ def cmd_list(args):
 
 
 def cmd_info(args):
+    graph = _graph()
     data = _read()
-    node = _get(args.uuid, data)
     all_nodes = data['nodes']
     uid = _resolve_uuid(args.uuid, data)
+    node = all_nodes[uid]
 
     deps_list = []
     for dep_uid in node.get('dependencies', []):
@@ -849,9 +776,9 @@ def cmd_info(args):
             dep_by_list.append(entry)
 
     nc = _nc_nodes(data)
-    adj = _adjacency(nc)
-    urgency_scores = _urgency_scores(adj)
-    imp_scores = _importance_scores(adj)
+    adj = graph._adjacency(nc)
+    urgency_scores = graph._urgency_scores(adj)
+    imp_scores = graph._importance_scores(adj)
 
     blocked = node.get('status', 'todo') in BLOCKED_STATUSES
     result = {
@@ -863,7 +790,7 @@ def cmd_info(args):
         'depends_on': deps_list,
         'depended_by': dep_by_list,
         # 和 list 说的必须是同一件事（见 _node_ready）：自己是 todo、依赖都 done。
-        'ready': _node_ready(node, all_nodes),
+        'ready': graph._node_ready(node, all_nodes),
         # shelved 的节点不排优先级（它不在可跑的集合里），所以两项分数照旧归零。
         'urgency_level': 0 if blocked else urgency_scores.get(uid, 0),
         'importance_score': 0 if blocked else imp_scores.get(uid, 0),
@@ -878,7 +805,7 @@ def cmd_info(args):
 
     # 会话便条（讨论场 / 执行场）有才回显。`list` 给的是骨架，`info` 是这一格的详情——
     # 调用方不许读 ideas.json 原文，所以这两个键不出现在这里，就等于没记。
-    note = _session_note().read(PROJECT_ROOT, uid)
+    note = _session_note().read(_project_root(), uid)
     if note['discussion'] or note['run']:
         result['sessions'] = {role: note[role] for role in ('discussion', 'run')}
     if node.get('completed_at'):
@@ -889,13 +816,14 @@ def cmd_info(args):
 
 def cmd_context(args):
     """Show full upstream/downstream transitive context of a node."""
+    graph = _graph()
     data = _read()
-    node = _get(args.uuid, data)
     all_nodes = data['nodes']
     uid = _resolve_uuid(args.uuid, data)
+    node = all_nodes[uid]
 
-    adj = _adjacency(all_nodes)
-    rev = _reverse_adj(adj)
+    adj = graph._adjacency(all_nodes)
+    rev = graph._reverse_adj(adj)
 
     # Upstream: BFS on dependency edges
     upstream = []
@@ -956,6 +884,7 @@ def cmd_search(args):
     On description-only match: single-occurrence → snippet, 2+ → full.
     """
     import re
+    graph = _graph()
     data = _read()
     nodes = data['nodes'] if not args.active_only else _nc_nodes(data)
     query = args.query
@@ -1001,7 +930,7 @@ def cmd_search(args):
             'title': title,
             'status': status,
             # 和 `list`/`info` 说的同一件事（见 _node_ready）。
-            'ready': _node_ready(node, data['nodes']),
+            'ready': graph._node_ready(node, data['nodes']),
         }
 
         if desc:
@@ -1021,13 +950,12 @@ def cmd_search(args):
 
 def cmd_open(args):
     data = _read()
-    _get(args.uuid, data)
     uid = _resolve_uuid(args.uuid, data)
-    spec_path = NODES_DIR / uid / 'spec.md'
-    print(str(spec_path))
+    print(_spec_path(uid))
 
 
 def cmd_validate(args):
+    graph = _graph()
     data = _read()
     nodes = data['nodes']
     total = len(nodes)
@@ -1038,8 +966,8 @@ def cmd_validate(args):
         status_counts[s] = status_counts.get(s, 0) + 1
 
     # -- Check 1 : no cycles --
-    adj = _adjacency(nodes)
-    has_cycle, cycle_path = _detect_cycle(adj)
+    adj = graph._adjacency(nodes)
+    has_cycle, cycle_path = graph._detect_cycle(adj)
     if has_cycle:
         print('FAIL  check=no_cycles  '
               f'reason="cycle detected: {" → ".join(cycle_path)}"  '
@@ -1202,6 +1130,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p = subs.add_parser('validate', help='Validate graph integrity')
     p.set_defaults(func=cmd_validate)
 
+    # help
+    subs.add_parser('help', help='Show the full usage reference')
+
     return parser
 
 
@@ -1213,8 +1144,14 @@ def main():
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, 'reconfigure'):
             stream.reconfigure(encoding='utf-8', errors='replace')
+    # 项目在这里认一次：记录目录由 `configure()` 钉住，这一趟命令都按它读写。
+    configure(_resolve_project_root(Path.cwd()))
     parser = _build_parser()
     args = parser.parse_args()
+    if args.command == 'help':
+        # `help` 与 `--help` 印同一份正文：动词、旗标和取值就是这个 parser 里的那些。
+        parser.print_help()
+        return
     args.func(args)
 
 

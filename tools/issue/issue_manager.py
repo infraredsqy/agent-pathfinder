@@ -6,6 +6,7 @@ Run `python issue_manager.py help` for the full usage reference.
 """
 
 import argparse
+from pathlib import Path
 
 from commands import (
     cmd_acknowledge,
@@ -28,6 +29,8 @@ from commands import (
 )
 from storage import (
     _ledger_lock,
+    _resolve_project_root,
+    configure,
     VALID_DECISIONS,
     VALID_SEVERITIES,
     VALID_SOURCES,
@@ -200,6 +203,8 @@ MUTATING_VERBS = {'add', 'update', 'resolve', 'reject', 'acknowledge', 'remove',
 
 
 def main():
+    # 项目在这里认一次：记录目录由 `configure()` 钉住，这一趟命令都按它读写。
+    configure(_resolve_project_root(Path.cwd()))
     parser = _build_parser()
     args = parser.parse_args()
     if args.command == 'help':
