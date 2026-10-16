@@ -3,7 +3,7 @@
 A session id is machine-local -- a conversation lives on the machine that opened it -- so it does not
 ride on the record: `ideas.json` is shared, and an id in it is a value that is guaranteed dead on
 every other machine, and one that cannot be told apart from "that session was deleted here". The ids
-live in `.pf/meta/sessions/<node id>.json` (shape and reasoning in `tools/session-note.py`).
+live in `.pf/meta/sessions/<node id>.json` (shape in `tools/shared/session-note.py`).
 
 These cases pin the handoff end to end, on a throwaway project, with the real tools:
 
@@ -302,7 +302,7 @@ class TestTheNoteItself(unittest.TestCase):
 
     def setUp(self):
         import tempfile
-        self.note = _fresh_module('session_note_under_test', TOOLS_DIR / 'session-note.py')
+        self.note = _fresh_module('session_note_under_test', TOOLS_DIR / 'shared' / 'session-note.py')
         self.tmp = tempfile.TemporaryDirectory(prefix='session-note-case-')
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
@@ -360,7 +360,7 @@ class TestNoLayerDefinesANameTwice(unittest.TestCase):
         duplicates = {}
         for module in sorted((CONDUCT_DIR / 'conduct_pipeline_impl').glob('*.py')) + \
                 sorted((CONDUCT_DIR / 'conduct_state').glob('*.py')) + \
-                [TOOLS_DIR / 'session-note.py', TOOLS_DIR / 'dag' / 'dag-manage.py']:
+                [TOOLS_DIR / 'shared' / 'session-note.py', TOOLS_DIR / 'dag' / 'dag-manage.py']:
             names = [node.name for node in ast.parse(module.read_text(encoding='utf-8')).body
                      if isinstance(node, (ast.FunctionDef, ast.ClassDef))]
             twice = sorted({name for name in names if names.count(name) > 1})

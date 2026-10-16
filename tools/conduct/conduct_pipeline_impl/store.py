@@ -118,24 +118,24 @@ def meta_dir(project: Path) -> Path:
 
 # ── session notes: which conversation produced a node, which ones ran it ──────
 # `.pf/meta/sessions/<node id>.json`. Machine-local by design: a session id is only meaningful on
-# the machine that opened it, so it stays out of the shared record (the shape and the reasoning are
-# in `tools/session-note.py`, which both this side and `dag-manage.py` load by path).
+# the machine that opened it, so it stays out of the shared record. The shape lives in
+# `tools/shared/session-note.py`.
 
-SESSION_NOTE_PY = Path(__file__).resolve().parents[2] / 'session-note.py'
+SESSION_NOTE_PY = Path(__file__).resolve().parents[2] / 'shared' / 'session-note.py'
 
 _session_note_module = None
 
 #: This module's own "the caller left `at` out" marker: it means "let the note decide", which is
-#: `tools/session-note.py`'s NOW (the moment of the call). An importer that does not know when a
-#: session was opened passes `at=None` instead, and the note keeps `null`.
+#: `tools/shared/session-note.py`'s NOW (the moment of the call). An importer that does not know when
+#: a session was opened passes `at=None` instead, and the note keeps `null`.
 _NOTE_NOW = object()
 
 
 def _session_note():
-    """`tools/session-note.py`, loaded BY PATH, once per process.
+    """`tools/shared/session-note.py`, loaded by path, once per process.
 
-    By PATH, like every other cross-file reference in this tree: the three tools share no package,
-    and a by-name import would hand a second load the first load's module.
+    By path, like every other cross-file reference in this tree: nothing puts `tools/` on `sys.path`,
+    so there is no name to import it by.
     """
     global _session_note_module
     if _session_note_module is None:
