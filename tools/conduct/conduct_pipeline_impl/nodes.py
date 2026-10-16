@@ -18,10 +18,10 @@ from .store import _holding_ids, ledger_dir, load_dag, load_state, normalize_mod
 def dag_ready_nodes(project: Path, assume_completed=(), dag: dict | None = None) -> list:
     """Ready = a `todo` node whose every dependency is completed (or absent).
 
-    The dependency rule is mirrored from `dag-manage._is_ready` on purpose: two tools answering "is
-    this node ready" differently means a node can be runnable in one and stuck in the other -- which
-    is how a hand-built or partial graph ends up with work the DAG calls ready and the pipeline
-    refuses to start. A dangling dependency id is `dag-manage validate`'s job to catch.
+    The dependency rule is mirrored from `tools/dag/graph.py`'s `_is_ready` on purpose: two tools
+    answering "is this node ready" differently means a node can be runnable in one and stuck in the
+    other -- which is how a hand-built or partial graph ends up with work the DAG calls ready and the
+    pipeline refuses to start. A dangling dependency id is `dag-manage validate`'s job to catch.
 
     `shelved` is out of play and never ready, and neither is anything downstream of it: a node that
     came back not delivered parks its whole subtree until a human revives it. `completed` is done.

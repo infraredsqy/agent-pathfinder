@@ -13,7 +13,6 @@ import contextlib
 import importlib.util
 import re
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 #: `.pf/` 的名字，与 conduct、dag-manage 那两份是同一个词。
@@ -80,10 +79,27 @@ def _resolve_project_root(cwd: Path) -> Path:
     return cwd
 
 
-#: cwd 在导入那一刻定死（worktree 里则回主树），和 conduct 那边的规矩相同：从项目根跑。
-PROJECT_ROOT = _resolve_project_root(Path.cwd())
-DATA_DIR = PROJECT_ROOT / LEDGER_NAME / 'issues'
-ISSUES_JSON = DATA_DIR / 'issues.json'
+#: 这个模块此刻指着哪一个项目：`configure()` 一次定下，CLI 在 `main()` 里按 cwd 解析一次。
+#: 导入这份文件时不绑项目 —— 模块指向哪，由调用方说一句。
+DATA_DIR = None
+ISSUES_JSON = None
+
+
+def configure(project_root) -> None:
+    """把记录目录钉在一个项目上：`<root>/.pf/issues/`，它下面的 `issues.json`。
+
+    这是路径进这个模块的那道门：CLI 在 `main()` 里用 cwd 调一次，进程内的调用方自己点名。
+    """
+    global DATA_DIR, ISSUES_JSON
+    DATA_DIR = Path(project_root) / LEDGER_NAME / 'issues'
+    ISSUES_JSON = DATA_DIR / 'issues.json'
+
+
+def _require_configured() -> None:
+    """还没点过名就说清楚：读哪个项目的池子，得先由调用方说一句。"""
+    if ISSUES_JSON is None:
+        print('Error: 这个模块还没指向任何项目；先调 configure(项目根)。', file=sys.stderr)
+        sys.exit(1)
 
 VALID_STATUSES = {'open', 'acknowledged', 'resolving', 'resolved', 'rejected'}
 VALID_SEVERITIES = {'P0', 'P1', 'P2', 'P3'}
@@ -92,7 +108,6 @@ VALID_DECISIONS = {'autofix', 'external', 'unknown'}
 VALID_SOURCES = {'scan', 'manual', 'conduct'}
 #: 严重度 → 权重：池子「有多重」就是它加出来的。一条 P0 抵八条 P3。`weight` 命令读它。
 SEVERITY_WEIGHTS = {'P0': 8, 'P1': 4, 'P2': 2, 'P3': 1}
-ISO_FMT = '%Y-%m-%dT%H:%M:%S.%fZ'
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -108,7 +123,8 @@ def _ensure_plan_dir(plan_path: str) -> None:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime(ISO_FMT)
+    """`tools/shared/clock.py`: the moment a record is written with, in the tree's one shape."""
+    return _shared('pf_shared_clock', 'clock.py').now()
 
 
 def _auto_id(item: dict) -> str:
@@ -127,6 +143,7 @@ def _read() -> dict:
     CLI: a record that cannot be read ends the command with that message.
     """
     jsonio = _shared('pf_shared_jsonio', 'jsonio.py')
+    _require_configured()
     try:
         data = jsonio.read_json_strict(ISSUES_JSON, 'issues.json')
     except jsonio.JsonReadError as e:
@@ -141,6 +158,7 @@ def _write(data: dict) -> None:
     The write is `tools/shared/jsonio.py`'s, the one every other record in this tree goes through;
     `sort_keys` is this file's own habit, so a rewritten pool reads the same way twice.
     """
+    _require_configured()
     _ensure_dirs()
     _shared('pf_shared_jsonio', 'jsonio.py').atomic_write_json(ISSUES_JSON, data, sort_keys=True)
 
@@ -155,8 +173,7 @@ def _write(data: dict) -> None:
 def _require_initialized() -> None:
     """没有 init 过的 `.pf/` 什么都不许写：锁的 `mkdir` 是唯一会把它造出来的东西。
 
-    读 `DATA_DIR.parent`（也就是 `.pf/`）而不是 `PROJECT_ROOT`：路径可以被调用方重绑到另一个
-    项目上，根却冻在导入那一刻。
+    读 `DATA_DIR.parent`（也就是 `.pf/`），而 `DATA_DIR` 由 `configure()` 点过名。
     """
     ledger = DATA_DIR.parent
     if ledger.is_dir() and all((ledger / m).is_file() for m in INIT_MARKERS):
