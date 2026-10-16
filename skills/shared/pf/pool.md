@@ -2,7 +2,7 @@
 
 > `pf-issue-scan` / `pf-issue-repair` / `pf-issue-discuss` 三家共用这一份。命令细节以 `--help` 为准，这里只写口径。
 
-池子住在项目的 `.pf/issues/`（进版本库），是统一的 to-do list。`source` 只说这条是怎么来的：`optimize`（扫描入池）、`manual`（机主随手记的）、`conduct`（干活会话撞见的）。
+池子住在项目的 `.pf/issues/`（进版本库），是统一的 to-do list。`source` 只说这条是怎么来的：`scan`（扫描入池）、`manual`（机主随手记的）、`conduct`（干活会话撞见的）。
 
 ## 只走工具
 
@@ -15,7 +15,6 @@ pf issue weight -v          # 加权和是怎么加出来的
 ```
 
 - 与池子的**一切**读写只走这个工具。**禁止直接 read `.pf/issues/issues.json`**：巨型 JSON，烧上下文，还绕过工具自己的统计口径。
-- Windows 中文区域下工具读 UTF-8 会报 `UnicodeDecodeError: 'gbk'`：先 `PYTHONUTF8=1` 重试或修工具本身（`tools/issue/storage.py` 的 encoding），**不许降级去读原始文件**。
 
 ## 口径
 

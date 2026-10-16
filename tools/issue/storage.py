@@ -69,13 +69,9 @@ ISSUES_JSON = DATA_DIR / 'issues.json'
 VALID_STATUSES = {'open', 'acknowledged', 'resolving', 'resolved', 'rejected'}
 VALID_SEVERITIES = {'P0', 'P1', 'P2', 'P3'}
 VALID_DECISIONS = {'autofix', 'external', 'unknown'}
-#: `optimize` 是池子里的 source 取值：几百条历史条目都写着它。扫描那一支改叫 pf-issue-scan 之后
-#: 这个字面量照旧——改它会把 `--source optimize` 的筛选和历史条目一起废掉。
-#: `conduct` 是第三种来路：干活的会话撞见一条与本节点无关的债，顺手记进来（不经过扫描）。
-VALID_SOURCES = {'optimize', 'manual', 'conduct'}
-#: 严重度 → 权重：池子「有多重」就是它加出来的。一条 P0 抵八条 P3。
-#: 这套换算原先只活在散文里（会话拿着 `status` 的计数在脑子里乘），于是没人复核得了它；
-#: 现在它是这一处的一行代码，`weight` 命令读它。
+#: `scan` 是扫描入池的那一支；`conduct` 是干活的会话撞见一条与本节点无关的债，顺手记进来。
+VALID_SOURCES = {'scan', 'manual', 'conduct'}
+#: 严重度 → 权重：池子「有多重」就是它加出来的。一条 P0 抵八条 P3。`weight` 命令读它。
 SEVERITY_WEIGHTS = {'P0': 8, 'P1': 4, 'P2': 2, 'P3': 1}
 ISO_FMT = '%Y-%m-%dT%H:%M:%S.%fZ'
 

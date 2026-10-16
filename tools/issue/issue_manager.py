@@ -57,8 +57,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help='Severity level (default: P3)')
     p.add_argument('--decision', choices=sorted(VALID_DECISIONS),
                    help='Decision type: autofix (auto-fixable), external (needs human/agent decision), unknown')
-    p.add_argument('--source', choices=sorted(VALID_SOURCES), default='optimize',
-                   help='Source: optimize (scan), manual (user-reported) or conduct '
+    p.add_argument('--source', choices=sorted(VALID_SOURCES), default='scan',
+                   help='Source: scan (pool scan), manual (user-reported) or conduct '
                         '(filed by a session that ran into it)')
     p.add_argument('--module', default=None, help='Module name')
     p.add_argument('--title', default=None, help='Issue title')
