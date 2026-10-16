@@ -401,10 +401,11 @@ class TestNoLayerDefinesANameTwice(unittest.TestCase):
     opening the file reads the first. This keeps them from coming back.
     """
 
-    def test_the_two_packages_have_no_duplicate_top_level_definitions(self):
+    def test_the_packages_have_no_duplicate_top_level_definitions(self):
         duplicates = {}
         for module in sorted((CONDUCT_DIR / 'conduct_pipeline_impl').glob('*.py')) + \
                 sorted((CONDUCT_DIR / 'conduct_state').glob('*.py')) + \
+                sorted((CONDUCT_DIR / 'ledger_merge').glob('*.py')) + \
                 [TOOLS_DIR / 'shared' / 'session-note.py', TOOLS_DIR / 'dag' / 'dag-manage.py']:
             names = [node.name for node in ast.parse(module.read_text(encoding='utf-8')).body
                      if isinstance(node, (ast.FunctionDef, ast.ClassDef))]

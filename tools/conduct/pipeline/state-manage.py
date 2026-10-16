@@ -43,6 +43,23 @@ def _loader():
     return _LOADER
 
 
+def _tool_path(env_var: str, default):
+    """`tools/shared/toolpath.py`: `<env var>` when it is set, else the neighbour this tree ships.
+
+    One rule for every part of this tree a file points at, resolved by one implementation: a review
+    draft or a drill copy names the part it wants with that part's variable, and no file grows a
+    second search path of its own.
+    """
+    toolpath = _loader().load_by_path('pf_shared_toolpath', SHARED / 'toolpath.py',
+                                      register=True, reuse=True)
+    return toolpath.tool_path(env_var, default)
+
+
+#: 本文件要读要写的那个实现包：出厂的树里是旁边那个 `conduct_state/`，草稿或演练副本用
+#: `DSH_CONDUCT_STATE_DIR` 指向真工具的那一份。
+STATE_PKG = _tool_path('DSH_CONDUCT_STATE_DIR', CONDUCT / 'conduct_state')
+
+
 def _load_impl():
     """Load `conduct_state/` by path, fresh, and hand it back.
 
@@ -51,10 +68,14 @@ def _load_impl():
     throwaway projects never share one `.pf/` -- and a by-name import would hand the second copy
     the first copy's package, and its paths with it. Inside the package, `from . import store`
     resolves through the registration the load makes.
+
+    Where the package IS comes from `STATE_PKG`: the neighbour of the shipped tree, or
+    `DSH_CONDUCT_STATE_DIR` for a tree that keeps its conduct scripts somewhere else -- the same rule
+    and the same variable the merge driver resolves its copy of this package with.
     """
     pkg = 'conduct_state'
-    return _loader().load_by_path(pkg, CONDUCT / pkg / '__init__.py',
-                                  package_dir=CONDUCT / pkg, register=True, fresh=True)
+    return _loader().load_by_path(pkg, STATE_PKG / '__init__.py',
+                                  package_dir=STATE_PKG, register=True, fresh=True)
 
 
 _impl = _load_impl()

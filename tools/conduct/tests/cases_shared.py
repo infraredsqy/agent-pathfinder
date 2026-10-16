@@ -59,6 +59,7 @@ def _shipped_sources():
                for path in sorted((CONDUCT_DIR / cluster).glob('*.py'))]
             + sorted((CONDUCT_DIR / 'conduct_pipeline_impl').glob('*.py'))
             + sorted((CONDUCT_DIR / 'conduct_state').glob('*.py'))
+            + sorted((CONDUCT_DIR / 'ledger_merge').glob('*.py'))
             + sorted((TOOLS_DIR / 'dag').glob('*.py'))
             + sorted((TOOLS_DIR / 'issue').glob('*.py'))
             + sorted(SHARED_DIR.glob('*.py'))

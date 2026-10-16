@@ -8,8 +8,15 @@ everywhere:
 
     replace_with_retry(tmp, path, attempts=4)   the replace, tolerating a reader mid-read
     unlink_with_retry(path, attempts=4)         the same tolerance for a removal
-    atomic_write_json(path, data, *, sort_keys=False)   temp file + fsync + that replace
+    json_bytes(data, *, sort_keys=False)        what one record is on disk, as bytes
+    atomic_write_bytes(path, payload)           temp file + fsync + that replace
+    atomic_write_json(path, data, *, sort_keys=False)   the two above, in one call
     read_json_strict(path, label)               the read, and what it says when it cannot
+
+`json_bytes` is where "a record's bytes" is decided -- indent, the text as it is, sorted keys only
+when the caller's writer sorts them, the platform line separator, no trailing newline. The write is
+that payload landed in binary, so the bytes on disk are the bytes computed, and a caller that needs to
+know whether a write would change a file asks for them instead of writing its own `json.dumps`.
 
 Why the replace is retried rather than failed: on Windows a plain `open()` for reading does not
 carry FILE_SHARE_DELETE, so `os.replace` onto a file some reader holds open raises PermissionError.
@@ -33,8 +40,8 @@ import tempfile
 import time
 from pathlib import Path
 
-__all__ = ['JsonReadError', 'atomic_write_json', 'read_json_strict', 'replace_with_retry',
-           'unlink_with_retry']
+__all__ = ['JsonReadError', 'atomic_write_bytes', 'atomic_write_json', 'json_bytes',
+           'read_json_strict', 'replace_with_retry', 'unlink_with_retry']
 
 
 class JsonReadError(ValueError):
@@ -66,8 +73,21 @@ def unlink_with_retry(path, attempts: int = 4) -> None:
             time.sleep(0.05 * (attempt + 1))
 
 
-def atomic_write_json(path, data, *, sort_keys: bool = False) -> None:
-    """Write one record so a reader sees all of it or none of it.
+def json_bytes(data, *, sort_keys: bool = False) -> bytes:
+    """One record's bytes on disk -- the exact payload `atomic_write_json` lands.
+
+    The one definition of the format: `indent=2`, the text as it is (Chinese stays readable), keys
+    sorted only when the caller's own writer sorts them, the platform line separator (these files are
+    CRLF on Windows), and no trailing newline. A caller that has to know whether a write would change
+    a file -- the ledger merge driver does -- asks for these bytes rather than spelling a second
+    `json.dumps` out, which is one byte away from every merge looking like a change.
+    """
+    text = json.dumps(data, indent=2, ensure_ascii=False, sort_keys=sort_keys)
+    return text.replace('\n', os.linesep).encode('utf-8')
+
+
+def atomic_write_bytes(path, payload: bytes) -> None:
+    """Write one record's bytes so a reader sees all of it or none of it.
 
     The temp file is made in the target's own directory (a cross-directory replace would leave half
     a file behind if it failed), flushed and fsynced before the replace. The target's directory is
@@ -79,8 +99,8 @@ def atomic_write_json(path, data, *, sort_keys: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix='.tmp')
     try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
-            json.dump(data, handle, indent=2, ensure_ascii=False, sort_keys=sort_keys)
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
         replace_with_retry(tmp, path)
@@ -88,6 +108,14 @@ def atomic_write_json(path, data, *, sort_keys: bool = False) -> None:
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
+
+
+def atomic_write_json(path, data, *, sort_keys: bool = False) -> None:
+    """One record written whole: `atomic_write_bytes(path, json_bytes(data, sort_keys=sort_keys))`.
+
+    See those two for the payload, the temp file, the fsync, and what a failure leaves behind.
+    """
+    atomic_write_bytes(path, json_bytes(data, sort_keys=sort_keys))
 
 
 def read_json_strict(path, label: str):

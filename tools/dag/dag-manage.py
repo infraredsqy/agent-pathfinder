@@ -211,6 +211,16 @@ def _read() -> dict:
     return data
 
 
+def ideas_bytes(data: dict) -> bytes:
+    """`ideas.json` 落盘时的那串字节：格式由这个工具给出，别处照它取。
+
+    写下来的是 `tools/shared/jsonio.py`（缩进 2、中文原样、没有尾换行），`sort_keys=True` 是本文件
+    自己的习惯，让重写过的图每次读起来一样。合并驱动拿这串字节与盘上那份比对，判据因此只有一处：
+    两边各写一遍格式的话，差一个字节就是每一次合并都看起来像有改动。
+    """
+    return _shared('pf_shared_jsonio', 'jsonio.py').json_bytes(data, sort_keys=True)
+
+
 def _write(data: dict) -> None:
     """Atomically write ideas.json: temp file, fsync, a replace that tolerates a live reader.
 

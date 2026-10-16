@@ -33,7 +33,8 @@ def _source_files():
             + [path for cluster in ('pipeline', 'spawn')
                for path in sorted((CONDUCT_DIR / cluster).glob('*.py'))]
             + sorted((CONDUCT_DIR / 'conduct_pipeline_impl').glob('*.py'))
-            + sorted((CONDUCT_DIR / 'conduct_state').glob('*.py')))
+            + sorted((CONDUCT_DIR / 'conduct_state').glob('*.py'))
+            + sorted((CONDUCT_DIR / 'ledger_merge').glob('*.py')))
 
 
 class TestCLIEntryPoints(Base):
