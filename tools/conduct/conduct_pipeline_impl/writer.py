@@ -5,13 +5,13 @@ Also `MAX_SETTLE_STEPS`, `_snapshot`, `spawn_session`, and `clean_launch_dir`.
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import time
 from pathlib import Path
 
 from . import maintenance, seam
-from .store import _holding_ids, find_cycle, load_signal, load_state, meta_dir, note_session
+from .store import (_holding_ids, _loader, find_cycle, load_signal, load_state, meta_dir,
+                    note_session)
 from .prompts import started_marker, write_prompt_file
 from .planner import plan
 
@@ -29,10 +29,7 @@ SPAWN_PY = Path(__file__).resolve().parent.parent / 'spawn' / 'conduct_spawn.py'
 
 def _spawner():
     """`conduct_spawn.py`, loaded by path -- the way every other file in this tree is loaded."""
-    spec = importlib.util.spec_from_file_location('conduct_spawn', SPAWN_PY)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    return _loader().load_by_path('conduct_spawn', SPAWN_PY)
 
 
 # ── the writer ───────────────────────────────────────────────────────────────

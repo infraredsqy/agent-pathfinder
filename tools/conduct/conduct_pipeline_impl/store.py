@@ -5,7 +5,8 @@ and they are read here. A project either commits that directory or keeps it to i
 this module cares which. What is not part of the record is the dispatch plumbing -- `meta/launch/`,
 the session notes, the claim/started markers, the broken-chain marker -- which is why `meta_dir()`
 is the other door this module offers. One loader per file, each returning what is on disk, or an
-empty shape when the file is absent.
+empty shape when the file is absent. The read itself, and the wording a record that cannot be read
+gets, is `tools/shared/jsonio.py`'s: it raises `JsonReadError` and the caller handles it.
 
 A cycle record in `state.json` is the whole of a cycle -- its identity, where it is now, and the
 path it has walked:
@@ -31,8 +32,33 @@ push); the graph has three, `todo` / `shelved` / `completed`. Two labels are DER
 from __future__ import annotations
 
 import importlib.util
-import json
 from pathlib import Path
+
+# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
+# loaded by path through `loader.py`. These two functions are that bootstrap, identical in every file
+# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+SHARED = Path(__file__).resolve().parents[2] / 'shared'
+
+_LOADER = None
+
+
+def _loader():
+    """`tools/shared/loader.py`: the one loader, for the modules this tree keeps outside `shared/`."""
+    global _LOADER
+    if _LOADER is None:
+        spec = importlib.util.spec_from_file_location('pf_shared_loader', SHARED / 'loader.py')
+        _LOADER = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_LOADER)
+    return _LOADER
+
+
+def _shared(name, filename):
+    """One file out of `tools/shared/`, the same module for every caller in this process.
+
+    Loaded for use, not copied: the ledger lock's reentrancy record is one per process, and a second
+    copy of that module would give two of them.
+    """
+    return _loader().load_by_path(name, SHARED / filename, register=True, reuse=True)
 
 
 # ── the two stored vocabularies, and the derived labels ──────────────────────
@@ -119,9 +145,7 @@ def meta_dir(project: Path) -> Path:
 # the machine that opened it, so it stays out of the shared record. The shape lives in
 # `tools/shared/session-note.py`.
 
-SESSION_NOTE_PY = Path(__file__).resolve().parents[2] / 'shared' / 'session-note.py'
-
-_session_note_module = None
+SESSION_NOTE_PY = SHARED / 'session-note.py'
 
 #: This module's own "the caller left `at` out" marker: it means "let the note decide", which is
 #: `tools/shared/session-note.py`'s NOW (the moment of the call). An importer that does not know when
@@ -129,19 +153,18 @@ _session_note_module = None
 _NOTE_NOW = object()
 
 
+def _jsonio():
+    """`tools/shared/jsonio.py`: the tree's one reader and atomic writer for these JSON records."""
+    return _shared('pf_shared_jsonio', 'jsonio.py')
+
+
 def _session_note():
-    """`tools/shared/session-note.py`, loaded by path, once per process.
+    """`tools/shared/session-note.py` -- one module for every caller in this process.
 
     By path, like every other cross-file reference in this tree: nothing puts `tools/` on `sys.path`,
-    so there is no name to import it by.
+    so there is no name to import it by. The note keeps no state of its own, so callers share one.
     """
-    global _session_note_module
-    if _session_note_module is None:
-        spec = importlib.util.spec_from_file_location('session_note_pipeline', SESSION_NOTE_PY)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        _session_note_module = module
-    return _session_note_module
+    return _shared('pf_shared_sessionnote', 'session-note.py')
 
 
 def session_note(project: Path, node_id: str) -> dict:
@@ -167,20 +190,8 @@ def note_session(project: Path, node_id: str, role: str, session: str, host: str
     return module.append(project, node_id, role, session, host=host, source=source, **extra)
 
 
-def _read_json(path: Path):
-    if not path.exists():
-        return None
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except UnicodeDecodeError as e:
-        raise ValueError(f'{path}: not valid UTF-8: {e}') from e
-    except json.JSONDecodeError as e:
-        raise ValueError(f'{path}: not valid JSON: {e}') from e
-
-
 def load_state(project: Path) -> dict:
-    data = _read_json(ledger_dir(project) / 'state.json')
+    data = _jsonio().read_json_strict(ledger_dir(project) / 'state.json', 'state.json')
     if not data:
         return {'cycles': []}
     data.setdefault('cycles', [])
@@ -188,7 +199,8 @@ def load_state(project: Path) -> dict:
 
 
 def load_signal(project: Path, cycle_id: str, node_id: str) -> dict | None:
-    return _read_json(ledger_dir(project) / 'signals' / cycle_id / f'{node_id}.json')
+    return _jsonio().read_json_strict(ledger_dir(project) / 'signals' / cycle_id / f'{node_id}.json',
+                                      f'signals/{cycle_id}/{node_id}.json')
 
 
 def load_dag(project: Path) -> dict:
@@ -197,7 +209,7 @@ def load_dag(project: Path) -> dict:
     The STATUS word is read exactly as it is on disk: the words are the ones `dag-manage.py` writes,
     because two tools disagreeing about one word is the shape of bug this reader exists to prevent.
     """
-    data = _read_json(ledger_dir(project) / 'ideas.json') or {'nodes': {}}
+    data = _jsonio().read_json_strict(ledger_dir(project) / 'ideas.json', 'ideas.json') or {'nodes': {}}
     for node in (data.get('nodes') or {}).values():
         if isinstance(node, dict):
             node['mode'] = normalize_mode(node.get('mode'))
@@ -211,7 +223,7 @@ def load_instructions(project: Path) -> dict:
     the one place the older `lifetime` field is interpreted. The file changes only when someone
     explicitly migrates it -- a read never rewrites another workspace's account.
     """
-    data = _read_json(ledger_dir(project) / 'instructions.json')
+    data = _jsonio().read_json_strict(ledger_dir(project) / 'instructions.json', 'instructions.json')
     if not data:
         return {'instructions': []}
     data.setdefault('instructions', [])

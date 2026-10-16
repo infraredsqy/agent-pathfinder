@@ -28,14 +28,29 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+CONDUCT = HERE.parent                      # the conduct tool directory
+
+# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
+# loaded by path through `loader.py`. This function is that bootstrap, the same shape in every file
+# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+SHARED = CONDUCT.parent / 'shared'
+
+_LOADER = None
+
+
+def _loader():
+    """`tools/shared/loader.py`: the one loader, for the modules this tree keeps outside `shared/`."""
+    global _LOADER
+    if _LOADER is None:
+        spec = importlib.util.spec_from_file_location('pf_shared_loader', SHARED / 'loader.py')
+        _LOADER = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_LOADER)
+    return _LOADER
 
 
 def _loaded(path: Path, name: str):
     """A sibling loaded by path -- how every file in this directory calls its neighbours."""
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return _loader().load_by_path(name, path)
 
 
 def main(argv=None) -> int:

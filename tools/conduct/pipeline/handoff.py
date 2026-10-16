@@ -39,19 +39,56 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-import os
 import sys
-import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+CONDUCT = HERE.parent                      # the conduct tool directory
+
+# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
+# loaded by path through `loader.py`. These two functions are that bootstrap, identical in every file
+# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+SHARED = CONDUCT.parent / 'shared'
+
+_LOADER = None
 
 
-def _load(name: str, filename: str):
-    spec = importlib.util.spec_from_file_location(name, HERE / filename)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+def _loader():
+    """`tools/shared/loader.py`: the one loader, for the modules this tree keeps outside `shared/`."""
+    global _LOADER
+    if _LOADER is None:
+        spec = importlib.util.spec_from_file_location('pf_shared_loader', SHARED / 'loader.py')
+        _LOADER = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_LOADER)
+    return _LOADER
+
+
+def _shared(name, filename):
+    """One file out of `tools/shared/`, the same module for every caller in this process."""
+    return _loader().load_by_path(name, SHARED / filename, register=True, reuse=True)
+
+
+def _load(name: str, path):
+    """A neighbouring file, loaded by path: how every file in this tree reaches its neighbours."""
+    return _loader().load_by_path(name, path)
+
+
+_STORE = None
+
+
+def _store():
+    """`conduct_state.store`, loaded by path -- one module per process.
+
+    `signal.py` needs the same copy (it writes the signal through it), so it is asked for under one
+    name and handed back to both. A by-name import is what this avoids: it would need `tools/` on
+    `sys.path`.
+    """
+    global _STORE
+    if _STORE is None:
+        _STORE = _loader().load_by_path('pf_conduct_state_store',
+                                        CONDUCT / 'conduct_state' / 'store.py',
+                                        register=True, reuse=True)
+    return _STORE
 
 
 def _project_root(project: Path) -> Path:
@@ -61,18 +98,12 @@ def _project_root(project: Path) -> Path:
     `.pf/meta/`。判定与 `conduct_state.store._resolve_project_root` 是同一份约定，从这里借，
     不复制第四份。
     """
-    if str(HERE.parent) not in sys.path:
-        sys.path.insert(0, str(HERE.parent))
-    from conduct_state.store import _resolve_project_root
-    return _resolve_project_root(project)
+    return _store()._resolve_project_root(project)
 
 
 def _ledger_name() -> str:
     """`.pf` 的那一个名字。跟根判定一样从 store 借，不复制第二份。"""
-    if str(HERE.parent) not in sys.path:
-        sys.path.insert(0, str(HERE.parent))
-    from conduct_state.store import LEDGER_NAME
-    return LEDGER_NAME
+    return _store().LEDGER_NAME
 
 
 def _write_marker(project: Path, cycle: str, phase: str, reason: str, attempts: int = 0,
@@ -85,7 +116,6 @@ def _write_marker(project: Path, cycle: str, phase: str, reason: str, attempts: 
     # success).
     path = project / _ledger_name() / 'meta' / f'CONDUCT-CALLBACK-FAILED-{cycle}.json'
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
         record = {
             'cycle_id': cycle,
             'phase': phase,
@@ -98,19 +128,9 @@ def _write_marker(project: Path, cycle: str, phase: str, reason: str, attempts: 
                              '往前走。手动跑 pf next --after <node_id> 接管；'
                              '确认无碍后删掉本文件。'),
         }
-        # temp file + os.replace：并发读者要么读到整份、要么读不到，永远不撞见半截 JSON。
-        # fdopen 走文本模式、缺省换行翻译，与 write_text 落的是同一份字节。
-        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + '.', suffix='.tmp')
-        try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as handle:
-                handle.write(json.dumps(record, ensure_ascii=False, indent=2))
-            os.replace(tmp, path)
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
+        # 临时文件 + 原子替换：并发读者要么读到整份、要么读不到，永远不撞见半截 JSON。
+        # 写这份标记的原语是 `tools/shared/jsonio.py` 的：全树写一份 JSON 都走同一条。
+        _shared('pf_shared_jsonio', 'jsonio.py').atomic_write_json(path, record)
         print(f'WARNING: conduct handoff failed; wrote {path}', file=sys.stderr)
     except OSError as e:  # never let the marker itself become the failure
         print(f'WARNING: could not write the handoff failure marker: {e}', file=sys.stderr)
@@ -130,7 +150,7 @@ def _print_form(project: Path, cycle_id: str, node: str | None) -> int:
     numeric policy asks for nothing, and a project on the `minimal` tier carries no test line, so
     its workers get a skeleton with no `reading` key at all.
     """
-    pipeline = _load('conduct_pipeline', 'conduct_pipeline.py')
+    pipeline = _load('conduct_pipeline', HERE / 'conduct_pipeline.py')
     cycle = pipeline.find_cycle(pipeline.load_state(project), cycle_id)
     if cycle is None:
         print(f'Error: no cycle named {cycle_id!r}.', file=sys.stderr)
@@ -192,8 +212,8 @@ def main(argv=None) -> int:
         print('Error: -o must be a JSON object', file=sys.stderr)
         return 1
 
-    signal_mod = _load('conduct_signal', 'signal.py')
-    pipeline = _load('conduct_pipeline', 'conduct_pipeline.py')
+    signal_mod = _load('conduct_signal', HERE / 'signal.py')
+    pipeline = _load('conduct_pipeline', HERE / 'conduct_pipeline.py')
 
     # The cycle must be holding this node. Which cycle is speaking is settled by the NODE, and this
     # is the one command where that is checked before writing: a ticket filed against a cycle that

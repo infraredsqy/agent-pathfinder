@@ -6,19 +6,14 @@ ranking rule. Everything else about a cycle is written here, in `cycles.py`.
 """
 
 
-import importlib.util
-
-from .store import HERE
+from .store import HERE, _loader
 
 
 def _load_pipeline(name: str = 'conduct_pipeline'):
-    """`conduct_pipeline.py`, loaded by path -- one fresh module per caller.
+    """`conduct_pipeline.py`, loaded by path -- a module of its own on every call.
 
     Fresh on every call, never cached: each caller wants a module of its own, and a cached one would
     carry a stale environment between calls in the same process. `conduct_pipeline.py` is loaded the
     same way this package is -- see the bootstrap in `state-manage.py`.
     """
-    spec = importlib.util.spec_from_file_location(name, HERE / 'pipeline' / 'conduct_pipeline.py')
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    return _loader().load_by_path(name, HERE / 'pipeline' / 'conduct_pipeline.py')

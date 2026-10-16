@@ -99,8 +99,26 @@ CONDUCT = HERE.parent                      # the conduct tool directory
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  The implementation package, loaded by path
+#  Loading a neighbouring file, and the implementation package
 # ═══════════════════════════════════════════════════════════════════════════════
+
+# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
+# loaded by path through `loader.py`. This function is that bootstrap, the same shape in every file
+# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+SHARED = CONDUCT.parent / 'shared'
+
+_LOADER = None
+
+
+def _loader():
+    """`tools/shared/loader.py`: the one loader, for the modules this tree keeps outside `shared/`."""
+    global _LOADER
+    if _LOADER is None:
+        spec = importlib.util.spec_from_file_location('pf_shared_loader', SHARED / 'loader.py')
+        _LOADER = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_LOADER)
+    return _LOADER
+
 
 def _load_impl():
     """Load `conduct_state/` by path, fresh, and hand it back.
@@ -109,17 +127,11 @@ def _load_impl():
     more than once in a process -- the test harness loads a fresh copy per sandbox, so that two
     throwaway projects never share one `.pf/` -- and a by-name import would hand the second copy
     the first copy's package, and its paths with it. Inside the package, `from . import store`
-    resolves through the registration below.
+    resolves through the registration the load makes.
     """
     pkg = 'conduct_state'
-    for stale in [n for n in sys.modules if n == pkg or n.startswith(pkg + '.')]:
-        del sys.modules[stale]
-    spec = importlib.util.spec_from_file_location(
-        pkg, CONDUCT / pkg / '__init__.py', submodule_search_locations=[str(CONDUCT / pkg)])
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[pkg] = mod
-    spec.loader.exec_module(mod)
-    return mod
+    return _loader().load_by_path(pkg, CONDUCT / pkg / '__init__.py',
+                                  package_dir=CONDUCT / pkg, register=True, fresh=True)
 
 
 _impl = _load_impl()

@@ -15,9 +15,10 @@ Everything else under `.pf/` is plumbing, and the ledger's own `.gitignore` igno
 None of those is the account: a launch prompt is a message that has already been delivered, the
 marker is a "this chain broke" flag, and `temp/` is throwaway by definition.
 
-Holds the path bindings (`bind_paths` re-points them all at once), the atomic write and tolerant
-read they go through, the cross-process ledger lock every mutating command holds across its
-read-modify-write, and the state/signal accessors built on them.
+Holds the path bindings (`bind_paths` re-points them all at once), the door to the cross-process
+ledger lock every mutating command holds across its read-modify-write, and the state/signal
+accessors built on the shared primitives -- the JSON reader and atomic writer, and the lock itself,
+both in `tools/shared/`.
 
 `require_initialized` is the gate: a `.pf/` this tool created by itself -- never init'ed -- is the
 one state that must not be reachable, because the lock's own `mkdir` would otherwise leave an
@@ -29,21 +30,38 @@ it has finished.
 
 
 import contextlib
-import json
-import os
+import importlib.util
 import sys
-import tempfile
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-try:
-    import fcntl
-except ImportError:   # Windows; the POSIX branch of the ledger lock degrades to no-op
-    fcntl = None
-import msvcrt
-
 HERE = Path(__file__).resolve().parent.parent   # the conduct tool directory
+
+# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
+# loaded by path through `loader.py`. These two functions are that bootstrap, identical in every file
+# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+SHARED = HERE.parent / 'shared'
+
+_LOADER = None
+
+
+def _loader():
+    """`tools/shared/loader.py`: the one loader, for the modules this tree keeps outside `shared/`."""
+    global _LOADER
+    if _LOADER is None:
+        spec = importlib.util.spec_from_file_location('pf_shared_loader', SHARED / 'loader.py')
+        _LOADER = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_LOADER)
+    return _LOADER
+
+
+def _shared(name, filename):
+    """One file out of `tools/shared/`, the same module for every caller in this process.
+
+    Loaded for use, not copied: the ledger lock's reentrancy record is one per process, and a second
+    copy of that module would give two of them.
+    """
+    return _loader().load_by_path(name, SHARED / filename, register=True, reuse=True)
 
 #: `.pf/` 这个名字。点开头，和 `.work/` 同款：一眼看得出是工具自己的家当。
 LEDGER_NAME = '.pf'
@@ -143,89 +161,30 @@ def require_initialized(project: str | None = None) -> None:
 # two processes walking that sequence at once means the later write silently erases the earlier
 # one. With parallel=2 (two cycles settling at the same time) that window stops being theoretical,
 # so every MUTATING command body holds this lock across its read → write. One path per project
-# root -- `.pf/meta/ledger.lock` -- shared by conduct, dag-manage and the issue tool, so their
-# writes exclude each other too. The lock file sits in `meta/`, which `.pf/.gitignore` keeps out
-# of both the project's history and the ledger's own: losing it only loses the mutual exclusion,
-# it never wedges anybody. Reentrant per process (cycle start's shell wraps cycle create).
+# root -- `.pf/meta/ledger.lock` -- shared by conduct, dag-manage, the issue tool and a session
+# note's own writer, so their writes exclude each other too.
 #
-# This is also the gate: every mutating command passes through here, and the `mkdir` below would
+# This is also the gate: every mutating command passes through here, and the lock's `mkdir` would
 # otherwise be the one thing that conjures a `.pf/` nobody init'ed.
-_LEDGER_LOCK_TIMEOUT = 10.0   # give-up ceiling, not the norm: a writer holds it for milliseconds
-_LEDGER_LOCK_DEPTH = 0
-
-
-def _ledger_lock_path(project: str | None = None) -> Path:
-    return ledger_dir_for(project) / 'meta' / 'ledger.lock'
 
 
 @contextlib.contextmanager
-def _ledger_lock(project: str | None = None, timeout: float = _LEDGER_LOCK_TIMEOUT):
+def _ledger_lock(project: str | None = None, timeout: float | None = None):
     """Hold the project's ledger lock for the duration of one read-modify-write.
 
-    A caller that cannot get it within `timeout` is told loudly and exits 1 -- wedging silently
-    is the one failure this must not have. On a platform with neither `msvcrt` nor `fcntl` the
-    exclusion degrades to nothing rather than failing every command.
+    The lock itself is `tools/shared/ledgerlock.py` -- one implementation for every writer of a
+    record here. A caller that cannot get it within `timeout` is told loudly and exits 1: wedging
+    silently is the one failure this must not have.
     """
-    global _LEDGER_LOCK_DEPTH
-    if _LEDGER_LOCK_DEPTH:
-        _LEDGER_LOCK_DEPTH += 1
-        try:
-            yield
-        finally:
-            _LEDGER_LOCK_DEPTH -= 1
-        return
-    require_initialized(project)
-    path = _ledger_lock_path(project)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle = open(path, 'a+')
-    deadline = time.monotonic() + timeout
+    lock = _shared('pf_shared_ledgerlock', 'ledgerlock.py')
+    kwargs = {} if timeout is None else {'timeout': timeout}
     try:
-        while True:
-            try:
-                if os.name == 'nt' and msvcrt is not None:
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                elif fcntl is not None:
-                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except OSError:
-                if time.monotonic() >= deadline:
-                    print(f'Error: the ledger lock {path} stayed busy for {timeout:g}s; '
-                          f'another process is mid-write. Nothing was changed.', file=sys.stderr)
-                    sys.exit(1)
-                time.sleep(0.05)
-        _LEDGER_LOCK_DEPTH = 1
-        try:
+        with lock.ledger_lock(ledger_dir_for(project), gate=lambda: require_initialized(project),
+                              **kwargs):
             yield
-        finally:
-            _LEDGER_LOCK_DEPTH = 0
-            try:
-                if os.name == 'nt' and msvcrt is not None:
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-                elif fcntl is not None:
-                    fcntl.flock(handle, fcntl.LOCK_UN)
-            except OSError:
-                pass
-    finally:
-        handle.close()
-
-
-def _replace_with_retry(tmp: str, path: Path, attempts: int = 4) -> None:
-    """`os.replace`, tolerating a reader that holds the target open this instant.
-
-    On Windows a plain `open()` for reading does not carry FILE_SHARE_DELETE, so a concurrent
-    reader mid-`json.load` makes the replace fail with PermissionError. The window is tiny and
-    the retry is bounded well under a second.
-    """
-    for attempt in range(attempts):
-        try:
-            os.replace(tmp, path)
-            return
-        except PermissionError:
-            if attempt == attempts - 1:
-                raise
-            time.sleep(0.05 * (attempt + 1))
+    except TimeoutError as e:
+        print(f'Error: {e}', file=sys.stderr)
+        sys.exit(1)
 
 
 STATE_JSON = LEDGER_DIR / 'state.json'
@@ -247,33 +206,30 @@ def _now() -> str:
 
 
 def _atomic_write(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix='.tmp')
+    """One record written whole, or the command ends.
+
+    The write itself (temp file in the target's directory, fsync, a replace that tolerates a live
+    reader) is `tools/shared/jsonio.py`; this layer is the CLI, so a failure is a message and exit 1.
+    """
     try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-            f.flush()
-            os.fsync(f.fileno())
-        _replace_with_retry(tmp, path)
+        _shared('pf_shared_jsonio', 'jsonio.py').atomic_write_json(path, data)
     except Exception as e:
         print(f'Error: write failed: {e}', file=sys.stderr)
-        if os.path.exists(tmp):
-            os.unlink(tmp)
         sys.exit(1)
 
 
 def _read_json(path: Path, label: str) -> dict | None:
-    if not path.exists():
-        return None
-    # JSON is UTF-8 by spec, and everything here reads/writes Chinese summaries.
+    """One record read strict, or the command ends with the reader's own words.
+
+    The reader and the wording of each failure are `tools/shared/jsonio.py`: a file that is not
+    there reads as None, bytes that are not UTF-8 and text that is not JSON both raise
+    `JsonReadError`. This layer is the CLI, so it prints that message and exits 1.
+    """
+    jsonio = _shared('pf_shared_jsonio', 'jsonio.py')
     try:
-        with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except UnicodeDecodeError as e:
-        print(f'Error: {label} is not valid UTF-8: {e}', file=sys.stderr)
-        sys.exit(1)
-    except json.JSONDecodeError as e:
-        print(f'Error: {label} parse failure: {e}', file=sys.stderr)
+        return jsonio.read_json_strict(path, label)
+    except jsonio.JsonReadError as e:
+        print(f'Error: {e}', file=sys.stderr)
         sys.exit(1)
 
 
@@ -338,26 +294,21 @@ def _read_signal(cycle_id: str, node_id: str):
 
 
 def _write_signal(cycle_id: str, node_id: str, status: str, summary: str, outputs: dict) -> Path:
+    """One node's signal: the record's one writer, and the six keys a reader gets.
+
+    The path is `_signal_path`'s and the moment is `_now`'s, so a signal written by a worker, by
+    `handoff.py` or by `cycle retry` is the same record at the same place.
+    """
+    sig_path = _signal_path(cycle_id, node_id)
     sig = {
         'cycle': cycle_id, 'node': node_id,
         'status': status, 'summary': summary,
         'outputs': outputs, 'timestamp': _now(),
     }
-    sig_dir = SIGNALS_DIR / cycle_id
-    sig_dir.mkdir(parents=True, exist_ok=True)
-    sig_path = sig_dir / f'{node_id}.json'
-
-    fd, tmp = tempfile.mkstemp(dir=str(sig_dir), suffix='.tmp')
     try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            json.dump(sig, f, indent=2, ensure_ascii=False)
-            f.flush()
-            os.fsync(f.fileno())
-        _replace_with_retry(tmp, sig_path)
+        _shared('pf_shared_jsonio', 'jsonio.py').atomic_write_json(sig_path, sig)
     except Exception as e:
         print(f'Error: write signal failed: {e}', file=sys.stderr)
-        if os.path.exists(tmp):
-            os.unlink(tmp)
         sys.exit(1)
     return sig_path
 
