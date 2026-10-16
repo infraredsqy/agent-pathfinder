@@ -66,7 +66,7 @@ Usage:
         close <cycle> <node> --result completed|failed|stopped
                                                   Record the step on the cycle's path and let the
                                                   node go
-        retry <cycle> <node> [--drop]             Overwrite a node's signal as running (retries);
+        retry <cycle> <node> [--drop]             Overwrite a node's signal as pending (retries);
                                                   --drop leaves no ticket at all
 
     state-manage.py instruction add|list|resolve  Standing user instructions (scope x target)
@@ -159,7 +159,7 @@ def main() -> None:
                       help='Create it while another cycle is still active')
     p_cc.add_argument('--tags', default=None,
                       help='Comma-separated filter set for what this cycle picks from: '
-                           'writing / coding / art (engineering = coding). Required -- a '
+                           'writing / coding / art. Required -- a '
                            'call without it is refused: an empty scope leaves this line '
                            'nothing to pick from')
 
@@ -172,7 +172,7 @@ def main() -> None:
     p_cst_.add_argument('--tags', default=None,
                         help='Comma-separated filter set for this cycle: it decides which nodes '
                              'the first pick and every later pick may take '
-                             '(writing / coding / art; engineering = coding). Required -- a '
+                             '(writing / coding / art). Required -- a '
                              'call without it is refused: an empty scope leaves this line '
                              'nothing to pick from')
     p_cst_.add_argument('--force', action='store_true',
@@ -232,12 +232,12 @@ def main() -> None:
 
     p_crt = cyc_sub.add_parser('retry',
                                help='Take a node signal out of the way (retries): rewrite it as '
-                                    'running, or --drop to leave no ticket at all')
+                                    'pending, or --drop to leave no ticket at all')
     p_crt.add_argument('id')
     p_crt.add_argument('node')
     p_crt.add_argument('--summary', help='Why the node was restarted')
     p_crt.add_argument('--drop', action='store_true',
-                       help='Leave no ticket at all. A `running` ticket is a red light: `next` '
+                       help='Leave no ticket at all. A `pending` ticket is a red light: `next` '
                             'waits on it forever, so dropping it is what lets the retry be '
                             'dispatched')
 

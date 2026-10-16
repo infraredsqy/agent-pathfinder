@@ -10,6 +10,13 @@
   `pf` 不在 PATH 上时先落绝对形式，补好 PATH 重跑一次 `pf register` 换回来。
 - 入口互相引用走 HERE 相对路径，搬文件必须同簇搬并同步这些引用；改完跑 `python -m unittest discover -s conduct/tests -t .`（cwd 在 `tools/`）。
 
+## 测试的写法
+
+- 每个用例一个临时项目，按 CPU 核数并行跑 —— 这些用例的时间几乎全花在等子进程上。
+- **能进程内调用就进程内调用**：`conduct_pipeline.py` 用 importlib 按路径加载后直接 `apply()` / `record()`，
+  只有「被测对象就是 CLI」的用例才真调 `state-manage.py`；DAG 与 `state.json` 的骨架直接用写文件造。
+- 判红的口径落在单条用例上（≤5 秒，见根 `AGENTS.md` 的时间纪律）；全量套件的实际耗时照常报出来。
+
 ## 派发通路是实弹
 
 - 这套工具的 `--spawn` / `dispatch` 会经 `conduct_spawn.py` → spawner 脚本（DSH 上
