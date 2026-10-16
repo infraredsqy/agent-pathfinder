@@ -26,6 +26,11 @@ no session. It also leaves a readable middle state: a ticket on disk whose node 
 yet is how a chain that broke halfway shows up (the planner answers `wait` with the closing command).
 The worker never reads this program's output and never touches a state file.
 
+**交条子这一拍不驱动管线。** 写下条子之后它只读一遍下一步（`plan`，只读），把那个答案里的收尾
+命令报给会话；把线推到下一个稳定动作 —— 收格、挑下一格、给下一格落 `prompt.txt` —— 全是收尾那一
+拍（`next --after <node_id>`）与派发的事。所以这个命令一个字节的状态都不写，下一格的 prompt 也不
+可能由报条子的会话写下。
+
 The one gate is the cycle's own hand: a ticket is accepted only while the cycle is holding the
 node, so a stale session reporting on a node that was closed and released long ago is refused
 before anything is written. A node being redone is claimed again (revive, `cycle retry --drop`,
@@ -40,6 +45,7 @@ import argparse
 import importlib.util
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -122,8 +128,7 @@ def _write_marker(project: Path, cycle: str, phase: str, reason: str, attempts: 
             'attempts': attempts,
             'reason': reason,
             'workspace': str(project),
-            'detected_at': __import__('datetime').datetime.now(
-                __import__('datetime').timezone.utc).isoformat(),
+            'detected_at': datetime.now(timezone.utc).isoformat(),
             'note': note or ('链条断在这里：这一格的条子已经写下，但那个节点没有人收尾，管线不会自己'
                              '往前走。手动跑 pf next --after <node_id> 接管；'
                              '确认无碍后删掉本文件。'),
@@ -239,10 +244,12 @@ def main(argv=None) -> int:
         return 1
 
     try:
-        action = pipeline.record(project, args.cycle)
+        # 只读的一问：条子刚写下，管线此刻的答案是「等收尾」加那一条收尾命令。`record` 那半（把线
+        # 推到下一个稳定动作、顺手给别的格补 prompt）留在收尾与派发那一拍，这里一个字节都不写。
+        action = pipeline.plan(project, args.cycle)
     except (RuntimeError, ValueError) as e:
-        _write_marker(project, args.cycle, 'advance', str(e))
-        print(f'Error: the pipeline could not be advanced: {e}', file=sys.stderr)
+        _write_marker(project, args.cycle, 'plan', str(e))
+        print(f'Error: the pipeline could not be read: {e}', file=sys.stderr)
         return 1
 
     kind = action.get('action')
@@ -250,10 +257,10 @@ def main(argv=None) -> int:
         # 这一格刚写下条子，还没被收尾。这里不 spawn 任何会话——收尾那一棒由调用方跑
         # `next --after <node_id> --json` 完成（它也不再拉会话：派发是提交推送之后的
         # 另一条命令 `dispatch <cycle>`），所以这里只报清楚别停得静悄悄。
-        print(f'handoff: {args.node} recorded; the node is not closed yet -- finish it '
+        print(f'handoff: {args.node} ticket written; the node is not closed yet -- finish it '
               f'with `{action["close_with"]}` (no session was spawned)')
     else:
-        print(f'handoff: {args.node} recorded; pipeline says {kind} '
+        print(f'handoff: {args.node} ticket written; the pipeline reads {kind} '
               f'({action.get("note") or action.get("reason") or ""})')
         if kind == 'fail_hard':
             # A chain that breaks leaves a loud mark and a non-zero exit. Without this the

@@ -47,6 +47,11 @@ class TestCLIEntryPoints(Base):
                               cwd=str(sb.root), capture_output=True, text=True, encoding='utf-8',
                               errors='replace', env=env)
 
+    def pipeline_cli(self, sb, *args):
+        """`conduct_pipeline.py` as a real process: the module's own entry, driven the shipped way."""
+        return subprocess.run([sys.executable, str(PIPELINE_PATH), *[str(a) for a in args]],
+                              capture_output=True, text=True, encoding='utf-8', errors='replace')
+
     def test_bare_next_writes_and_plan_does_not(self):
         """`--plan` is read-only over the same decision; a bare `next` is what carries it out."""
         sb = self.make(cli=True)
@@ -184,6 +189,17 @@ class TestCLIEntryPoints(Base):
         for gone in ('--record', '--theme-verdict', '--decision-mode', '--verdict', '--round',
                      '--stage', '--launch-mode'):
             self.assertNotIn(gone, proc.stdout)
+        # 尾巴上那段合同正文（`conduct_pipeline.ACTIONS` 的正本）：它挂在打印 help 的那一刻，
+        # 所以这条读数同时钉住「help 还带着它」与「`-h` 那条短旗标也走到了同一个动作」。
+        self.assertIn('action 全集', proc.stdout)
+        self.assertIn('不变量', proc.stdout)
+
+    def test_next_short_help_carries_the_contract_too(self):
+        """`-h` 与 `--help` 是同一条动作：短的那条也要带上合同正文。"""
+        proc = subprocess.run([sys.executable, str(STATE_MANAGE), 'next', '-h'],
+                              capture_output=True, text=True, encoding='utf-8', errors='replace')
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn('action 全集', proc.stdout)
 
     def test_the_pipeline_module_prints_a_plan_as_json(self):
         """`conduct_pipeline.py plan` is the module's own read-only entry point.
@@ -213,6 +229,68 @@ class TestCLIEntryPoints(Base):
             self.assertIn(name, proc.stdout)
         for gone in ('verify_round', 'open_round', 'stage'):
             self.assertNotIn(gone, proc.stdout)
+
+    def test_the_two_front_ends_print_the_same_preview(self):
+        """同一份计划，两个前端印出来的是同一份 —— 连「预览不可执行」也跟着同一份实现。
+
+        空手的线（手里没有节点）那一问的计划是 `open_node`，它带着钉人的命令：预览只报「还在落
+        定」，两个前端都得报同一份，而且都不带 `commands`。
+        """
+        sb = self.make()
+        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.create_cycle('cyc')
+
+        mine = self.pipeline_cli(sb, 'plan', '--project', sb.root, '--json')
+        theirs = self.cli(sb, 'next', '--plan', '--json')
+
+        self.assertEqual(mine.returncode, 0, mine.stderr)
+        self.assertEqual(theirs.returncode, 0, theirs.stderr)
+        action = json.loads(mine.stdout)
+        self.assertEqual(action, json.loads(theirs.stdout))
+        self.assertEqual(action['action'], 'open_node')
+        self.assertTrue(action.get('settling'), '预览没报「还在落定」')
+        self.assertNotIn('commands', action, '预览把命令交出来了')
+
+    def test_apply_is_the_settle_the_worker_asked_for(self):
+        """`conduct_pipeline.py apply` 就是 `pf next --after` 那一次结算：它读手里那格的条子。
+
+        这条入口的说明写着 `--after` 跑的就是它，所以两个入口对同一份状态给出同一个结果：手里那格
+        交了条子，它就结算 —— path 记一步、DAG 标 completed、线按停手规则收摊。
+        """
+        sb = self.make()
+        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.start_cycle()
+        sb.write_signal('cyc', NODE, 'completed', 'pf-conduct 做完了')
+
+        proc = self.pipeline_cli(sb, 'apply', '--project', sb.root, '--json')
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        action = json.loads(proc.stdout)
+        self.assertEqual(action['action'], 'stop_pipeline', action)
+        self.assertEqual([step['result'] for step in sb.path()], ['completed'])
+        self.assertEqual(sb.dag_status(NODE), 'completed')
+        self.assertEqual(sb.cycle()['status'], 'inactive')
+
+    def test_the_closing_answers_are_refused_without_a_preview(self):
+        """收尾的回答没有可结算的那一问时被拒 —— 与 `pf next` 同一条口径。
+
+        拒绝的判据是：没有可结算的那一问时，照收会让人以为那句话被采纳了 —— 管线一个字节都没动，
+        命令却报成功。
+        """
+        sb = self.make()
+        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.start_cycle()
+        before = sb.state()
+
+        refused = self.pipeline_cli(sb, 'apply', '--project', sb.root, '--stop')
+
+        self.assertEqual(refused.returncode, 2, refused.stdout)
+        self.assertIn('closing call', refused.stderr)
+        self.assertEqual(sb.state(), before, '被拒的那条命令动了状态')
+
+        theirs = self.cli(sb, 'next', '--stop')
+        self.assertEqual(theirs.returncode, 2, theirs.stdout)
+        self.assertIn('closing call', theirs.stderr)
 
 
 class TestRobustness(Base):
@@ -294,7 +372,7 @@ class TestOneSpawner(Base):
         session started before the node that closed it was committed and pushed.
         """
         source = (CONDUCT_DIR / 'pipeline' / 'handoff.py').read_text(encoding='utf-8')
-        for gone in ('SPAWN_PS1', '_spawn', 'spawn_session', self.ARGV_FINGERPRINT):
+        for gone in ('SPAWNER_SCRIPT', 'spawner_script', 'spawn_session', self.ARGV_FINGERPRINT):
             self.assertNotIn(gone, source, f'{gone} is back in handoff.py')
 
     def test_the_argv_is_built_in_exactly_one_file(self):

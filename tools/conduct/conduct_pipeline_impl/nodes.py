@@ -7,7 +7,6 @@ holding, what a filter set hides, and the reason nothing can be picked.
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 from . import seam
@@ -131,21 +130,24 @@ def _rank_ready_nodes(project: Path, exclude=None, exclude_many=(), assume_compl
     if not ready:
         return []
     try:
-        proc = subprocess.run(seam.dag('list', '-n', '0'),
-                              capture_output=True, text=True, encoding='utf-8',
-                              errors='replace', timeout=seam.timeout(), cwd=str(project))
-    except (subprocess.TimeoutExpired, OSError):
+        # 这次调用走接缝（`seam.capture`）：**子进程只有这一条通路**，按文档 patch 入口的
+        # `_capture` / `_run` 就拦得住它。排在就绪集之后：先算出来，再问排序。
+        out = seam.capture(seam.dag('list', '-n', '0'), project)
+    except RuntimeError:
+        # 排序是锦上添花：dag-manage 答不上来（超时、非零退出、起不来）时，就绪集按 DAG 记录自己
+        # 的顺序交出去 —— 「读不到排名」不该让挑选停摆。
         return ready
     order = {}
-    # 读子进程输出一律 errors='replace'：这台机器的控制台代码页是 GBK，而 PYTHONIOENCODING 未必
-    # 设过。宁可节点标题里出现替换符（id 是 ASCII，挑选不受影响），也不能让解码异常把整条管线掀翻。
-    if proc.returncode == 0 and proc.stdout:
+    if out:
         try:
-            rows = json.loads(proc.stdout)
+            rows = json.loads(out)
             if isinstance(rows, list):
                 order = {r.get('id'): i for i, r in enumerate(rows) if r.get('id')}
         except (json.JSONDecodeError, TypeError, ValueError):
             pass
+    # 子进程输出怎么解码是接缝自己的约定（一律 errors='replace'）：这台机器的控制台代码页是
+    # GBK，而 PYTHONIOENCODING 未必设过。宁可节点标题里出现替换符（id 是 ASCII，挑选不受影响），
+    # 也不能让解码异常把整条管线掀翻。
     ready.sort(key=lambda n: order.get(n.get('id'), len(order) + 1))
     return ready
 

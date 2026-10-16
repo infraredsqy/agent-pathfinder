@@ -13,6 +13,7 @@ dispatcher at a sandbox database, which is the same knob a drill uses.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util as importlib_util
 import json
 import os
@@ -35,6 +36,18 @@ __all__ = ['TestSpawnerChoice', 'TestQueueDedup']
 CONDUCT_DIR = Path(pipeline.__file__).resolve().parent.parent
 DISPATCHER = CONDUCT_DIR / 'spawn' / 'zcode-dispatch.py'
 SPAWNER = CONDUCT_DIR / 'spawn' / 'zcode-spawn.ps1'
+
+
+def _host():
+    """`spawn/host.py`, loaded by path -- where the host's own answer lives.
+
+    The probe is asked of THIS module: the two hosts, the two spawner paths and the process-tree walk
+    sit next to the scripts they name, and the entry keeps one seam name (`SPAWNER_SCRIPT`) out of it.
+    """
+    spec = importlib_util.spec_from_file_location('pf_spawn_host_case', CONDUCT_DIR / 'spawn' / 'host.py')
+    module = importlib_util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 # The two tables the dispatcher touches, as the desktop ships them. Spelled out rather than trimmed:
 # a column this row forgets is exactly the failure the DDL is here to catch.
@@ -78,32 +91,53 @@ class TestSpawnerChoice(unittest.TestCase):
     # ── 选路 ─────────────────────────────────────────────────────────────────
 
     def test_the_two_names_map_to_the_two_scripts(self):
-        self.assertEqual(pipeline.spawn_path('dsh').name, 'dsh-spawn.ps1')
-        self.assertEqual(pipeline.spawn_path('zcode').name, 'zcode-spawn.ps1')
-        self.assertEqual(pipeline.spawn_path('ZCODE').name, 'zcode-spawn.ps1')
-        self.assertEqual(pipeline.spawn_path(r'C:\tmp\mine.ps1').name, 'mine.ps1')
+        host = _host()
+        self.assertEqual(host.spawn_path('dsh').name, 'dsh-spawn.ps1')
+        self.assertEqual(host.spawn_path('zcode').name, 'zcode-spawn.ps1')
+        self.assertEqual(host.spawn_path('ZCODE').name, 'zcode-spawn.ps1')
+        self.assertEqual(host.spawn_path(r'C:\tmp\mine.ps1').name, 'mine.ps1')
 
     def test_an_explicit_setting_beats_the_host(self):
+        host = _host()
         with mock.patch.dict(os.environ, {'DSH_CONDUCT_SPAWNER': 'zcode'}, clear=True), \
-                mock.patch.object(pipeline, '_under_zcode', return_value=False):
-            self.assertEqual(pipeline._default_spawner().name, 'zcode-spawn.ps1')
+                mock.patch.object(host, 'under_zcode', return_value=False):
+            self.assertEqual(host.default_spawner().name, 'zcode-spawn.ps1')
 
     def test_dsh_answers_for_itself(self):
         """DSH injects `DSH_SESSION_ID` into every shell; that is its own answer, and it comes first."""
+        host = _host()
         with mock.patch.dict(os.environ, {'DSH_SESSION_ID': 'sess_x'}, clear=True), \
-                mock.patch.object(pipeline, '_under_zcode', return_value=True):
-            self.assertEqual(pipeline._default_spawner().name, 'dsh-spawn.ps1')
+                mock.patch.object(host, 'under_zcode', return_value=True):
+            self.assertEqual(host.default_spawner().name, 'dsh-spawn.ps1')
 
     def test_a_zcode_ancestor_picks_the_zcode_spawner(self):
+        host = _host()
         with mock.patch.dict(os.environ, {}, clear=True), \
-                mock.patch.object(pipeline, '_under_zcode', return_value=True):
-            self.assertEqual(pipeline._default_spawner().name, 'zcode-spawn.ps1')
+                mock.patch.object(host, 'under_zcode', return_value=True):
+            self.assertEqual(host.default_spawner().name, 'zcode-spawn.ps1')
 
     def test_the_default_stays_dsh(self):
         """No setting, no host marker: a human at a prompt keeps the behaviour DSH always had."""
+        host = _host()
         with mock.patch.dict(os.environ, {}, clear=True), \
-                mock.patch.object(pipeline, '_under_zcode', return_value=False):
-            self.assertEqual(pipeline._default_spawner().name, 'dsh-spawn.ps1')
+                mock.patch.object(host, 'under_zcode', return_value=False):
+            self.assertEqual(host.default_spawner().name, 'dsh-spawn.ps1')
+
+    def test_the_probe_lives_next_to_the_scripts_it_names(self):
+        """宿主探测只有 `spawn/host.py` 这一个家，而挑 spawner 的链不必加载整条管线。
+
+        接缝那个模块（`conduct_pipeline.py`）是调用方 patch 的那一个：探测与它分开住，任何一次探测
+        的改动才落在自己那份文件里，而不是落在「测试要 patch 接缝」的那份上。`chain-spawn.py` 只要
+        「用哪一份 spawner」这一个答案，为它加载整条管线（连实现包）是另一头的代价。
+        """
+        entry = (CONDUCT_DIR / 'pipeline' / 'conduct_pipeline.py').read_text(encoding='utf-8')
+        imported = {alias.name for node in ast.walk(ast.parse(entry))
+                    if isinstance(node, (ast.Import, ast.ImportFrom)) for alias in node.names}
+        self.assertNotIn('ctypes', imported, '宿主探测住在接缝模块里')
+
+        chain = (CONDUCT_DIR / 'spawn' / 'chain-spawn.py').read_text(encoding='utf-8')
+        self.assertNotIn('conduct_pipeline', chain, '挑 spawner 要加载整条管线')
+        self.assertIn("'host.py'", chain)
 
     # ── 线策略这一级 ─────────────────────────────────────────────────────────
     # `resolve_spawner` 的整条优先级：CLI 点名 > 这条线的 `spawner` 策略 > 环境变量 > 宿主 >
@@ -123,9 +157,10 @@ class TestSpawnerChoice(unittest.TestCase):
         return root
 
     def test_a_line_policy_beats_the_machine_and_the_host(self):
+        """线策略压过这台机器上的一切：环境变量与那道缝都说 zcode，线仍然走 dsh。"""
         root = self.policy_root({'spawner': 'dsh'})
         with mock.patch.dict(os.environ, {'DSH_CONDUCT_SPAWNER': 'zcode'}, clear=True), \
-                mock.patch.object(pipeline, '_under_zcode', return_value=True):
+                mock.patch.object(pipeline, 'SPAWNER_SCRIPT', _host().SPAWN_SCRIPTS['zcode']):
             self.assertEqual(pipeline.resolve_spawner(root, 'cyc').name, 'dsh-spawn.ps1')
 
     def test_the_per_call_flag_beats_the_line_policy(self):
@@ -137,13 +172,12 @@ class TestSpawnerChoice(unittest.TestCase):
     def test_a_line_without_the_policy_reaches_the_seam(self):
         """No policy on the line: the machine answers exactly as before the policy existed.
 
-        The seam (`SPAWN_PS1`), not a fresh `_default_spawner()`: that is the replacement point
+        The seam (`SPAWNER_SCRIPT`), not a fresh `default_spawner()`: that is the replacement point
         `writer.spawn_session` already honours, and replacing it must survive a line that never
         named a policy.
         """
         root = self.policy_root(None)
-        with mock.patch.object(pipeline, 'SPAWN_PS1',
-                               pipeline.SPAWN_SCRIPTS['zcode']), \
+        with mock.patch.object(pipeline, 'SPAWNER_SCRIPT', _host().SPAWN_SCRIPTS['zcode']), \
                 mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(pipeline.resolve_spawner(root, 'cyc').name, 'zcode-spawn.ps1')
 
@@ -151,11 +185,11 @@ class TestSpawnerChoice(unittest.TestCase):
         """A cycle id nothing holds (a caller's typo) must not decide: the seam answers.
 
         Compared against the seam itself, not a spelled-out script name: whichever host this
-        suite runs under computed `SPAWN_PS1`, and the point is only that the typo changed
+        suite runs under computed `SPAWNER_SCRIPT`, and the point is only that the typo changed
         nothing.
         """
         root = self.policy_root({'spawner': 'dsh'})
-        self.assertEqual(pipeline.resolve_spawner(root, 'no-such-cycle'), pipeline.SPAWN_PS1)
+        self.assertEqual(pipeline.resolve_spawner(root, 'no-such-cycle'), pipeline.SPAWNER_SCRIPT)
 
     def test_off_is_a_word_the_writer_side_clears(self):
         """`cycle policy <cycle> spawner off` removes the key; the read side then reports nothing."""

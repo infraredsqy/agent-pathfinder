@@ -8,6 +8,7 @@ the invariants that survive from the old model.
 
 from __future__ import annotations
 
+import ast
 import json
 import sys
 from pathlib import Path
@@ -16,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import ACTION_VOCABULARY, Base, NODE, NODE2, NODE3, pipeline, normalise  # noqa: E402
 from harness import Driver, Sandbox, WorkerSession, finish_node  # noqa: E402
+from harness import CONDUCT_DIR, _dag_hook as harness_dag_hook  # noqa: E402
 
 __all__ = [
     'TestWorkerClosesItsOwnNode',
@@ -23,6 +25,7 @@ __all__ = [
     'TestContract',
     'TestPurity',
     'TestCloseGuards',
+    'TestOneChildProcessPath',
 ]
 
 
@@ -463,6 +466,21 @@ class TestContract(Base):
         for choices in scopes:
             self.assertEqual(list(pipeline.SCOPES), choices)
 
+    def test_next_reads_the_parsed_line_itself(self):
+        """`cmd_next` / `cmd_dispatch` 各只收解析好的那一份，字段自己读。
+
+        转发那一行摆着一串位置实参（12 个）的话，给 `next` 加一个旗标就要同时改 parser、那一行、
+        函数的签名；其中大半是重推 argparse 已有的缺省，另有两个是同一个答案算两遍。收成一个名字
+        空间之后，加旗标就是 parser 一行加读它的那一行。
+        """
+        source = (CONDUCT_DIR / 'conduct_state' / 'nextcmd.py').read_text(encoding='utf-8')
+        tree = ast.parse(source)
+        for name in ('cmd_next', 'cmd_dispatch'):
+            fn = next(node for node in tree.body
+                      if isinstance(node, ast.FunctionDef) and node.name == name)
+            self.assertEqual([a.arg for a in fn.args.args], ['args'],
+                             f'{name} 收的还是散开的那些实参')
+
     def test_no_action_in_a_whole_run_carries_commands(self):
         """The one rule that survived every rewrite, plus what a whole run is made of: the actions
         a caller ever sees are the two driving kinds -- `dispatch` to open a step, `stop_pipeline`
@@ -647,3 +665,56 @@ class TestCloseGuards(Base):
 
         self.assertEqual(final['action'], 'stop_pipeline')
         self.assertEqual(sb.path_nodes(), ids)
+
+
+class TestOneChildProcessPath(Base):
+    """子进程只有一条通路：入口的 `_run` / `_capture`（同一条缝的两半）。
+
+    `seam` 许下的承诺是「patch 入口的那几个名字，到处都生效」。有一条调用自己复制一遍
+    `subprocess.run` 的写法时，那份承诺就不成立：按文档 patch 入口的人拦不到它，只能在 stdlib
+    的 `subprocess` 上做进程级猴子补丁（并为此加锁、并解释「必须打在共享模块上」）。
+    """
+
+    def test_the_dag_ranking_goes_through_the_seam(self):
+        """就绪集的排序那次子进程调用走接缝：patch 入口的 `_capture` 就拦得住它。
+
+        `dag-manage list` 是包内唯一一次「要看输出」的子进程调用（维护通道的 `add` 是另一次），
+        它自己复制过一份 `subprocess.run` 的写法，这一条钉住它从缝里走。
+        """
+        sb = self.make()
+        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.create_cycle('cyc')            # 手里没有节点：挑人要先问就绪集，就绪集要先问排序
+        seen = []
+        real = pipeline._capture
+
+        def spy(argv, cwd):
+            seen.append([str(a) for a in argv])
+            return real(argv, cwd)
+
+        with harness_dag_hook(sb.root):
+            pipeline._capture = spy
+            try:
+                action = pipeline.plan(sb.root, 'cyc')
+            finally:
+                pipeline._capture = real
+
+        self.assertEqual(action['action'], 'open_node', action)
+        self.assertTrue([argv for argv in seen if Path(argv[1]).name == 'dag-manage.py'],
+                        f'排序那次调用没走接缝：{seen}')
+
+    def test_no_logic_module_reaches_a_child_process_on_its_own(self):
+        """包里的模块一个都不许自己起子进程：自己起的那些调用，patch 接缝就拦不到。
+
+        看去掉注释与字符串后的源码（AST），不是找字面量 —— 说明里提一句 `subprocess` 不算数，
+        真的用上它才算。
+        """
+        offenders = []
+        for path in sorted((CONDUCT_DIR / 'conduct_pipeline_impl').glob('*.py')):
+            tree = ast.parse(path.read_text(encoding='utf-8'))
+            used = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+            imported = {alias.name for node in ast.walk(tree)
+                        if isinstance(node, (ast.Import, ast.ImportFrom))
+                        for alias in node.names}
+            if 'subprocess' in used | imported:
+                offenders.append(path.name)
+        self.assertEqual(offenders, [], f'这些模块自己起了子进程，绕过了接缝：{offenders}')

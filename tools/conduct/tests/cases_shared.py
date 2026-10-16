@@ -425,6 +425,33 @@ class TestOneWriterPerRecord(Base):
         self.assertIsNotNone(datetime.strptime(sig['timestamp'], signal_mod._store().ISO_FMT),
                              'the moment is the store format, not a literal spelled here again')
 
+    def test_a_named_base_dir_serves_one_write_and_leaves_the_binding_alone(self):
+        """显式落点是这一笔的事：调用方点名的目录收下这一笔，本拷贝的绑定一个字不动。
+
+        这份 store 在一个进程里是共用的：写一笔条子顺手把绑定挪到自己的项目，下一个漏传
+        `base_dir` 的调用方就静默写进上一个项目里去。
+        """
+        sb = self.make()
+        other = self.make()
+        signal_mod = _fresh_module('conduct_signal_base_dir_case', SIGNAL_PY)
+        store = signal_mod._store()
+        store.bind_paths(sb.root / '.pf')
+
+        signal_mod.write_signal('cyc', NODE, 'completed', 'B', {},
+                                base_dir=other.root / '.pf' / 'signals')
+
+        self.assertTrue((other.root / '.pf' / 'signals' / 'cyc' / f'{NODE}.json').is_file(),
+                        '显式落点那一笔没落在点名的目录里')
+        self.assertFalse((sb.root / '.pf' / 'signals' / 'cyc' / f'{NODE}.json').exists(),
+                         '显式落点那一笔写进了绑定指向的项目')
+        self.assertEqual(store.LEDGER_DIR, sb.root / '.pf', '这一笔把本拷贝的绑定挪走了')
+
+        # 绑定还在原处：不点名落点的那一笔照旧落在绑定指向的项目里。
+        store._write_signal('cyc', NODE, 'failed', 'A', {})
+        landed = json.loads((sb.root / '.pf' / 'signals' / 'cyc' / f'{NODE}.json')
+                            .read_text(encoding='utf-8'))
+        self.assertEqual(['A', 'failed'], [landed['summary'], landed['status']])
+
     def test_an_outputs_that_is_not_an_object_ends_the_write(self):
         sb = self.make()
         signal_mod = _fresh_module('conduct_signal_guard_case', SIGNAL_PY)

@@ -1,6 +1,6 @@
 """The writing half: `apply` runs what `plan` decided, `record` drives on to the next stable action.
 
-Also `MAX_SETTLE_STEPS`, `_snapshot`, `spawn_session`, and `clean_launch_dir`.
+Also `MAX_SETTLE_STEPS`, `_snapshot`, `resolve_spawner`, `spawn_session`, and `clean_launch_dir`.
 """
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ import time
 from pathlib import Path
 
 from . import maintenance, seam
-from .store import (_holding_ids, _loader, find_cycle, load_signal, load_state, meta_dir,
-                    note_session)
+from .store import (_holding_ids, _loader, cycle_policy, find_cycle, load_signal, load_state,
+                    meta_dir, note_session)
 from .prompts import started_marker, write_prompt_file
 from .planner import plan
 
@@ -26,10 +26,39 @@ SPAWN_CLAIM_STALE_SECONDS = 30 * 60
 #: inside this package so that the spawner stays reachable without loading the pipeline.
 SPAWN_PY = Path(__file__).resolve().parent.parent / 'spawn' / 'conduct_spawn.py'
 
+#: The two spawners and the host's own answer about itself, next to those scripts for the same
+#: reason.
+HOST_PY = Path(__file__).resolve().parent.parent / 'spawn' / 'host.py'
+
 
 def _spawner():
     """`conduct_spawn.py`, loaded by path -- the way every other file in this tree is loaded."""
     return _loader().load_by_path('conduct_spawn', SPAWN_PY)
+
+
+def _host():
+    """`spawn/host.py`, loaded by path -- the same copy the entry module asks for."""
+    return _loader().load_by_path('conduct_spawn_host', HOST_PY, register=True, reuse=True)
+
+
+def resolve_spawner(project, cycle_id: str | None, cli_value: str | None = None) -> Path:
+    """Which spawner opens this dispatch's session: the most specific answer wins.
+
+    `--spawner`（调用方这一次的点名叫什么就是什么）> 这条线自己的 `spawner` 策略（
+    `pf cycle policy <cycle> spawner dsh|zcode`，随线记录走）> `DSH_CONDUCT_SPAWNER`（这台机器）
+    > 宿主自认 > `dsh`。线没配策略、调用没带旗子，落回 `SPAWNER_SCRIPT` —— 与这条函数存在之前
+    完全同一条路，所以没配的线行为一字不变。`SPAWNER_SCRIPT` 而不是现算宿主：它是入口那一道可
+    替换的缝（`seam.bind` 的约定），替换它的调用方在线策略缺席时仍被尊重。
+    """
+    host = _host()
+    if cli_value:
+        return host.spawn_path(cli_value)
+    if cycle_id:
+        cycle = find_cycle(load_state(project), cycle_id)
+        word = cycle_policy(cycle).get('spawner') if cycle else None
+        if word:
+            return host.SPAWN_SCRIPTS[word]
+    return seam.spawner_script()
 
 
 # ── the writer ───────────────────────────────────────────────────────────────
@@ -61,49 +90,6 @@ def _claim_pid(body: str) -> int | None:
     except (IndexError, ValueError):
         return None
     return pid if pid > 0 else None
-
-
-def _pid_alive(pid: int) -> bool:
-    """Is that process running right now? -- the one question a claim's pid can answer.
-
-    A stale claim was so far judged only by its mtime, and a claim whose writer is STILL dispatching
-    (the spawner's own ceiling is 300s) is not stale at any age: taking it over boots a second
-    session onto the node. So the pid is asked first and the age rule only judges a dead writer. On
-    Windows the ask is `OpenProcess` + `GetExitCodeProcess` (exit code STILL_ACTIVE = alive; a
-    handle that will not open for anything but access-denied belongs to a process that exists); on
-    POSIX it is `kill(pid, 0)`. A recycled pid can still refuse a dispatch by mistake -- that is a
-    delete-the-claim-by-hand case, and the refusal says so.
-    """
-    if os.name == 'nt':
-        import ctypes
-        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        ERROR_ACCESS_DENIED = 5
-        STILL_ACTIVE = 259
-        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
-        # 原型要显式：不设 restype 的句柄会被 ctypes 按 32 位 c_int 截断，64 位下传回去就坏了。
-        kernel32.OpenProcess.argtypes = (ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong)
-        kernel32.OpenProcess.restype = ctypes.c_void_p       # a handle, or NULL
-        kernel32.GetExitCodeProcess.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong))
-        kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
-        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-        if not handle:
-            return ctypes.get_last_error() == ERROR_ACCESS_DENIED
-        try:
-            code = ctypes.c_ulong()
-            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
-                return False
-            return code.value == STILL_ACTIVE
-        finally:
-            kernel32.CloseHandle(handle)
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True                     # exists, but it is not ours to signal
-    except OSError:
-        return False
-    return True
 
 
 def _claim_spawn(project: Path, cycle_id: str, node_id: str) -> tuple[bool, Path | None]:
@@ -139,7 +125,7 @@ def _claim_spawn(project: Path, cycle_id: str, node_id: str) -> tuple[bool, Path
             except OSError:
                 body = ''
             pid = _claim_pid(body)
-            if pid is not None and _pid_alive(pid):
+            if pid is not None and _host().pid_alive(pid):
                 return False, claim
             try:
                 age = time.time() - claim.stat().st_mtime
@@ -179,8 +165,8 @@ def spawn_session(project: Path, cycle_id: str, prompt_file: str | None = None,
 
     The argv, the ceiling and the wording of a failure live in `conduct_spawn.py` -- this function is
     the pipeline's half of that seam (which spawner, and nothing else). `spawner` is how a caller
-    answers "which one" outright; left out, the entry's `SPAWN_PS1` answers, and that default is the
-    host's own (`conduct_pipeline.py`'s `_default_spawner`).
+    answers "which one" outright; left out, the entry's `SPAWNER_SCRIPT` answers, and that default is
+    the host's own (`spawn/host.py`'s `default_spawner`).
     """
     claim = None
     if not dry_run and prompt_file:
@@ -197,7 +183,7 @@ def spawn_session(project: Path, cycle_id: str, prompt_file: str | None = None,
                     f'{SPAWN_CLAIM_STALE_SECONDS // 60}-min staleness rule). A recycled pid can '
                     f'trip this by mistake: if you are sure nothing is running, delete the claim '
                     f'file and dispatch again')
-    chosen = Path(spawner) if spawner else seam.spawn_ps1()
+    chosen = Path(spawner) if spawner else seam.spawner_script()
     try:
         line = _spawner().spawn_session(project, cycle_id, prompt_file,
                                         spawner=chosen, dry_run=dry_run)

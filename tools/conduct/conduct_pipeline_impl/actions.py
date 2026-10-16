@@ -1,10 +1,12 @@
 """The action builders: state -> one action package.
 
-`_ask`, `_dispatch`, the two `wait` answers, the close command list, and the stop package.
+`_ask`, `_dispatch`, the two `wait` answers, the close command list, and the stop package -- plus
+`render_action`, the other end of the same contract: an action package as the caller reads it.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from . import maintenance, seam
@@ -275,3 +277,60 @@ def attention_items(project: Path, cycle: dict, shelved_nodes=()) -> list:
             'hint': f'dag-manage revive {uid} 放回 todo（shelved → todo），或人工处理后重开 cycle',
         })
     return out
+
+
+# ── an action as the caller reads it ─────────────────────────────────────────
+
+def render_action(action: dict, as_json: bool = False, preview: bool = False) -> str:
+    """One action as the caller reads it -- the ONE place both `next` front ends print from.
+
+    `preview` 是 `--plan` 那一趟：**预览不可执行**。一份还带着 `commands` 的计划停在半路（机械的那
+    几步还没跑），这种情况只报「还在落定」，绝不把命令交给调用方 —— 这是那道不变量在输出这一侧的
+    落点，两个前端（`conduct_pipeline.py` 与 `state-manage.py next`）共用它一份。
+
+    `as_json` 只是形状：JSON 给人以外的读者（`ensure_ascii=False`，中文原样），否则是人读的那一版。
+    """
+    if preview and action.pop('commands', None):
+        action['settling'] = True
+    return (json.dumps(action, ensure_ascii=False, indent=2) if as_json
+            else _action_lines(action))
+
+
+def _action_lines(action: dict) -> str:
+    """The human-facing rendering: what the action is, and everything a reader has to act on."""
+    lines = [f"action: {action['action']}"]
+    if action.get('cycle'):
+        lines.append(f"cycle:  {action['cycle']}")
+    # `hint` is where the way back lives (the command that puts a line back in service, or the
+    # one that pins the node a cycle with nothing in hand has to choose between): a reader who is
+    # not using --json is exactly the reader who needs it, so it is rendered, not just returned.
+    for key in ('note', 'reason', 'question', 'hint', 'blocked', 'close_with'):
+        if action.get(key):
+            lines.append(f"{key + ':':<9} {action[key]}")
+    if action.get('node_id'):
+        lines.append(f"node:   {action.get('node_title', '')}  ({action['node_id']})")
+    for item in action.get('nodes') or []:
+        if isinstance(item, dict) and item.get('node_id') != action.get('node_id'):
+            lines.append(f"node:   {item.get('node_title', '')}  ({item['node_id']})")
+    for step in action.get('steps', []):
+        lines.append(f"  - {step}")
+    if action.get('prompt'):
+        lines.append(f"prompt: {action['prompt']}")
+    if action.get('action') in ('dispatch', maintenance.MAINTENANCE_ACTION):
+        lines.append(f"mode:   {action.get('mode')}")
+    # The maintenance channel's own fields: which measurement crossed, what it read, where the line
+    # was, and the node the close had picked before this one was put in front of it. A reader who is
+    # not using --json is exactly the reader who needs to see why the graph grew a node.
+    if action.get('metric'):
+        lines.append(f"metric: {action['metric']} = {action.get('reading')} "
+                     f"(line {action.get('line')})")
+    if action.get('deferred_node'):
+        lines.append(f"after:  {action.get('deferred_title', '')}  ({action['deferred_node']})")
+    if 'applied' in action:
+        lines.append(f"applied: {action['applied']}")
+    for item in action.get('attention', []):
+        who = f"{item.get('node_title')} ({item.get('node_id')})" if item.get('node_id') else '?'
+        lines.append(f"attention: {item.get('kind')}  {who}")
+        if item.get('hint'):
+            lines.append(f"           {item['hint']}")
+    return '\n'.join(lines)

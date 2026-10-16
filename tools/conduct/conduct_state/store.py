@@ -330,7 +330,16 @@ def _find_cycle(state: dict, cycle_id: str) -> dict:
 # ── Signals ──────────────────────────────────────────────────────────────────
 
 def _signal_path(cycle_id: str, node_id: str, project: str | None = None) -> Path:
-    return _record_path(project, 'signals', cycle_id, f'{node_id}.json')
+    """条子的落点：`<project>/.pf/signals/<cycle>/<node>.json`（`project` 缺省用本拷贝绑定的根）。"""
+    return _signal_path_in(_record_path(project, 'signals'), cycle_id, node_id)
+
+
+def _signal_path_in(signals_dir, cycle_id: str, node_id: str) -> Path:
+    """同一个落点，那一格的根由调用方直接给出 —— 显式路径的写方走这条（见 `_write_signal`）。
+
+    落点的形状只有这一处：`<signals_dir>/<cycle>/<node>.json`。
+    """
+    return Path(signals_dir) / cycle_id / f'{node_id}.json'
 
 
 def _read_signal(cycle_id: str, node_id: str, project: str | None = None):
@@ -338,13 +347,20 @@ def _read_signal(cycle_id: str, node_id: str, project: str | None = None):
                       f'signals/{cycle_id}/{node_id}.json')
 
 
-def _write_signal(cycle_id: str, node_id: str, status: str, summary: str, outputs: dict) -> Path:
+def _write_signal(cycle_id: str, node_id: str, status: str, summary: str, outputs: dict,
+                  signals_dir=None) -> Path:
     """One node's signal: the record's one writer, and the six keys a reader gets.
 
     The path is `_signal_path`'s and the moment is `_now`'s, so a signal written by a worker, by
     `handoff.py` or by `cycle retry` is the same record at the same place.
+
+    `signals_dir` 是**这一笔写入**的落点（`<project>/.pf/signals`），用完即弃：给了它这一笔就落
+    在那儿，本拷贝的绑定一个字都不动 —— 挪绑定是 `bind_paths` 那一件事，而一个进程里共用这份
+    store 的调用方不止一个，写条子顺手改掉全进程的落点会把它写到上一个项目里去。不给就用本拷贝
+    此刻的绑定（cwd 在本拷贝导入时定的那个根）。
     """
-    sig_path = _signal_path(cycle_id, node_id)
+    sig_path = (_signal_path_in(signals_dir, cycle_id, node_id) if signals_dir is not None
+                else _signal_path(cycle_id, node_id))
     sig = {
         'cycle': cycle_id, 'node': node_id,
         'status': status, 'summary': summary,
