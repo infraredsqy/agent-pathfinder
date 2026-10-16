@@ -18,8 +18,6 @@ from .prompts import started_marker
 from .actions import (_ask, _close_commands, _dispatch_many, _maintenance_due,
                       _retry_wait, _sessions_wait, _ticket_wait, _stop_action)
 
-__all__ = ['plan', 'stop_criterion']
-
 
 def stop_criterion(project: Path, cycle: dict, node: dict | None, dag: dict | None = None) -> tuple:
     """(must_stop, why). Invariant: instructions may only TIGHTEN the stop rule.

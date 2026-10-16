@@ -9,6 +9,7 @@ the invariants that survive from the old model.
 from __future__ import annotations
 
 import ast
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -481,6 +482,39 @@ class TestContract(Base):
             self.assertEqual([a.arg for a in fn.args.args], ['args'],
                              f'{name} 收的还是散开的那些实参')
 
+    def test_the_prompt_text_builder_takes_the_node_id_alone(self):
+        """`build_prompt_text`：这一行的输入就是节点 id。
+
+        派发文本不随项目或随线而变（节点自己的 mode、权重、spec 落点由会话读 `dag-manage.py info`），
+        所以签名的三个形参只该留一个 —— 多出来的形参读起来是「这个值会影响文本」的错觉。这一行怎么
+        拼也只有一处：导出面上不带第二个拼它的名字。
+        """
+        self.assertEqual(['node_id'],
+                         list(inspect.signature(pipeline.build_prompt_text).parameters))
+        self.assertEqual(f'/pf-conduct {NODE} [pipeline]\n', pipeline.build_prompt_text(NODE))
+        with self.assertRaises(ValueError):
+            pipeline.build_prompt_text(None)
+        self.assertFalse(hasattr(pipeline, 'prompt_for'),
+                         '导出面上又多了一个拼这行的名字')
+
+    def test_the_impl_package_keeps_the_one_export_list(self):
+        """导出面只有 `conduct_pipeline_impl/__init__.py` 那一张表。
+
+        模块级的第二张名单没有读者，却跟包的那张分头长：两边列的名字各说各话时，谁也没报错。层里
+        不留名单，就没有第二处可漂。
+        """
+        def carries_a_list(path):
+            for node in ast.parse(path.read_text(encoding='utf-8')).body:
+                if isinstance(node, ast.Assign) and any(
+                        isinstance(t, ast.Name) and t.id == '__all__' for t in node.targets):
+                    return True
+            return False
+
+        carrying = [path.name for path in
+                    sorted((CONDUCT_DIR / 'conduct_pipeline_impl').glob('*.py'))
+                    if carries_a_list(path)]
+        self.assertEqual(['__init__.py'], carrying)
+
     def test_no_action_in_a_whole_run_carries_commands(self):
         """The one rule that survived every rewrite, plus what a whole run is made of: the actions
         a caller ever sees are the two driving kinds -- `dispatch` to open a step, `stop_pipeline`
@@ -519,6 +553,23 @@ class TestContract(Base):
         self.assertTrue(applied)
         for action, before, after in driver.applied:
             self.assertNotEqual(before, after, action)
+
+    def test_the_snapshot_answers_one_shape(self):
+        """`_snapshot` 只有一种形状：这条线在不在盘上，三个位置都在、位置的含义也一样。
+
+        契约那一趟按 `[0]` / `[1]` 读它写进 `progress`，另一个形状里含义错开的话，缺线那一趟读到的
+        就是别的东西 —— 缺线时每个位置答的都是「没有」。
+        """
+        sb = self.make()
+        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.start_cycle()
+
+        on_disk = pipeline._snapshot(sb.root, 'cyc')
+        absent = pipeline._snapshot(sb.root, 'no-such-cycle')
+
+        self.assertEqual(3, len(on_disk))
+        self.assertEqual(len(on_disk), len(absent), '_snapshot 的两条路答的不是一个形状')
+        self.assertEqual((None, None, None), absent)
 
     def test_the_fast_path_and_the_cli_agree(self):
         """The in-process path and the shipped processes produce the same project.

@@ -34,11 +34,6 @@ from . import seam
 from .nodes import node_spec_path
 from .store import POLICY_NUMBERS, cycle_policy, load_dag
 
-__all__ = ['READING_KEYS', 'MAINTENANCE_ACTION', 'NEW_NODE', 'METRICS',
-           'crossed', 'reading_of', 'thresholds_for', 'asked_readings', 'pool_weight', 'insertion',
-           'is_add_slot', 'read_new_node_id', 'maintenance_spec', 'maintenance_title', 'substitute',
-           'write_spec', 'maintenance_nodes_of_metric', 'maintenance_tag']
-
 #: The action this module's insertion is handed over as. Registered in `conduct_pipeline.ACTIONS` and
 #: handled by `writer.apply` / `writer.record` exactly like `dispatch` -- the difference is only
 #: WHICH node is pinned (the one just inserted, not the one the close picked first).

@@ -243,6 +243,17 @@ class TestOneSharedDoor(unittest.TestCase):
         self.assertEqual(1, len(callers), f'调用点不止一处：{callers}')
         self.assertTrue(callers[0].startswith('shared/jsonio.py:'), callers)
 
+    def test_the_spawner_module_is_one_copy_per_process(self):
+        """`writer._spawner()`：一次派发问它三次（开那一次会话、读会话 id、读宿主），三次拿到的是
+        同一个模块对象 —— 装载器的 `register` + `reuse` 一对，和 `spawn/host.py` 走的是同一条。
+        """
+        writer = load_pipeline().writer
+
+        first = writer._spawner()
+
+        self.assertIs(first, writer._spawner())
+        self.assertIs(sys.modules['conduct_spawn'], first)
+
 
 class TestOneReaderOneWording(Base):
     """A `.pf/` record that cannot be read: the same words, whichever tool asks."""

@@ -32,8 +32,13 @@ HOST_PY = Path(__file__).resolve().parent.parent / 'spawn' / 'host.py'
 
 
 def _spawner():
-    """`conduct_spawn.py`, loaded by path -- the way every other file in this tree is loaded."""
-    return _loader().load_by_path('conduct_spawn', SPAWN_PY)
+    """`conduct_spawn.py`, loaded by path -- the way every other file in this tree is loaded.
+
+    One copy per process (`register` + `reuse`): one dispatch asks this module three times (the call,
+    then the session id and the host of its last line), and `spawn/host.py` is asked for the same
+    way. Which spawner SCRIPT it runs is not state here -- that arrives as an argument.
+    """
+    return _loader().load_by_path('conduct_spawn', SPAWN_PY, register=True, reuse=True)
 
 
 def _host():
@@ -64,15 +69,17 @@ def resolve_spawner(project, cycle_id: str | None, cli_value: str | None = None)
 # ── the writer ───────────────────────────────────────────────────────────────
 
 def _snapshot(project: Path, cycle_id: str) -> tuple:
-    """Everything an action is allowed to be "progress" on.
+    """Everything an action is allowed to be "progress" on: `(hand, path, status)`.
 
     The cycle's hand (which nodes, collectively), where it points, and its status -- in a
-    one-node-per-slot pipeline those are the only things a command may move.
+    one-node-per-slot pipeline those are the only things a command may move. One shape for both
+    answers: 这条线不在盘上时三个位置照样在，只是每个位置都答「没有」（`None`）—— 调用方按位置读到的
+    始终是同一件事，不会读到另一个形状里含义错开的那一格。
     """
     state = load_state(project)
     cycle = find_cycle(state, cycle_id)
     if cycle is None:
-        return (None, None, False, False)
+        return (None, None, None)
     sigs = tuple((node, (load_signal(project, cycle_id, node) or {}).get('status'))
                  for node in _holding_ids(cycle))
     return (sigs, bool(cycle.get('path')), cycle.get('status'))
@@ -214,12 +221,13 @@ def _note_run(project: Path, spawner: Path, prompt_file: str | None, line: str) 
     """
     if not prompt_file:
         return
-    session = _spawner().session_id_of(line)
+    spawner_module = _spawner()
+    session = spawner_module.session_id_of(line)
     if not session:
         return
     try:
         note_session(project, Path(prompt_file).parent.name, 'run', session,
-                     host=_spawner().host_of(spawner))
+                     host=spawner_module.host_of(spawner))
     except (OSError, ValueError):
         pass
 
@@ -345,7 +353,7 @@ def apply(project, cycle_id: str | None = None, decision: str | None = None,
         raise RuntimeError(f'action {kind!r} arrived without its `add` command: the maintenance '
                            f'node cannot be created')
 
-    before = _snapshot(project, action['cycle'])
+    before_state = _snapshot(project, action['cycle'])
     # The mint runs where the planner put `add` -- the close commands ahead of it have to land
     # first (the dedup judgement reads the graph, and `add`'s uuid is what the rest of the list is
     # written in terms of), so `done` counts what has already run when it fires.
@@ -384,16 +392,16 @@ def apply(project, cycle_id: str | None = None, decision: str | None = None,
     if add_command is not None:
         raise RuntimeError(f'action {kind!r} carried an `add` command that never ran: the '
                            f'maintenance node cannot be created')
-    after = _snapshot(project, action['cycle'])
+    after_state = _snapshot(project, action['cycle'])
 
-    if before == after:
+    if before_state == after_state:
         raise RuntimeError(
             f'contract violation: action {kind!r} ran {len(commands)} command(s) but nothing '
-            f'changed (before={before}, after={after})')
+            f'changed (before={before_state}, after={after_state})')
     action['applied'] = True
     action['did'] = [seam.as_text(c) for c in ran + commands]
-    action['progress'] = {'before': {'node': before[0], 'signal': before[1]},
-                          'after': {'node': after[0], 'signal': after[1]}}
+    action['progress'] = {'before': {'node': before_state[0], 'signal': before_state[1]},
+                          'after': {'node': after_state[0], 'signal': after_state[1]}}
     action.pop('commands', None)
     # An open_node is a dispatch in disguise: run the follow-up too, so callers have exactly one
     # shape to handle ("spawn a session with this prompt"). A maintenance_due is the same deal: the
