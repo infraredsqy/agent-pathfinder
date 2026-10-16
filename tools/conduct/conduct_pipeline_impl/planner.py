@@ -39,7 +39,8 @@ def stop_criterion(project: Path, cycle: dict, node: dict | None) -> tuple:
     mode = (node or {}).get('mode') or DEFAULT_MODE
     if mode == 'checkpoint':
         return True, '节点 mode=checkpoint：这一轮循环跑完了，等你说了继续才开下一个节点'
-    for ins in live_instructions(project, target='boundary', cycle=cycle.get('id')):
+    for ins in live_instructions(project, target='boundary', cycle=cycle.get('id'),
+                                 node=(node or {}).get('id')):
         cap = ins.get('stop_after_nodes')
         if isinstance(cap, int) and cap >= 0:
             # "跑够 N 个就停"：这一次收尾就是第 N 个 —— 这时 N 个节点都已经交了。

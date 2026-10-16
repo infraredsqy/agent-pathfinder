@@ -407,7 +407,7 @@ class TestOneWriterPerRecord(Base):
 
     def test_signal_py_carries_no_writer_of_its_own(self):
         source = (CONDUCT_DIR / 'pipeline' / 'signal.py').read_text(encoding='utf-8')
-        for gone in ('os.replace', 'tempfile', 'SIGNALS_DIR', '%Y-%m-%dT%H:%M:%SZ', 'json.dump'):
+        for gone in ('os.replace', 'tempfile', '%Y-%m-%dT%H:%M:%SZ', 'json.dump'):
             self.assertNotIn(gone, source, f'signal.py writes the record itself again ({gone})')
         self.assertIn('_write_signal', source, 'signal.py writes the record through the store')
 

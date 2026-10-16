@@ -22,8 +22,10 @@ touches it.
 from __future__ import annotations
 
 import ast
+import importlib.util as importlib_util
 import json
 import os
+import sys
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -33,7 +35,8 @@ from harness import CONDUCT_DIR, TOOLS_DIR, run_dag, run_state_manage
 from harness_env import _fresh_module
 
 __all__ = ['TestAddNotesTheBirthSession', 'TestTheRunNoteAtDispatch', 'TestTheSpawnerResultLine',
-           'TestTheNoteItself', 'TestSessionReadsAndImport', 'TestNoLayerDefinesANameTwice']
+           'TestTheNoteItself', 'TestSessionReadsAndImport', 'TestTheRecordDoors',
+           'TestNoLayerDefinesANameTwice']
 
 #: The session id the parent shell reports -- what `dag-manage add` reads out of the environment.
 SESSION = 'session-11111111-1111-4111-8111-111111111111'
@@ -297,6 +300,49 @@ class TestSessionReadsAndImport(Base):
         self.assertEqual(before, sb.tree_hashes(), 'a dry run writes nothing')
 
 
+class TestTheRecordDoors(Base):
+    """`.pf/` 底下四样东西只有一道门：每道门都收 `project`，读谁的项目由调用方说。
+
+    `session`（图、`nodes/<id>/spec.md`、`meta/sessions/`）、`instruction`、`maintenance` 都从这里
+    取记录 —— 自拼路径的下场是同一份记录有第二种出错口径（一处读坏了大喊一声，另一处静默当空集）。
+    """
+
+    def state_package(self):
+        """`conduct_state` 是一个带相对导入的包：按路径整包装进来（照 state-manage.py 的引导）。"""
+        name = 'conduct_state_for_doors'
+        for stale in [n for n in sys.modules if n == name or n.startswith(name + '.')]:
+            del sys.modules[stale]
+        pkg_dir = CONDUCT_DIR / 'conduct_state'
+        spec = importlib_util.spec_from_file_location(
+            name, pkg_dir / '__init__.py', submodule_search_locations=[str(pkg_dir)])
+        mod = importlib_util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_every_door_answers_for_the_project_it_is_told(self):
+        mine, other = self.make(), self.make()
+        mine.add_node(NODE, '我的节点', mode='auto')
+        mine.create_cycle('cyc')
+        mine.instruct('这边的约束')
+        other.add_node(NODE2, '别人的节点', mode='auto')
+        other.start_cycle('other')
+        other.write_signal('other', NODE2, 'completed', 'done')
+        other.instruct('别人那边的约束')
+
+        store = self.state_package().store
+        store.bind_paths(str(mine.root / '.pf'))        # 进程内那条路的绑定照旧
+
+        self.assertEqual({'cyc'}, {c['id'] for c in store._read_state()['cycles']})
+        self.assertEqual({'other'}, {c['id'] for c in store._read_state(str(other.root))['cycles']})
+        self.assertEqual({NODE2}, set(store._read_dag(str(other.root))))
+        self.assertEqual(['别人那边的约束'],
+                         [i['text'] for i in store._read_instructions(str(other.root))['instructions']])
+        self.assertEqual('completed', store._read_signal('other', NODE2, str(other.root))['status'])
+        self.assertEqual(other.signal_path('other', NODE2),
+                         store._signal_path('other', NODE2, str(other.root)))
+
+
 class TestTheNoteItself(unittest.TestCase):
     """The note file's own contract: one file per node, two named lists, an id noted once."""
 
@@ -352,8 +398,7 @@ class TestTheNoteItself(unittest.TestCase):
 
 class TestNoLayerDefinesANameTwice(unittest.TestCase):
     """A top-level name defined twice in one module is a silent loser: the second wins, and a reader
-    opening the file reads the first. `conduct_pipeline_impl/store.py` carried three of them
-    (`_is_count`, `_holding_of`, `_holding_ids`, byte-identical copies); this keeps them from coming back.
+    opening the file reads the first. This keeps them from coming back.
     """
 
     def test_the_two_packages_have_no_duplicate_top_level_definitions(self):

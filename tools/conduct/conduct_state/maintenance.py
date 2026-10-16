@@ -14,29 +14,23 @@ Two rules that are not obvious:
     there to die with the checkout.
 """
 
-import json
 import shutil
 
-from .store import _holding_of, ledger_dir_for, nodes_dir_for
+from .store import _holding_of, _read_state, ledger_dir_for, nodes_dir_for
 
 #: 正在干活的节点不扫。`--force` 留给"那个节点已经死了、却还握在 cycle 手里"这一种。
 RUNNING_NOTE = '正被 cycle 握着，跳过'
 
 
-def _holding_ids(project: str | None) -> set:
-    """盘上所有 cycle 此刻握着的节点 id。读这个项目自己的 state.json，绕开模块绑定的 cwd。"""
-    state_path = ledger_dir_for(project) / 'state.json'
-    if not state_path.is_file():
-        return set()
-    try:
-        data = json.loads(state_path.read_text(encoding='utf-8', errors='replace'))
-    except (OSError, ValueError):
-        return set()
-    holding = set()
-    for cycle in data.get('cycles') or []:
-        for item in _holding_of(cycle):
-            holding.add(item['id'])
-    return holding
+def _held_node_ids(project: str | None) -> set:
+    """盘上所有 cycle 此刻握着的节点 id —— 读的是这个项目自己的 state.json。
+
+    「读 state」与「读 holding」是两件事，这里各走各的门：`_read_state` 是那份记录的门（读坏了
+    当场响），`_holding_of` 是认领的规范形。读不懂时若给一个静默的空集，就等于把「没有一个节点
+    被握着」这句话借给 clean-temp —— 它会照着这句话把正在用的 temp 删掉。
+    """
+    state = _read_state(project)
+    return {item['id'] for cycle in state.get('cycles') or [] for item in _holding_of(cycle)}
 
 
 def _nodes_roots(project: str | None) -> list:
@@ -58,7 +52,7 @@ def cmd_clean_temp(project: str | None = None, node: str | None = None,
     a cycle is holding right now is listed with a note rather than removed -- `--force` overrides
     that for the case where the session is gone and the claim was never released.
     """
-    holding = _holding_ids(project)
+    holding = _held_node_ids(project)
     targets, running = [], []
     for nodes_dir, tag in _nodes_roots(project):
         if not nodes_dir.is_dir():

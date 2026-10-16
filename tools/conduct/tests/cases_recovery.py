@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cases_base import Base, NODE, NODE2, NODE3  # noqa: E402
 from harness import HANDOFF_PY, SIGNAL_PY, run_handoff, run_signal  # noqa: E402
 
-__all__ = ['TestRetry', 'TestHandoff', 'TestSignalGuards']
+__all__ = ['TestRetry', 'TestHandoff', 'TestSignalGuards', 'TestCleanTemp']
 
 
 class TestRetry(Base):
@@ -258,5 +258,39 @@ class TestSignalGuards(Base):
         sb.next()
         self.assertIsNone(sb.read_signal('cyc', NODE))
         self.assertEqual(sb.plan()['action'], 'dispatch')
+
+
+class TestCleanTemp(Base):
+    """`clean-temp`：扫每一格自己的 `temp/`，被某条线握着的那一格跳过。
+
+    「谁被握着」是从这个项目的 `state.json` 读出来的事实，走的是读记录的那道门：读不懂就停下，
+    一个 temp 都不动。把它读成「没有一个节点被握着」，`--yes` 就会照着这句话把正在用的 temp 删掉。
+    """
+
+    def test_a_held_nodes_temp_survives_the_sweep_unless_forced(self):
+        sb = self.make()
+        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.start_cycle()
+        sb.add_temp(NODE)                       # 正在干活的那一格
+
+        proc = sb.clean_temp(yes=True)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertTrue(sb.temp_dir(NODE).is_dir(), 'a node in hand was swept')
+
+        sb._tool('clean-temp', '--project', str(sb.root), '--yes', '--force')
+        self.assertFalse(sb.temp_dir(NODE).exists(), '--force takes a live node anyway')
+
+    def test_an_unreadable_state_is_not_read_as_nobody_holds_anything(self):
+        sb = self.make()
+        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.start_cycle()
+        sb.add_temp(NODE)
+        (sb.root / '.pf' / 'state.json').write_text('{ not json', encoding='utf-8')
+
+        proc = sb.clean_temp(yes=True, check=False)
+
+        self.assertNotEqual(0, proc.returncode, '读不懂 state，这一趟不许当它没说过话')
+        self.assertIn('state.json', proc.stderr)
+        self.assertTrue(sb.temp_dir(NODE).is_dir(), 'state.json 读不懂时一个 temp 都不许动')
 
 

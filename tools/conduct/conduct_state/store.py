@@ -110,7 +110,6 @@ def _resolve_project_root(cwd: Path) -> Path:
 #: 的命令绕开它，见 `ledger_dir_for()`。
 PROJECT_ROOT = _resolve_project_root(Path.cwd())
 LEDGER_DIR = PROJECT_ROOT / LEDGER_NAME
-META_DIR = LEDGER_DIR / 'meta'
 
 
 def ledger_dir_for(project: str | None = None) -> Path:
@@ -187,10 +186,6 @@ def _ledger_lock(project: str | None = None, timeout: float | None = None):
         sys.exit(1)
 
 
-STATE_JSON = LEDGER_DIR / 'state.json'
-SIGNALS_DIR = LEDGER_DIR / 'signals'
-# One append-only account, one writer (this CLI).
-INSTRUCTIONS_JSON = LEDGER_DIR / 'instructions.json'
 #: How a path step may end. A node's own work is not tracked here, only the outcome it reported.
 VALID_NODE_RESULTS = {'completed', 'failed', 'stopped'}
 #: 一条 cycle 只有两个状态：`active` 这条线该往前推、`inactive` 不要推。停下来的原因不留在状态里
@@ -223,7 +218,8 @@ def _read_json(path: Path, label: str) -> dict | None:
 
     The reader and the wording of each failure are `tools/shared/jsonio.py`: a file that is not
     there reads as None, bytes that are not UTF-8 and text that is not JSON both raise
-    `JsonReadError`. This layer is the CLI, so it prints that message and exits 1.
+    `JsonReadError`. **CLI 入口负责退，包内只抛**：这里就是那道门 —— 打印读者自己的那句话并
+    exit 1；进程内直接调 `read_json_strict` 的调用方拿到的是异常，由它自己决定怎么办。
     """
     jsonio = _shared('pf_shared_jsonio', 'jsonio.py')
     try:
@@ -233,15 +229,63 @@ def _read_json(path: Path, label: str) -> dict | None:
         sys.exit(1)
 
 
+# ── 四类记录：一道门 ──────────────────────────────────────────────────────────
+# `.pf/` 底下四样东西是这个工具的全部记录 —— cycle 簿（state.json）、条子（signals/）、常备
+# 指令清单（instructions.json）、图（ideas.json）。这一节是它们**唯一**的落点算法：每一道门都收
+# 一个 `project`，读别人项目的记录用不着自己拼路径，也就不会拼出第二种出错口径。同一份记录有
+# 两处读法时，一处读坏了大喊一声，另一处静默当空集 —— 而那句空集落在 `clean-temp --yes` 上，
+# 就是照删不误。
+
+def _record_path(project: str | None, *parts: str) -> Path:
+    """`<project>/.pf/<parts...>`：记录的落点只在这里与 ledger 根相接。
+
+    `project` 为 None 时用本拷贝导入时绑定（`bind_paths` 挪过）的那个根。
+    """
+    return ledger_dir_for(project).joinpath(*parts)
+
+
 # ── State.json ───────────────────────────────────────────────────────────────
 
-def _read_state() -> dict:
-    data = _read_json(STATE_JSON, 'state.json')
+def _read_state(project: str | None = None) -> dict:
+    """这个项目的 cycle 簿，或一本空簿（`state.json` 不在是正常态）。"""
+    data = _read_json(_record_path(project, 'state.json'), 'state.json')
     if data is None:
         return {'cycles': []}
     if 'cycles' not in data:
         data['cycles'] = []
     return data
+
+
+def _read_dag(project: str | None = None) -> dict:
+    """这个项目的图：`ideas.json` 的节点表，或空表。
+
+    读的是盘上那个词，一个字段都不补（`conduct_pipeline_impl/store.py` 的 `load_dag` 是给判据
+    用的那份，它会把节点 mode 填上）。
+    """
+    data = _read_json(_record_path(project, 'ideas.json'), 'ideas.json') or {}
+    return data.get('nodes') or {}
+
+
+def _instructions_path(project: str | None = None) -> Path:
+    """常备指令清单的落点：清单是 ledger 的一部分，所以是 `<project>/.pf/instructions.json`。"""
+    return _record_path(project, 'instructions.json')
+
+
+def _read_instructions(project: str | None = None) -> dict:
+    """这份清单，盘上什么样读出来就什么样。
+
+    读不解析也不落笔：条目的 scope 由 `entry_scope`（`conduct_pipeline`，那一条判定的唯一处）
+    在真正要用到的地方读。
+    """
+    data = _read_json(_instructions_path(project), 'instructions.json')
+    if not data:
+        return {'instructions': []}
+    data.setdefault('instructions', [])
+    return data
+
+
+def _write_instructions(data: dict, project: str | None = None) -> None:
+    _atomic_write(_instructions_path(project), data)
 
 
 def _holding_of(cycle: dict) -> list:
@@ -272,7 +316,7 @@ def _set_holding(cycle: dict, items: list) -> None:
 
 
 def _write_state(data: dict) -> None:
-    _atomic_write(STATE_JSON, data)
+    _atomic_write(_record_path(None, 'state.json'), data)
 
 
 def _find_cycle(state: dict, cycle_id: str) -> dict:
@@ -285,12 +329,13 @@ def _find_cycle(state: dict, cycle_id: str) -> dict:
 
 # ── Signals ──────────────────────────────────────────────────────────────────
 
-def _signal_path(cycle_id: str, node_id: str) -> Path:
-    return SIGNALS_DIR / cycle_id / f'{node_id}.json'
+def _signal_path(cycle_id: str, node_id: str, project: str | None = None) -> Path:
+    return _record_path(project, 'signals', cycle_id, f'{node_id}.json')
 
 
-def _read_signal(cycle_id: str, node_id: str):
-    return _read_json(_signal_path(cycle_id, node_id), f'signals/{cycle_id}/{node_id}.json')
+def _read_signal(cycle_id: str, node_id: str, project: str | None = None):
+    return _read_json(_signal_path(cycle_id, node_id, project),
+                      f'signals/{cycle_id}/{node_id}.json')
 
 
 def _write_signal(cycle_id: str, node_id: str, status: str, summary: str, outputs: dict) -> Path:
@@ -350,12 +395,8 @@ def bind_paths(ledger_dir) -> None:
     project. A caller that loads this module in process instead has to say which project it means:
     everything else reads these bindings at call time, so this one call moves the whole module.
 
-    `ledger_dir` is `<project>/.pf`; `meta/` and `nodes/` come off it, so a caller that names the
-    ledger has named all of it.
+    `ledger_dir` is `<project>/.pf`; every record's path and every `*_dir_for()` come off that one
+    root at call time, so a caller that names the ledger has named all of it.
     """
-    global LEDGER_DIR, META_DIR, STATE_JSON, SIGNALS_DIR, INSTRUCTIONS_JSON
+    global LEDGER_DIR
     LEDGER_DIR = Path(ledger_dir)
-    META_DIR = LEDGER_DIR / 'meta'
-    STATE_JSON = LEDGER_DIR / 'state.json'
-    SIGNALS_DIR = LEDGER_DIR / 'signals'
-    INSTRUCTIONS_JSON = LEDGER_DIR / 'instructions.json'
