@@ -1,23 +1,7 @@
 #!/usr/bin/env python3
 """Manage a dependency graph (DAG) of project ideas/features.
 
-Usage:
-    dag-manage.py <command> [args]
-
-Commands:
-    add            Add a new idea node
-    rm             Remove an idea node
-    update         Update title and/or description
-    depend         Add a dependency edge
-    undepend       Remove a dependency edge
-    status         Set node status (todo/shelved/completed)
-    revive         Put a shelved node back to todo so it can run again
-    list           List non-completed nodes
-    info           Show node details
-    context        Show transitive upstream/downstream context
-    search         Search nodes by title/description
-    open           Print absolute path to spec.md
-    validate       Validate graph integrity
+The verbs, their flags and their values are this file's parser: `dag-manage.py --help` prints them.
 
 Tags:
     节点可以带 tag，也可以不带，也可以带多个。tag 说的是一件事属于哪一类活

@@ -76,6 +76,7 @@ from cases_init import *          # noqa: F401,F403
 from cases_config import *        # noqa: F401,F403
 from cases_session import *       # noqa: F401,F403
 from cases_shared import *        # noqa: F401,F403
+from cases_bin import *           # noqa: F401,F403
 # The last one is the serial tail (see the module docstring): star-imported so its classes are in
 # this namespace for collection, but pinned OUT of the pool by `_collect_tests` and run after it,
 # in process, on both entry points.
