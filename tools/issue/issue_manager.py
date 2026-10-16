@@ -6,36 +6,42 @@ Run `python issue_manager.py help` for the full usage reference.
 """
 
 import argparse
+import importlib.util
 from pathlib import Path
 
-from commands import (
-    cmd_acknowledge,
-    cmd_add,
-    cmd_add_from_file,
-    cmd_by_module,
-    cmd_export_plan,
-    cmd_mark,
-    cmd_list,
-    cmd_open_plan,
-    cmd_remove,
-    cmd_reject,
-    cmd_resolve,
-    cmd_search,
-    cmd_stale,
-    cmd_status,
-    cmd_top,
-    cmd_update,
-    cmd_weight,
-)
-from storage import (
-    _ledger_lock,
-    _resolve_project_root,
-    configure,
-    VALID_DECISIONS,
-    VALID_SEVERITIES,
-    VALID_SOURCES,
-    VALID_STATUSES,
-)
+# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
+# loaded by path through `loader.py`. These two functions are that bootstrap, identical in every file
+# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+HERE = Path(__file__).resolve().parent
+SHARED = HERE.parent / 'shared'
+
+_LOADER = None
+
+
+def _loader():
+    """`tools/shared/loader.py`: the one loader, for the modules this tree keeps outside `shared/`."""
+    global _LOADER
+    if _LOADER is None:
+        spec = importlib.util.spec_from_file_location('pf_shared_loader', SHARED / 'loader.py')
+        _LOADER = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_LOADER)
+    return _LOADER
+
+
+#: 这一对邻居：`commands.py` 装着动词的实现，`storage.py` 装着数据访问。两份都按路径取，名字固定、
+#: 留在 `sys.modules` 里并复用 —— `commands.py` 拿到的是同一个 `storage.py` 模块对象，`main()` 在这里
+#: `configure()` 钉下的项目，就是这一趟命令读写的项目。
+_STORAGE = _loader().load_by_path('pf_issue_storage', HERE / 'storage.py',
+                                  register=True, reuse=True)
+_COMMANDS = _loader().load_by_path('pf_issue_commands', HERE / 'commands.py',
+                                   register=True, reuse=True)
+
+_resolve_project_root = _STORAGE._resolve_project_root
+configure = _STORAGE.configure
+VALID_DECISIONS = _STORAGE.VALID_DECISIONS
+VALID_SEVERITIES = _STORAGE.VALID_SEVERITIES
+VALID_SOURCES = _STORAGE.VALID_SOURCES
+VALID_STATUSES = _STORAGE.VALID_STATUSES
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  CLI entry point
@@ -73,7 +79,7 @@ def _build_parser() -> argparse.ArgumentParser:
                    help='Affected function/class names')
     p.add_argument('--plan-path', default=None,
                    help='Path to detailed design spec file (convention: .pf/issues/specs/<id>.md)')
-    p.set_defaults(func=cmd_add)
+    p.set_defaults(func=_COMMANDS.cmd_add)
 
     # list
     p = subs.add_parser('list', help='List issues')
@@ -86,7 +92,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument('--limit', '-n', type=int, default=0, help='Max results')
     p.add_argument('--brief', action='store_true',
                    help='Compact output: id / severity / status / title only')
-    p.set_defaults(func=cmd_list)
+    p.set_defaults(func=_COMMANDS.cmd_list)
 
     # update
     p = subs.add_parser('update', help='Update issue fields')
@@ -103,7 +109,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument('--functions', nargs='*', default=None)
     p.add_argument('--plan-path', default=None,
                    help='Path to detailed design spec (empty string to clear)')
-    p.set_defaults(func=cmd_update)
+    p.set_defaults(func=_COMMANDS.cmd_update)
 
     # resolve
     p = subs.add_parser('resolve', help='Mark issue as resolved')
@@ -112,35 +118,35 @@ def _build_parser() -> argparse.ArgumentParser:
                    help='Why resolved (audit: commit hash / review conclusion)')
     p.add_argument('--plan-path', default=None,
                    help='Path to the execution plan used')
-    p.set_defaults(func=cmd_resolve)
+    p.set_defaults(func=_COMMANDS.cmd_resolve)
 
     # reject
     p = subs.add_parser('reject', help='Mark issue as rejected')
     p.add_argument('id', help='Issue ID')
     p.add_argument('--reason', required=True, help='Why rejected')
-    p.set_defaults(func=cmd_reject)
+    p.set_defaults(func=_COMMANDS.cmd_reject)
 
     # acknowledge
     p = subs.add_parser('acknowledge', help='Mark issue as acknowledged')
     p.add_argument('id', help='Issue ID')
     p.add_argument('--reason', default=None, help='Why deferred')
-    p.set_defaults(func=cmd_acknowledge)
+    p.set_defaults(func=_COMMANDS.cmd_acknowledge)
 
     # remove
     p = subs.add_parser('remove', help='Delete an issue')
     p.add_argument('id', help='Issue ID')
-    p.set_defaults(func=cmd_remove)
+    p.set_defaults(func=_COMMANDS.cmd_remove)
 
     # open-plan
     p = subs.add_parser('open-plan', help='Print the plan file path for an issue')
     p.add_argument('id', help='Issue ID')
-    p.set_defaults(func=cmd_open_plan)
+    p.set_defaults(func=_COMMANDS.cmd_open_plan)
 
     # status
     p = subs.add_parser('status', help='Summary statistics (actionable only by default)')
     p.add_argument('--verbose', '-v', action='store_true',
                    help='Include resolved/rejected and total count')
-    p.set_defaults(func=cmd_status)
+    p.set_defaults(func=_COMMANDS.cmd_status)
 
     # weight
     p = subs.add_parser(
@@ -148,24 +154,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="The pool's weighted debt, as one number (the pipeline's own reading)")
     p.add_argument('--verbose', '-v', action='store_true',
                    help='Show how the number was added up')
-    p.set_defaults(func=cmd_weight)
+    p.set_defaults(func=_COMMANDS.cmd_weight)
 
     # top
     p = subs.add_parser('top', help='Show top priority issues')
     p.add_argument('--limit', '-n', type=int, default=5)
     p.add_argument('--brief', action='store_true',
                    help='Compact output: id / severity / status / title only')
-    p.set_defaults(func=cmd_top)
+    p.set_defaults(func=_COMMANDS.cmd_top)
 
     # by_module
     p = subs.add_parser('by_module', help='Group issues by module')
-    p.set_defaults(func=cmd_by_module)
+    p.set_defaults(func=_COMMANDS.cmd_by_module)
 
     # stale
     p = subs.add_parser('stale', help='List stale issues')
     p.add_argument('--threshold', '-t', type=int, default=3,
                    help='Minimum check_count (default: 3)')
-    p.set_defaults(func=cmd_stale)
+    p.set_defaults(func=_COMMANDS.cmd_stale)
 
     # mark
     p = subs.add_parser(
@@ -174,7 +180,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument('ids', nargs='+',
                    help='Issue IDs confirmed alive by scan agents')
-    p.set_defaults(func=cmd_mark)
+    p.set_defaults(func=_COMMANDS.cmd_mark)
 
     # search
     p = subs.add_parser('search', help='Search issues by regex')
@@ -183,23 +189,17 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument('--severity', default=None, choices=sorted(VALID_SEVERITIES))
     p.add_argument('--source', default=None, choices=sorted(VALID_SOURCES))
     p.add_argument('--limit', '-n', type=int, default=10, help='Max results (0 = unlimited)')
-    p.set_defaults(func=cmd_search)
+    p.set_defaults(func=_COMMANDS.cmd_search)
 
     # export_plan
     p = subs.add_parser('export_plan', help='Generate execution plan')
     p.add_argument('ids', nargs='+', help='Issue IDs to include')
-    p.set_defaults(func=cmd_export_plan)
+    p.set_defaults(func=_COMMANDS.cmd_export_plan)
 
     # help
     subs.add_parser('help', help='Show the full usage reference')
 
     return parser
-
-
-#: The verbs that turn a read of `issues.json` into a write of it. They run under the project's
-#: one ledger lock (`.pf/meta/ledger.lock`, shared with conduct and dag-manage) so two sessions
-#: recording issues at the same time cannot erase each other's entry.
-MUTATING_VERBS = {'add', 'update', 'resolve', 'reject', 'acknowledge', 'remove', 'mark'}
 
 
 def main():
@@ -212,11 +212,8 @@ def main():
         # parser prints, and nothing keeps a second copy of that list to fall out of step with it.
         parser.print_help()
         return
-    if args.command in MUTATING_VERBS:
-        with _ledger_lock():
-            args.func(args)
-    else:
-        args.func(args)
+    # 哪些动词要拿项目那把锁：由每个命令体自己声明（改池子的那几条把它们整段读 → 写罩在里面）。
+    args.func(args)
 
 
 if __name__ == '__main__':
