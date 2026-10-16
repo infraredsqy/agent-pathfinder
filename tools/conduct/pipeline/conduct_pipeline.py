@@ -31,7 +31,7 @@ worker still has to commit and push before the next session boots in the same wo
 
 Invariants this module owns, each of which cost a bug to learn
 -------------------------------------------------------------
-  1. A cycle holds at most one node at a time (`current_node`). Setting it is how work is claimed:
+  1. A cycle holds the nodes it claimed (`holding`). A claim is how work is taken:
      another cycle's pick skips a node some line is holding.
   2. A terminal signal is the whole of "this node is done"; a `running` signal is never a green
      light. `cycle retry` is what preps a retry.

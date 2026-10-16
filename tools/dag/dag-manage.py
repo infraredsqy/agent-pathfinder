@@ -44,7 +44,6 @@ Weight:
 import argparse
 import contextlib
 import json
-import locale
 import os
 import shutil
 import sys
@@ -146,8 +145,7 @@ def _note_session(node_id: str, session: str) -> None:
         print(f'Warning: the session note for {node_id} was not written: {e}', file=sys.stderr)
 
 #: 卡片状态只有三个词，写出去的就是这三个：`todo` 在局中未交付、`shelved` 出局等人、
-#: `completed` 已交付。别名层已删 —— 退役写法（seed / active / failed / hold）不再被折，读到
-#: 一个词表外的词就说明那份档案没迁移完：工具照原样读它，绝不替它猜一个词。
+#: `completed` 已交付。读到一个词表外的词就照原样读它，绝不替它猜一个词。
 #: 「正在被某条 cycle 跑」不进状态（那样的节点还是 `todo`），它记在 state.json 的持有关系里。
 VALID_STATUSES = {'todo', 'shelved', 'completed'}
 # A blocked node is never recommended and never "ready": `shelved` is out of play until a human
@@ -160,16 +158,15 @@ BLOCKED_STATUSES = {'shelved'}
 #:   auto        —— 循环照跑，收尾自己开下一个节点（没有人闸；卡死、需求冲突才报机主）。
 VALID_MODES = {'manual', 'checkpoint', 'auto'}
 DEFAULT_MODE = 'auto'
-#: 节点重量，两档，与 mode 正交：mode 管停不停，它管谁干。没有别名层 —— 这个键是新的，
-#: 没有退役写法要折。**键不落就是 standard**（老图、老机器都不迁移），所以只有 light 落键。
+#: 节点重量，两档，与 mode 正交：mode 管停不停，它管谁干。**键不落就是 standard**，
+#: 所以只有 light 落键。
 VALID_WEIGHTS = ('light', 'standard')
 DEFAULT_WEIGHT = 'standard'
 # ── tags ─────────────────────────────────────────────────────────────────────
 # 三个词，固定。它是一份给人看的约定，engine 只拿它拼那句警告：词表外的 tag 警告一行就收下，
 # 真的冒出第四类工作时写进去就能用。过滤一律按字面比，不查词表。
 VALID_TAGS = ('writing', 'coding', 'art')
-#: 同义词层已删：`engineering` 是退役写法，与别的词表外的词同一条待遇 —— 照收、警告一行、
-#: 只能和写了同一个词的过滤集对上（见 `_parse_tags`）。
+#: 词表外的 tag 照收、警告一行，只能和写了同一个词的过滤集对上（见 `_parse_tags`）。
 ISO_FMT = '%Y-%m-%dT%H:%M:%S.%fZ'
 
 
@@ -190,21 +187,16 @@ def _read() -> dict:
     """Read ideas.json; auto-create on first use. Exits on JSON error."""
     if not IDEAS_JSON.exists():
         return {'nodes': {}}
-    # JSON is UTF-8 by spec. Files written before 2026-09 went out in the process locale
-    # encoding (GBK on Windows), so keep a fallback for them.
-    for enc in ('utf-8', locale.getpreferredencoding(False)):
-        try:
-            with IDEAS_JSON.open('r', encoding=enc) as f:
-                data = json.load(f)
-            break
-        except UnicodeDecodeError:
-            continue
-        except json.JSONDecodeError as e:
-            print(f'Error: ideas.json parse failure: {e}', file=sys.stderr)
-            print('Hint: run "validate" for details.', file=sys.stderr)
-            sys.exit(1)
-    else:
-        print(f'Error: ideas.json is not valid UTF-8 or {locale.getpreferredencoding(False)}', file=sys.stderr)
+    # JSON is UTF-8 by spec. A file that is not is a corrupt record, not an older build's.
+    try:
+        with IDEAS_JSON.open('r', encoding='utf-8') as f:
+            data = json.load(f)
+    except UnicodeDecodeError as e:
+        print(f'Error: ideas.json is not valid UTF-8: {e}', file=sys.stderr)
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        print(f'Error: ideas.json parse failure: {e}', file=sys.stderr)
+        print('Hint: run "validate" for details.', file=sys.stderr)
         sys.exit(1)
     if 'nodes' not in data:
         data['nodes'] = {}
@@ -342,7 +334,7 @@ def _get(uid: str, data: dict) -> dict:
 def _parse_tags(raw: str) -> list:
     """`--tags art,writing` → `['art', 'writing']`：去空白、去重，保序。
 
-    按字面收：同义词层已删（`engineering` 已退役 —— 写它只能和写了同一个词的过滤集对上）。
+    按字面收：写它只能和写了同一个词的过滤集对上。
     词表外的 tag 警告一行就收下 —— 真冒出第四类工作，写进去就能用。
     """
     out = []
@@ -937,8 +929,6 @@ def cmd_info(args):
 
     # 会话便条（讨论场 / 执行场）有才回显。`list` 给的是骨架，`info` 是这一格的详情——
     # 调用方不许读 ideas.json 原文，所以这两个键不出现在这里，就等于没记。
-    # 老记录把出生 session 写在节点自己的 `dsh_session` 键上（本机之外必然打不开的死值），
-    # 从那以后它写在 `.pf/meta/sessions/<uuid>.json`；这里只读新的那处。
     note = _session_note().read(PROJECT_ROOT, uid)
     if note['discussion'] or note['run']:
         result['sessions'] = {role: note[role] for role in ('discussion', 'run')}
@@ -1270,7 +1260,7 @@ def main():
     # 中文节点标题走 JSON 输出，而这份脚本的 stdout 编码跟的是控制台代码页（这台机器默认 GBK）。
     # 调用方（conduct_pipeline.py）按 UTF-8 解码，GBK 字节流会让它的读线程直接抛
     # UnicodeDecodeError、stdout 变成 None —— 管线的第一个轮边界就崩在那里。
-    # state-manage.py 早就做了同样的 reconfigure，这里补齐（stderr 同理：报错也是中文）。
+    # 每个入口自己做同样的 reconfigure（stderr 同理：报错也是中文）。
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, 'reconfigure'):
             stream.reconfigure(encoding='utf-8', errors='replace')

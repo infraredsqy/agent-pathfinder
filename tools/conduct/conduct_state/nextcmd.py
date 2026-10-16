@@ -202,7 +202,7 @@ def cmd_dispatch(cycle_id: str, as_json: bool = False, project: str | None = Non
         git commit … && git push                       the worker's own work
         pf dispatch <cycle>               start that prompt's session (this verb)
 
-    It only ever READS the ledger and starts one session: no `status`, no `path`, no `current_node`,
+    It only ever READS the ledger and starts one session: no `status`, no `path`, no `holding`,
     no writes anywhere except the spawner's own `.pf/meta/` bookkeeping (the stale-marker cleanup,
     which lives in `dsh-spawn.ps1` and is untouched here). A real spawn also drops the delivered
     launch directory, exactly as `next --spawn` does; `DSH_CONDUCT_SPAWN_DRY_RUN=1` reports the call

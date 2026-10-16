@@ -91,7 +91,7 @@ class TestDispatchVerb(Base):
 
     def test_it_touches_nothing_but_the_spawn(self):
         """It reads the ledger to find the node, and starts a session. No status, no path, no
-        `current_node`, no prompt rewrite -- a dispatch that wrote state would be a second close."""
+        `holding`, no prompt rewrite -- a dispatch that wrote state would be a second close."""
         sb, _action = self.pinned()
         before = sb.tree_hashes()
 
@@ -133,9 +133,9 @@ class TestDispatchVerb(Base):
         self.assertIn('not active', proc.stderr)
         self.assertTrue(os.path.exists(action['prompt']), 'the refusal must not consume the prompt')
 
-    def test_a_legacy_spelling_of_out_of_service_still_refuses(self):
-        """`paused` is the word an older file carries; the reader folds it to `inactive`, so the door
-        holds for a ledger written before the rename (forged on disk -- the CLI writes canonical)."""
+    def test_a_status_word_outside_the_vocabulary_refuses(self):
+        """A status word outside the vocabulary is read as written: it is not `active`, so the door
+        holds here too (forged on disk -- the CLI writes canonical)."""
         sb, action = self.pinned()
         sb.rewrite_cycle(status='paused')
 

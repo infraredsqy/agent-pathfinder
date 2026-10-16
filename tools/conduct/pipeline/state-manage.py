@@ -50,8 +50,7 @@ Usage:
                                                   an empty graph, and while another cycle is active
         rename <id> --title <t>                   Rename a cycle
         status <id> <st>                          Put the line in or out of service:
-                                                  active | inactive (the old paused / completed /
-                                                  failed are still accepted and land as inactive)
+                                                  active | inactive
         policy <id> <key> <value>                 Write one of the line's own policies, and print
                                                   the effective set. `when_shelved` = stop (default) |
                                                   continue: a node that came back not delivered

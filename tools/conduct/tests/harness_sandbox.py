@@ -102,8 +102,7 @@ class Sandbox:
 
     def add_node(self, uid, title, status='todo', mode='auto', deps=(), tags=(), weight=None):
         """One DAG node on disk. `status` is the account's own word -- `todo` by default, which is
-        what `dag-manage add` writes; a test that wants an OLD spelling on disk (the alias layer's
-        subject) passes it here explicitly."""
+        what `dag-manage add` writes."""
         dag = self.dag()
         dag['nodes'][uid] = {'title': title, 'status': status, 'mode': mode,
                              'dependencies': list(deps)}
@@ -210,11 +209,7 @@ class Sandbox:
                           *(['--force'] if force else []), check=check)
 
     def set_cycle_status(self, cycle_id, status, cli=None, check=True):
-        """`cycle status <cycle> <status>`: put a line in or out of service.
-
-        The old spellings (`paused` / `completed` / `failed`) are still accepted and land as
-        `inactive`; a test that wants the legacy spelling on disk passes it here on purpose.
-        """
+        """`cycle status <cycle> <status>`: put a line in or out of service."""
         return self._tool('cycle', 'status', cycle_id, status, cli=cli, check=check)
 
     def set_policy(self, cycle_id, key, value, cli=None, check=True):
@@ -464,8 +459,7 @@ class Sandbox:
         holding = cycle.get('holding')
         if isinstance(holding, list):
             return [item['id'] if isinstance(item, dict) else item for item in holding]
-        # Legacy record shape: the single-node spelling reads as a one-item list.
-        return [cycle['current_node']] if cycle.get('current_node') else []
+        return []
 
     def holding_ids(self, cycle_id='cyc'):
         """Every node the cycle holds right now, in claim order."""

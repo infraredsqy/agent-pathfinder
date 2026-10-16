@@ -23,14 +23,13 @@ read-modify-write, and the state/signal accessors built on them.
 one state that must not be reachable, because the lock's own `mkdir` would otherwise leave an
 unignored ledger in the tree for the next `git add -A` to sweep up.
 
-There is no `loops/` any more: a cycle's record in `state.json` is the whole of it -- identity,
-current node, and the path of nodes it has finished.
+A cycle's record in `state.json` is the whole of it -- identity, current node, and the path of nodes
+it has finished.
 """
 
 
 import contextlib
 import json
-import locale
 import os
 import sys
 import tempfile
@@ -266,20 +265,16 @@ def _atomic_write(path: Path, data: dict) -> None:
 def _read_json(path: Path, label: str) -> dict | None:
     if not path.exists():
         return None
-    # JSON is UTF-8 by spec, and everything here reads/writes Chinese summaries. Before
-    # 2026-09 these files went out in the process locale encoding (GBK on Windows), so keep
-    # a fallback for files written by the old build.
-    for enc in ('utf-8', locale.getpreferredencoding(False)):
-        try:
-            with open(path, 'r', encoding=enc) as f:
-                return json.load(f)
-        except UnicodeDecodeError:
-            continue
-        except json.JSONDecodeError as e:
-            print(f'Error: {label} parse failure: {e}', file=sys.stderr)
-            sys.exit(1)
-    print(f'Error: {label} is not valid UTF-8 or {locale.getpreferredencoding(False)}', file=sys.stderr)
-    sys.exit(1)
+    # JSON is UTF-8 by spec, and everything here reads/writes Chinese summaries.
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except UnicodeDecodeError as e:
+        print(f'Error: {label} is not valid UTF-8: {e}', file=sys.stderr)
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        print(f'Error: {label} parse failure: {e}', file=sys.stderr)
+        sys.exit(1)
 
 
 # ── State.json ───────────────────────────────────────────────────────────────
@@ -296,9 +291,7 @@ def _read_state() -> dict:
 def _holding_of(cycle: dict) -> list:
     """这条线此刻握着的那一组节点，规范形：`[{'id':..., 'since':...}, ...]`（可为空）。
 
-    这是一条线的**认领标记**：一个节点只能出现在一条线的这份列表里。旧记录里的单数
-    `current_node` / `current_started_at` 就是一组只有一个元素的列表 —— 读的时候走这一条路，
-    写侧一律只写 `holding`，两种形状不会在同一条记录里打架。
+    这是一条线的**认领标记**：一个节点只能出现在一条线的这份列表里。
     """
     holding = cycle.get('holding')
     if isinstance(holding, list):
@@ -309,9 +302,6 @@ def _holding_of(cycle: dict) -> list:
             elif isinstance(item, str) and item:
                 out.append({'id': item, 'since': None})
         return out
-    legacy = cycle.get('current_node')
-    if legacy:
-        return [{'id': legacy, 'since': cycle.get('current_started_at')}]
     return []
 
 
@@ -320,12 +310,9 @@ def _holding_ids(cycle: dict) -> list:
     return [item['id'] for item in _holding_of(cycle)]
 
 
-def _set_holding(cycle: dict, items: list, drop_legacy: bool = True) -> None:
-    """把规范形写回这条线：写 `holding`，旧单数字段（默认）一并摘掉。"""
+def _set_holding(cycle: dict, items: list) -> None:
+    """把规范形写回这条线：写 `holding`。"""
     cycle['holding'] = [{'id': item['id'], 'since': item.get('since')} for item in items]
-    if drop_legacy:
-        cycle.pop('current_node', None)
-        cycle.pop('current_started_at', None)
 
 
 def _write_state(data: dict) -> None:

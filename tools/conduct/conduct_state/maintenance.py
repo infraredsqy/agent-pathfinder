@@ -2,9 +2,7 @@
 
 Owns cmd_clean_temp: the sweep of the per-node `temp/` directories, which live in each node's own
 place (`<project>/.pf/nodes/<id>/temp/`). temp is the one place process records go, so clearing it
-is a whole-directory sweep -- never a per-file judgement. The migration commands that used to live
-here are gone with the shapes they translated: a cycle record in `state.json` is the whole of a cycle
-now, and there is no older layout this tool knows how to read.
+is a whole-directory sweep -- never a per-file judgement.
 
 Two rules that are not obvious:
 
