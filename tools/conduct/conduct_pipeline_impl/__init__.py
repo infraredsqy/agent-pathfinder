@@ -68,7 +68,7 @@ __all__ = [
     'prompt_for', 'write_prompt_file', 'build_prompt_text', 'mode_for', 'started_marker',
 
     # maintenance: the maintenance channel
-    'POLICY_KEYS', 'READING_KEYS', 'MAINTENANCE_ACTION', 'METRICS', 'crossed', 'reading_of',
+    'POLICY_NUMERIC_KEYS', 'READING_KEYS', 'MAINTENANCE_ACTION', 'METRICS', 'crossed', 'reading_of',
     'thresholds_for', 'asked_readings', 'pool_weight', 'insertion', 'read_new_node_id',
     'maintenance_spec', 'maintenance_title', 'substitute',
 

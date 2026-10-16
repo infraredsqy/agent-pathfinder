@@ -438,6 +438,31 @@ class TestContract(Base):
         self.assertTrue(ints <= set(harness_fast._INT_FLAGS),
                         f'declared type=int but not cast: {ints - set(harness_fast._INT_FLAGS)}')
 
+    def test_the_cli_scope_vocabulary_is_the_pipelines_own(self):
+        """`--scope` 的词表来自判定的正本，CLI 没有自己的第二份。
+
+        钉死在本地副本上的话，给判定加第四个 scope 之后 CLI 先在 argparse 那一步把合法的值拒了，
+        借来的判定根本轮不到跑 —— 两个词表，两个答案。
+        """
+        import argparse
+
+        parser = self.real_parser()
+        scopes = []
+
+        def walk(p):
+            for action in p._actions:
+                if isinstance(action, argparse._SubParsersAction):
+                    for sub in action.choices.values():
+                        walk(sub)
+                elif action.option_strings and action.dest == 'scope':
+                    scopes.append(list(action.choices))
+
+        walk(parser)
+
+        self.assertEqual(2, len(scopes), '`instruction add` 与 `instruction list` 各有一处 --scope')
+        for choices in scopes:
+            self.assertEqual(list(pipeline.SCOPES), choices)
+
     def test_no_action_in_a_whole_run_carries_commands(self):
         """The one rule that survived every rewrite, plus what a whole run is made of: the actions
         a caller ever sees are the two driving kinds -- `dispatch` to open a step, `stop_pipeline`

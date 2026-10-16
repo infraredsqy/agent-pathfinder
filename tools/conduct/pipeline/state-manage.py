@@ -1,92 +1,15 @@
 #!/usr/bin/env python3
 """Manage the conduct pipeline's state: one directory, `.pf/`, per project.
 
-Provides read/write operations on `state.json`, so agents never need to read raw JSON directly.
+This is the tool's one writer: the cycle book, the signals and the standing instructions all go out
+through here, so a session never reads or writes raw JSON itself. (The graph is `dag-manage.py`'s own
+record, with its own writer.) Two gates come with that: the ledger lock, held across each mutating
+command's read-modify-write, and `require_initialized` -- nothing writes a `.pf/` this tool never
+init'ed.
 
-Usage:
-    state-manage.py init [--commit|--local] [--no-own-repo] [--project D]
-                                                  Put `.pf/` in place. `--local` (the default)
-                                                  keeps it out of the project's repository; `--commit`
-                                                  lets it go in with everything else instead. Local
-                                                  mode gives the directory a repository of its own
-                                                  unless `--no-own-repo`. Run this once per project,
-                                                  before anything else touches `.pf/`
-    state-manage.py register [--project D]        Write the ledger's git merge driver into the
-                                                  project's git config
-    state-manage.py clean-temp [--yes] [--force]  List every node's temp/ (probes, raw output,
-                                                  snapshots); --yes removes those directories whole.
-                                                  A node a cycle is holding right now is skipped;
-                                                  --force takes it anyway
-    state-manage.py fork-worktree <node>          Fork one node's parallel-mode worktree
-    state-manage.py dispatch <cycle>              Start the session for the node this cycle holds.
-                                 [--project D]    [--json]  The prompt is the one the closing call
-                                                  already wrote (`.pf/meta/launch/<cycle>/<node>/
-                                                  prompt.txt`). Run it after `git push`: settling a
-                                                  node and starting the next session are two commands
-                                                  on purpose
-    state-manage.py next [--cycle <id>]           Show/do the next pipeline action:
-                              [--plan]            --plan   read-only, writes nothing
-                              [--after <node_id>] the worker closing its own node: settle the node
-                                                  whose work just finished against the signal it
-                                                  wrote, then say whether the next step is `dispatch`
-                                                  or `stop_pipeline` (it starts nothing: see
-                                                  `dispatch`)
-                              [--spawn]           ... and start that session in the same breath (the
-                                                  one-shot closing call)
-                              [--continue|--stop] [--node ID] [--note "..."]
-                                                  the closing call's answers: keep going, stop here,
-                                                  or name the node to run next. Refused without
-                                                  `--after` or `--plan`: there is no settle for them
-                                                  to answer
-                              [--project D]       Project root (default: current directory)
-                                                  (no --after: drive to the next stable action)
-
-    state-manage.py cycle <verb> ...              One line of work, and everything done to it:
-        create <id> [--title t] [--force] [--tags a,b]
-                                                  Create a new cycle [--force past an active cycle]
-        start <id> [--title t] [--force] [--tags a,b]
-                                                  Create a cycle AND pin it on the node the rule
-                                                  picks (one command for the launcher). Refuses on
-                                                  an empty graph, and while another cycle is active
-        rename <id> --title <t>                   Rename a cycle
-        status <id> <st>                          Put the line in or out of service:
-                                                  active | inactive
-        policy <id> <key> <value>                 Write one of the line's own policies, and print
-                                                  the effective set. `when_shelved` = stop (default) |
-                                                  continue: a node that came back not delivered
-                                                  (it goes `shelved`) stops this line, or the line
-                                                  carries on with the next node
-        list                                      Show all cycles
-        current                                   Show the lines that matter now: every active
-                                                  one, and every one holding a node
-        show <cycle> <node>                       One node's standing: signal + cycle pointer
-        hold <cycle> <node_id>                    Pin the cycle on a node (this is how work is
-                                                  claimed: another cycle's pick skips it)
-        close <cycle> <node> --result completed|failed|stopped
-                                                  Record the step on the cycle's path and let the
-                                                  node go
-        retry <cycle> <node> [--drop]             Overwrite a node's signal as pending (retries);
-                                                  --drop leaves no ticket at all
-
-    state-manage.py instruction add|list|resolve  Standing user instructions (scope x target)
-                                                  `list` defaults to the constraints view: the
-                                                  global ones still in force, as plain sentences
-                                                  `list --node <id>`: 同项目并行两条 active cycle
-                                                  时，用你手上的节点说明你站在哪一条线上
-                                                  `add --cycle <id>`: 同理，记在哪条线上要自己点名；
-                                                  绑不上的 cycle/node 条目拒收（它会被读成人人可见）
-    state-manage.py config list|get|set|unset      This machine's and this project's settings.
-                                  [--global]       Built-in defaults (one table in the code), then
-                                                   `~/.pf/config.json` (global), then
-                                                   `<project>/.pf/config.json` (project): the last
-                                                   layer that names a key wins. A layer with no file
-                                                   reads as "never changed the default". `get`
-                                                   prints the value alone. `set` / `unset` write the
-                                                   project layer unless --global says otherwise.
-
-A cycle picks ONE DAG node at a time and repeats until the graph has no ready node left.
-pf-route is NOT in the pipeline (human-facing DAG designer only); how pf-conduct splits a node's
-own work is that session's business, not a tracked stage.
+`--help` is the list of verbs, their flags and their values. This file owns the parser and the one
+route from a parsed line to the call that answers it; the machinery behind each verb is the package
+next door (`conduct_state/`, whose `__init__` names every layer).
 """
 
 import argparse
@@ -143,12 +66,117 @@ _impl = _load_impl()
 globals().update({name: getattr(_impl, name) for name in _impl.__all__})
 
 
-def main() -> None:
+def _layer(args) -> str:
+    """`--global` 说的是哪一层：没有它就是项目那一层。"""
+    return 'global' if getattr(args, 'global_', False) else 'project'
+
+
+#: 唯一的路由表：解析好的 args 变成一次调用，全在这里。键是 `(顶层动词, 子动词)` —— 叶子动词的
+#: 子动词是 None。加一个动词就是加一行，叶子动词与三组子动词看的是同一张表。
+_ROUTES = {
+    ('init', None): lambda a: cmd_init(getattr(a, 'project', None),
+                                       getattr(a, 'mode', None) or 'local',
+                                       getattr(a, 'own_repo', True)),
+    ('register', None): lambda a: cmd_register(getattr(a, 'project', None)),
+    ('clean-temp', None): lambda a: cmd_clean_temp(getattr(a, 'project', None),
+                                                   getattr(a, 'node', None),
+                                                   getattr(a, 'yes', False),
+                                                   getattr(a, 'force', False)),
+    ('fork-worktree', None): lambda a: cmd_fork_worktree(a.node),
+    ('next', None): lambda a: cmd_next(getattr(a, 'cycle', None),
+                                       'plan' if getattr(a, 'plan', False) else 'apply',
+                                       getattr(a, 'json', False),
+                                       'continue' if getattr(a, 'cont', False)
+                                       else 'stop' if getattr(a, 'stop', False) else None,
+                                       getattr(a, 'node', None),
+                                       getattr(a, 'note', ''),
+                                       getattr(a, 'spawn', False),
+                                       getattr(a, 'after', None),
+                                       getattr(a, 'spawner', None),
+                                       getattr(a, 'project', None),
+                                       bool(getattr(a, 'cont', False)
+                                            or getattr(a, 'stop', False))),
+    ('dispatch', None): lambda a: cmd_dispatch(a.id, getattr(a, 'json', False),
+                                               getattr(a, 'project', None),
+                                               getattr(a, 'spawner', None)),
+
+    ('cycle', 'create'): lambda a: cmd_cycle_create(a.id, a.title,
+                                                    getattr(a, 'force', False),
+                                                    getattr(a, 'tags', None)),
+    ('cycle', 'start'): lambda a: cmd_cycle_start(a.id, a.title,
+                                                  getattr(a, 'force', False),
+                                                  getattr(a, 'tags', None)),
+    ('cycle', 'rename'): lambda a: cmd_cycle_rename(a.id, a.title),
+    ('cycle', 'status'): lambda a: cmd_cycle_status(a.id, a.status),
+    ('cycle', 'policy'): lambda a: cmd_cycle_policy(a.id, a.key, a.value),
+    ('cycle', 'list'): lambda a: cmd_cycle_list(),
+    ('cycle', 'current'): lambda a: cmd_cycle_current(),
+    ('cycle', 'show'): lambda a: cmd_cycle_show(a.id, a.node),
+    ('cycle', 'hold'): lambda a: cmd_cycle_hold(a.id, a.node),
+    ('cycle', 'close'): lambda a: cmd_cycle_close(a.id, a.node, a.result),
+    ('cycle', 'retry'): lambda a: cmd_cycle_retry(a.id, a.node, getattr(a, 'summary', None),
+                                                  getattr(a, 'drop', False)),
+
+    ('instruction', 'add'): lambda a: cmd_instruction_add(a.text, a.scope, a.target,
+                                                          getattr(a, 'said_by', 'user'),
+                                                          getattr(a, 'note', None),
+                                                          getattr(a, 'stop_after_nodes', None),
+                                                          getattr(a, 'cycle', None),
+                                                          getattr(a, 'node', None)),
+    ('instruction', 'list'): lambda a: cmd_instruction_list(getattr(a, 'json', False),
+                                                            getattr(a, 'live', False),
+                                                            getattr(a, 'project', None),
+                                                            getattr(a, 'scope', None),
+                                                            getattr(a, 'all_entries', False),
+                                                            getattr(a, 'node', None)),
+    ('instruction', 'resolve'): lambda a: cmd_instruction_resolve(a.ins_id, a.state,
+                                                                  getattr(a, 'note', None),
+                                                                  getattr(a, 'superseded_by', None),
+                                                                  getattr(a, 'project', None)),
+
+    ('config', 'list'): lambda a: cmd_config_list(getattr(a, 'project', None)),
+    ('config', 'get'): lambda a: cmd_config_get(a.key, getattr(a, 'project', None)),
+    ('config', 'set'): lambda a: cmd_config_set(a.key, a.value, _layer(a),
+                                                getattr(a, 'project', None)),
+    ('config', 'unset'): lambda a: cmd_config_unset(a.key, _layer(a),
+                                                    getattr(a, 'project', None)),
+
+    ('session', 'show'): lambda a: cmd_session_show(a.node, getattr(a, 'project', None),
+                                                    getattr(a, 'json', False)),
+    ('session', 'list'): lambda a: cmd_session_list(getattr(a, 'project', None),
+                                                    getattr(a, 'json', False)),
+    ('session', 'import'): lambda a: cmd_session_import(getattr(a, 'project', None),
+                                                        getattr(a, 'dry_run', False)),
+}
+
+
+def route(args) -> None:
+    """一行命令变成一次调用 —— 这个工具唯一的分派处。
+
+    `args.command` 是顶层动词，`<动词>_command` 是那个组的子动词（叶子动词没有）。表里查不到只有
+    两种情形：一个组没带子动词，或者解析器根本不认识这个词 —— 两种都由这里报出去，一种口径。
+    """
+    verb = getattr(args, 'command', None)
+    sub = getattr(args, f'{verb}_command', None) if verb else None
+    fn = _ROUTES.get((verb, sub))
+    if fn is not None:
+        fn(args)
+        return
+    subs = [s for (v, s) in _ROUTES if v == verb and s]
+    if subs:
+        print(f'usage: state-manage.py {verb} {{{"|".join(subs)}}} ...', file=sys.stderr)
+    else:
+        print('usage: state-manage.py <verb> ...（动词、旗标与取值见 --help）', file=sys.stderr)
+    sys.exit(1)
+
+
+def main(argv=None) -> None:
     # 中文 everywhere：stdout 是给调用方解析的，stderr 是给人看的报错。两个流都按 UTF-8 走，
     # 否则控制台代码页（这台机器默认 GBK）会把字节写歪，按 UTF-8 解码的父进程直接炸在读线程上。
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, 'reconfigure'):
             stream.reconfigure(encoding='utf-8', errors='replace')
+    argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(description='Manage conduct pipeline state')
     sub = parser.add_subparsers(dest='command')
 
@@ -203,8 +231,7 @@ def main() -> None:
                                help="Write one of a line's own policies (the effective set is echoed "
                                     "back)")
     p_cpo.add_argument('id')
-    p_cpo.add_argument('key', choices=sorted(set(POLICY_VALUES) | set(POLICY_NUMBERS)
-                                             | set(POLICY_COUNTS) | set(POLICY_WORDS)))
+    p_cpo.add_argument('key', choices=list(POLICY_KEYS))
     p_cpo.add_argument('value',
                        help='when_shelved: ' + ' | '.join(POLICY_VALUES['when_shelved'])
                             + ' (stop = a node that came back not delivered stops this line and '
@@ -270,7 +297,7 @@ def main() -> None:
     ins_sub = p_ins.add_subparsers(dest='instruction_command')
     p_ia = ins_sub.add_parser('add', help='Append one instruction, verbatim')
     p_ia.add_argument('--text', required=True, help='The sentence, EXACTLY as the user said it')
-    p_ia.add_argument('--scope', dest='scope', default='global', choices=list(VALID_SCOPES),
+    p_ia.add_argument('--scope', dest='scope', default='global', choices=list(valid_scopes()),
                       help='Where this instruction is visible from (`instruction --help`): global = '
                            'everywhere; cycle = the cycle it is recorded in, out of sight once that '
                            'cycle ends; node = the node it is recorded in, out of sight once that '
@@ -309,7 +336,7 @@ def main() -> None:
                       help='Account view: only the entries whose state is live')
     p_il.add_argument('--all', dest='all_entries', action='store_true',
                       help='Account view: the whole account, retired entries included')
-    p_il.add_argument('--scope', dest='scope', default=None, choices=list(VALID_SCOPES),
+    p_il.add_argument('--scope', dest='scope', default=None, choices=list(valid_scopes()),
                       help='Account view narrowed to one scope. `--scope global` reads out the '
                            'global entries')
     p_il.add_argument('--project', default=None,
@@ -323,7 +350,7 @@ def main() -> None:
     p_ir = ins_sub.add_parser('resolve', help='Record what became of one instruction')
     p_ir.add_argument('ins_id')
     p_ir.add_argument('--state', required=True,
-                      choices=['done', 'superseded', 'withdrawn', 'applied', 'n/a'],
+                      choices=list(RESOLVE_STATES),
                       help='withdrawn = the owner takes an instruction off; applied|n/a = this '
                            'global entry was honoured here / nothing here falls under it, and it '
                            'stays in force. A cycle/node entry needs no resolve at all: it goes out '
@@ -429,9 +456,10 @@ def main() -> None:
 
     # The action vocabulary is `next`'s own contract: the keys a caller branches on, and the one
     # invariant that goes with them. `--help` prints it, computed from the single source
-    # (`conduct_pipeline.ACTIONS`) rather than restated here -- and only when help was asked for, so an
-    # ordinary run never pays for loading the pipeline module.
-    if 'next' in sys.argv[1:] and any(a in ('-h', '--help') for a in sys.argv[1:]):
+    # (`conduct_pipeline.ACTIONS`) rather than restated here. The pipeline module is loaded once when
+    # the parser is built (the `--scope` choices are its `SCOPES`); `_render_contract` is computed
+    # only when `next --help` was asked for.
+    if 'next' in argv and any(a in ('-h', '--help') for a in argv):
         p_next.epilog = _load_pipeline()._render_contract()
 
     p_disp = sub.add_parser(
@@ -510,45 +538,8 @@ def main() -> None:
     p_fork.add_argument('node', help='The DAG node this worktree is for; its first 8 characters '
                                      'name the worktree directory and the branch')
 
-    args = parser.parse_args()
-
-    cmds = {
-        'init':             lambda: cmd_init(getattr(args, 'project', None),
-                                            getattr(args, 'mode', None) or 'local',
-                                            getattr(args, 'own_repo', True)),
-        'register':         lambda: cmd_register(getattr(args, 'project', None)),
-        'cycle':            lambda: _dispatch_cycle(args),
-        'instruction':      lambda: _dispatch_instruction(args),
-        'config':           lambda: _dispatch_config(args),
-        'session':          lambda: _dispatch_session(args),
-        'clean-temp':       lambda: cmd_clean_temp(getattr(args, 'project', None),
-                                                   getattr(args, 'node', None),
-                                                   getattr(args, 'yes', False),
-                                                   getattr(args, 'force', False)),
-        'next':             lambda: cmd_next(getattr(args, 'cycle', None),
-                                             'plan' if getattr(args, 'plan', False) else 'apply',
-                                             getattr(args, 'json', False),
-                                             'continue' if getattr(args, 'cont', False)
-                                             else 'stop' if getattr(args, 'stop', False) else None,
-                                             getattr(args, 'node', None),
-                                             getattr(args, 'note', ''),
-                                             getattr(args, 'spawn', False),
-                                             getattr(args, 'after', None),
-                                             getattr(args, 'spawner', None),
-                                             getattr(args, 'project', None),
-                                             bool(getattr(args, 'cont', False)
-                                                  or getattr(args, 'stop', False))),
-        'dispatch':         lambda: cmd_dispatch(args.id, getattr(args, 'json', False),
-                                                 getattr(args, 'project', None),
-                                                 getattr(args, 'spawner', None)),
-        'fork-worktree':    lambda: cmd_fork_worktree(args.node),
-    }
-    fn = cmds.get(args.command)
-    if fn:
-        fn()
-    else:
-        parser.print_help()
-        sys.exit(1)
+    args = parser.parse_args(argv)
+    route(args)
 
 
 if __name__ == '__main__':

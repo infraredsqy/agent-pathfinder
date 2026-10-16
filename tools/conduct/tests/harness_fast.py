@@ -45,10 +45,9 @@ class FastStateManage:
     """state-manage.py's CLI surface, executed in-process against one sandbox.
 
     conduct_pipeline shells out to `state-manage.py <verb> ...` for every state change -- that is how
-    the shipped tool works, and the command lists it builds are exactly what this runs. The verb
-    goes to the module's own `cmd_*` function (the two noun groups through their own
-    `_dispatch_cycle` / `_dispatch_instruction`), so the logic, the files and the exit behaviour are
-    the real ones; only the process start is gone.
+    the shipped tool works, and the command lists it builds are exactly what this runs. The parsed
+    namespace goes to the module's own `route` (the entry's one dispatch table), so the logic, the
+    files and the exit behaviour are the real ones; only the process start is gone.
 
     `_SPEC` and the two groups' nested tables are the one thing restated from the CLI: which flag is
     called what, which positional, and each default. `TestContract` pins that restatement against
@@ -77,7 +76,7 @@ class FastStateManage:
                       '--spawn': ('spawn', False, False),
                       '--spawner': ('spawner', True, None)}),
     }
-    #: `pf cycle <verb>`: the group's eleven verbs, in the same shape as `_SPEC`. `_dispatch_cycle`
+    #: `pf cycle <verb>`: the group's eleven verbs, in the same shape as `_SPEC`. The entry's `route`
     #: is what answers them (keyed off `ns.cycle_command`), so this table and `_CYCLE_CALLS` are one
     #: list of the group's surface: the first is what the argv is parsed with, the second names the
     #: `cmd_*` each verb reaches.
@@ -198,8 +197,9 @@ class FastStateManage:
                 self.stderr = 'usage: state-manage.py instruction {add|list|resolve} ...'
                 return 1
             ns = self._namespace(argv[2:], *self._INSTRUCTION_SPEC[sub])
+            ns.command = argv[0]
             ns.instruction_command = sub
-            return self._call(lambda: mod._dispatch_instruction(ns))
+            return self._call(lambda: mod.route(ns))
         if argv[0] == 'cycle':
             sub = argv[1] if len(argv) > 1 else None
             if sub not in self._CYCLE_SPEC:
@@ -207,11 +207,13 @@ class FastStateManage:
                                + '|'.join(self._CYCLE_CALLS) + '} ...')
                 return 1
             ns = self._namespace(argv[2:], *self._CYCLE_SPEC[sub])
+            ns.command = argv[0]
             ns.cycle_command = sub
-            return self._call(lambda: mod._dispatch_cycle(ns))
+            return self._call(lambda: mod.route(ns))
 
         positional, flags = self._SPEC[argv[0]]
         ns = self._namespace(argv[1:], positional, flags)
+        ns.command = argv[0]
         return self._call(lambda: self._CALLS[argv[0]](mod, ns))
 
     def _call(self, fn) -> int:

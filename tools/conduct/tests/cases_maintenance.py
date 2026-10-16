@@ -10,7 +10,6 @@ regression this channel lives or dies by, and it is the first case here.
 from __future__ import annotations
 
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -319,37 +318,6 @@ class TestMaintenanceThresholds(Base):
         self.assertEqual(pipeline.thresholds_for(sb.cycle()), {})
         self.assertIsNone(sb.cycle().get('policies'))
 
-    def test_the_two_packages_spell_the_threshold_fields_the_same_way(self):
-        """写的那一侧与读的那一侧是同一份约定，两个包各有一份表：这条用例比对它们。
-
-        `conduct_pipeline_impl` 与 `conduct_state` 是两个按路径各自加载的包，import 一个进另一个会
-        绕出一个环，所以两边各写一份字段名 —— 而两份分头长出自己的词，正是同一个字段用一个名字
-        写下去、用另一个名字读回来的来路。
-        """
-        source = (Path(pipeline.__file__).resolve().parent.parent / 'conduct_state'
-                  / 'cycles.py').read_text(encoding='utf-8')
-        found = re.search(r'POLICY_NUMBERS = \(([^)]*)\)', source)
-        self.assertIsNotNone(found, 'the writer side has no numeric policy table')
-        written = tuple(re.findall(r"'([a-z_]+)'", found.group(1)))
-        self.assertEqual(written, tuple(pipeline.POLICY_KEYS))
-
-    def test_the_two_packages_spell_the_word_policies_the_same_way(self):
-        """词表型策略同一条纪律：写侧（cycles.py）与读侧（store.py）各一份表，这条比对它们。
-
-        `spawner` 的词是两份 spawner 脚本的名字：写侧收不出的词根本落不了盘，读侧认不出的词
-        读作没配 —— 两边的候选表分头漂移，就是一条线配了 `zcode` 却读成没配的那种哑坑。
-        """
-        source = (Path(pipeline.__file__).resolve().parent.parent / 'conduct_state'
-                  / 'cycles.py').read_text(encoding='utf-8')
-        found_words = re.search(r'POLICY_WORDS = \(([^)]*)\)', source)
-        self.assertIsNotNone(found_words, 'the writer side has no word policy table')
-        self.assertEqual(tuple(re.findall(r"'([a-z_]+)'", found_words.group(1))),
-                         tuple(pipeline.POLICY_WORDS))
-        for key in pipeline.POLICY_WORDS:
-            found_choices = re.search(rf"'{key}': \(([^)]*)\)", source)
-            self.assertIsNotNone(found_choices, f'the writer side has no choices for {key!r}')
-            self.assertEqual(tuple(re.findall(r"'([a-z_]+)'", found_choices.group(1))),
-                             tuple(pipeline.POLICY_WORD_CHOICES[key]))
 
 class TestMaintenanceScope(Base):
     """领域限定：两个度量归代码这一支，别的线读得到同一个数，但不动。"""

@@ -179,6 +179,19 @@ class TestConfig(unittest.TestCase):
         self.assertIn('max_agents', proc.stderr)
         self.assertIn('config.json', proc.stderr, 'the complaint must name the file to go fix')
 
+    def test_a_quoted_number_on_disk_is_the_same_number(self):
+        """`count` 只问「是不是一个正整数」：盘上写 `"3"` 与写 3 走同一个规则。
+
+        命令行给的是字、盘上给的是 JSON 值，两种输入从同一个门过 —— 一个 kind 的边界只有一处，
+        所以这里放行的正是「写得进的那个形状」。
+        """
+        self.write_project('{"max_agents": "3"}')
+
+        proc = self.state('config', 'get', 'max_agents')
+
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual('3\n', proc.stdout)
+
     def test_a_key_this_tool_does_not_own_survives_a_write(self):
         self.write_project('{"something_else": 1}')
         proc = self.state('config', 'list')

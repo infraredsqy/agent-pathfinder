@@ -1,9 +1,8 @@
 """The `cycle` group: one line of work, and every verb that acts on it.
 
 Owns all eleven verbs of `pf cycle` -- create / start / rename / status / policy / list / current /
-show / hold / close / retry -- plus the vocabulary a cycle carries: VALID_TAGS,
-_parse_cycle_tags and the policy table. `_dispatch_cycle` is the group's own dispatch, so the
-surface and the code that answers it are one list.
+show / hold / close / retry -- plus the vocabulary a cycle carries: VALID_TAGS, `_parse_cycle_tags`
+and the policy table (`POLICY_*`, and `cycle_policy` as the one reading of it).
 """
 
 import json
@@ -61,6 +60,10 @@ POLICY_NUMBERS = ('test_seconds_limit', 'issue_pool_weight_limit')
 #: 落进状态文件就是另一台机器上的死值；要路径的场合走单发 `--spawner <路径>`。
 POLICY_WORDS = ('spawner',)
 POLICY_WORD_CHOICES = {'spawner': ('dsh', 'zcode')}
+#: 合法策略键的并集：四张表就是全部来源，这里算一次 —— `cycle policy` 的报错与 argparse 的
+#: `choices`（经 `state-manage.py`）都取这一份。
+POLICY_KEYS = tuple(sorted(set(POLICY_VALUES) | set(POLICY_NUMBERS) | set(POLICY_COUNTS)
+                           | set(POLICY_WORDS)))
 
 
 def cycle_policy(cycle: dict) -> dict:
@@ -251,9 +254,7 @@ def cmd_cycle_policy(cycle_id: str, key: str, value: str) -> None:
             sys.exit(1)
         stored = value
     else:
-        valid = sorted(set(POLICY_VALUES) | set(POLICY_NUMBERS) | set(POLICY_COUNTS)
-                       | set(POLICY_WORDS))
-        print(f'Error: unknown policy {key!r}; valid keys: {valid}',
+        print(f'Error: unknown policy {key!r}; valid keys: {list(POLICY_KEYS)}',
               file=sys.stderr)
         sys.exit(1)
 
@@ -297,7 +298,11 @@ def cmd_cycle_start(cycle_id: str, title: str | None,
     _require_tags(tags, 'pf cycle start')
     with _ledger_lock():
         project = _resolve_project_root(Path.cwd())
-        ranked = pipeline.ranked_ready_nodes(project, tags=tags)
+        # 开局钉几格与收尾补几格是同一件事：`parallel` 说这条线同时握几个节点。这条线刚落盘，
+        # 记录里还没有 `policies`，所以此刻的 `parallel` 就是缺省值 —— 而这一个数同时是这次
+        # 挑选的 `limit` 与开局钉几格，收尾那条路取的也是它（`cycle_policy` 是唯一来源）。
+        cap = cycle_policy({})['parallel']
+        ranked = pipeline.ranked_ready_nodes(project, limit=cap, tags=tags)
         if not ranked:
             blocked = pipeline.tag_blocked_ready_nodes(project, tags)
             if blocked:
@@ -314,15 +319,12 @@ def cmd_cycle_start(cycle_id: str, title: str | None,
         cmd_cycle_create(cycle_id, title, force=force, tags=tags)
         state = _read_state()
         cycle = _find_cycle(state, cycle_id)
-        cap = cycle_policy(cycle)['parallel']
         holding = [{'id': n['id'], 'since': cycle['created_at']} for n in ranked[:cap]]
         _set_holding(cycle, holding)
         _write_state(state)
-    others = len(ranked) - len(holding)
+    # 名单是按这条线的 `parallel` 取的，所以「后面还排着多少」这次读不出来 —— 不报，也不猜。
     print(f'STARTED: cycle "{cycle_id}" → {node.get("title", node["id"])}'
-          + (f'  ({len(holding)} node(s) pinned; {others} more ready node(s) behind)'
-             if len(holding) > 1 else
-             f'  ({others} more ready node(s) behind it)' if others else ''))
+          + (f'  ({len(holding)} node(s) pinned)' if len(holding) > 1 else ''))
 
 
 # ── the group's queries ──────────────────────────────────────────────────────
@@ -533,34 +535,4 @@ def cmd_cycle_rename(cycle_id: str, title: str) -> None:
 def _launch_dir(cycle_id: str, node_id: str) -> Path:
     """`.pf/meta/launch/<cycle>/<node>/` —— 派发那一格的落点（prompt / claim / started 都在里面）。"""
     return meta_dir_for(None) / 'launch' / cycle_id / node_id
-
-
-# ── the group's own dispatch ─────────────────────────────────────────────────
-
-def _dispatch_cycle(args) -> None:
-    """`pf cycle <verb>`: the group answers its own verbs, so this list is the surface."""
-    verb = getattr(args, 'cycle_command', None)
-    handlers = {
-        'create': lambda: cmd_cycle_create(args.id, args.title,
-                                           getattr(args, 'force', False),
-                                           getattr(args, 'tags', None)),
-        'start': lambda: cmd_cycle_start(args.id, args.title,
-                                         getattr(args, 'force', False),
-                                         getattr(args, 'tags', None)),
-        'rename': lambda: cmd_cycle_rename(args.id, args.title),
-        'status': lambda: cmd_cycle_status(args.id, args.status),
-        'policy': lambda: cmd_cycle_policy(args.id, args.key, args.value),
-        'list': lambda: cmd_cycle_list(),
-        'current': lambda: cmd_cycle_current(),
-        'show': lambda: cmd_cycle_show(args.id, args.node),
-        'hold': lambda: cmd_cycle_hold(args.id, args.node),
-        'close': lambda: cmd_cycle_close(args.id, args.node, args.result),
-        'retry': lambda: cmd_cycle_retry(args.id, args.node, getattr(args, 'summary', None),
-                                         getattr(args, 'drop', False)),
-    }
-    fn = handlers.get(verb)
-    if fn is None:
-        print('usage: state-manage.py cycle {' + '|'.join(handlers) + '} ...', file=sys.stderr)
-        sys.exit(1)
-    fn()
 

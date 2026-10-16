@@ -57,7 +57,8 @@ __all__ = [
     # store: the read/write layer over the ledger (`.pf/`) and the doors off it
     'VALID_NODE_RESULTS', 'ISO_FMT', 'PARALLEL_DEFAULT', 'LEDGER_NAME', 'INIT_MARKERS',
     'ledger_dir_for', 'meta_dir_for', 'nodes_dir_for', 'require_initialized',
-    '_now', '_atomic_write', '_read_json', '_read_state', '_write_state', '_find_cycle',
+    '_now', '_atomic_write', '_read_json', '_read_state', '_read_dag', '_write_state',
+    '_find_cycle', '_instructions_path', '_read_instructions', '_write_instructions',
     '_signal_path', '_read_signal', '_write_signal', 'bind_paths', '_cycles_holding_node',
     '_closed_steps_of_node', '_holding_of', '_holding_ids', '_set_holding',
     # store: the cycle-status vocabulary
@@ -69,23 +70,21 @@ __all__ = [
     # cycles: the `cycle` group, the tag vocabulary, and the policies a line carries
     'VALID_TAGS', '_parse_cycle_tags',
     'POLICY_DEFAULTS', 'POLICY_VALUES', 'POLICY_NUMBERS', 'POLICY_COUNTS',
-    'POLICY_WORDS', 'POLICY_WORD_CHOICES', 'cycle_policy',
+    'POLICY_WORDS', 'POLICY_WORD_CHOICES', 'POLICY_KEYS', 'cycle_policy',
     'cmd_cycle_create', 'cmd_cycle_start', 'cmd_cycle_rename', 'cmd_cycle_status',
     'cmd_cycle_policy', 'cmd_cycle_list', 'cmd_cycle_current', 'cmd_cycle_show',
-    'cmd_cycle_hold', 'cmd_cycle_close', 'cmd_cycle_retry', '_dispatch_cycle',
+    'cmd_cycle_hold', 'cmd_cycle_close', 'cmd_cycle_retry',
 
     # nextcmd: the closing call's by-node resolution
     'resolve_cycle_for_node', 'describe_holders',
 
     # instruct: the instruction account, the scope vocabulary, and what is visible from where
-    'VALID_SCOPES', 'VALID_TARGETS', 'VALID_INSTRUCTION_STATES',
-    'APPLIED_STATES', 'CONSTRAINT_MARKS', 'CONSTRAINT_MARK_LABELS', '_scope_rules',
-    '_scope_from_flag', '_instructions_path', '_read_instructions', '_write_instructions',
-    '_retired', '_is_live', '_cycle_of_node', '_position', '_cycle_statuses', '_dag_nodes',
-    '_visible_from_here', '_ambiguous_cycle_view', '_fold', '_last_applied',
+    'valid_scopes', 'VALID_TARGETS', 'RESOLVE_STATES',
+    'CONSTRAINT_MARKS', 'CONSTRAINT_MARK_LABELS', '_scope_rules',
+    '_scope_from_flag', '_retired', '_is_live', '_cycle_of_node', '_position', '_dag_nodes',
+    '_active_cycles', '_fold', '_last_applied',
     '_instruct_empty_lines', '_nothing_visible_lines', 'SCOPE_WORDS', '_render_constraints',
     'cmd_instruction_add', 'cmd_instruction_list', 'cmd_instruction_resolve',
-    '_dispatch_instruction',
 
     # nextcmd / maintenance / init
     'cmd_next', 'cmd_dispatch', 'cmd_clean_temp', 'cmd_init', 'cmd_register',
@@ -99,10 +98,9 @@ __all__ = [
     'global_config_path', 'project_config_path', 'layer_path', 'default_of',
     'read_layer', 'resolve_config', 'config_sources', 'write_value',
     'cmd_config_list', 'cmd_config_get', 'cmd_config_set', 'cmd_config_unset',
-    '_dispatch_config',
 
     # session: the node's own conversations -- the note under `.pf/meta/sessions/`, and the import
-    'cmd_session_show', 'cmd_session_list', 'cmd_session_import', '_dispatch_session',
+    'cmd_session_show', 'cmd_session_list', 'cmd_session_import',
 ]
 
 

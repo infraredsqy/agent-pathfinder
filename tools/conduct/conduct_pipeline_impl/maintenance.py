@@ -31,9 +31,9 @@ import re
 from pathlib import Path
 
 from . import seam
-from .store import cycle_policy, load_dag
+from .store import _state_module, cycle_policy, load_dag
 
-__all__ = ['POLICY_KEYS', 'READING_KEYS', 'MAINTENANCE_ACTION', 'NEW_NODE', 'METRICS',
+__all__ = ['POLICY_NUMERIC_KEYS', 'READING_KEYS', 'MAINTENANCE_ACTION', 'NEW_NODE', 'METRICS',
            'crossed', 'reading_of', 'thresholds_for', 'asked_readings', 'pool_weight', 'insertion',
            'is_add_slot', 'read_new_node_id', 'maintenance_spec', 'maintenance_title', 'substitute',
            'write_spec', 'maintenance_nodes_of_metric', 'maintenance_tag']
@@ -99,10 +99,9 @@ METRICS = (
     },
 )
 
-#: Every numeric policy this channel reads, in the same order the CLI reference lists them. The
-#: writer's own copy is `conduct_state.cycles.POLICY_NUMBERS` (the two packages are loaded by path
-#: independently, so a shared import would buy a cycle for one tuple); a test compares them.
-POLICY_KEYS = ('test_seconds_limit', 'issue_pool_weight_limit')
+#: Every numeric policy this channel reads: `conduct_state.cycles.POLICY_NUMBERS` 的正本，按写侧
+#: 那个次序。名字说的是这条通道读的哪一类键（`parallel` 那样的整数键不在其中），表本身只有一处。
+POLICY_NUMERIC_KEYS = _state_module('cycles').POLICY_NUMBERS
 #: The ticket-sourced readings, in METRICS order: the ones a worker is asked for. `asked_readings`
 #: narrows this to the lines a given cycle actually carries.
 READING_KEYS = tuple(metric['reading'] for metric in METRICS if metric['source'] == 'ticket')
@@ -157,7 +156,7 @@ def thresholds_for(cycle: dict | None) -> dict:
     that has nothing to do with code simply does not carry them.
     """
     policy = cycle_policy(cycle or {})
-    return {key: policy[key] for key in POLICY_KEYS if key in policy}
+    return {key: policy[key] for key in POLICY_NUMERIC_KEYS if key in policy}
 
 
 def asked_readings(cycle: dict | None) -> list:
