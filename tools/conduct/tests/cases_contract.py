@@ -33,8 +33,8 @@ __all__ = [
 class TestNodeOwnershipAcrossCycles(Base):
     """一个节点一次只归一条 cycle：收尾认节点，挑人不碰别人正拿着的。
 
-    `--after` is aimed by NODE, not by cycle: a round used to be the unit, and the node that round
-    carried is unique, so the closing call can settle the right line without being told its name.
+    `--after` is aimed by NODE, not by cycle: a node belongs to exactly one line, so the closing call
+    can settle the right line without being told its name.
     """
 
     def two_lines(self):
@@ -177,8 +177,7 @@ class TestNodeOwnershipAcrossCycles(Base):
     def test_a_next_aimed_at_an_inactive_line_neither_picks_nor_dispatches(self):
         """驱动型 `next` 不碰一条不是 active 的线 —— 不管别的线在不在跑。
 
-        以前这里的判据是「这个项目有没有 active 的 cycle」：别的线 active 时，一条停住的线会被
-        当成可以驱动，于是它被挑人、被派发，而人从来没让它开工。
+        判据落在这条线自己的状态上：别的线在跑，一条停住的线照样不许被挑人、被派发 —— 人没让它开工。
         """
         sb, a, bridge, tail = self.two_lines()
         sb.set_cycle_status('one', 'inactive')

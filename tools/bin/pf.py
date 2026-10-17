@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """`pf`: one command in front of the tools.
 
-Every skill used to spell out a full `python .../state-manage.py ...` path, which tied the prose to
-one machine's install layout. They now say `pf next`, `pf handoff`, `pf issue top` --
-where the tools live is resolved here, once, from this file's own location.
+Every skill says `pf next`, `pf handoff`, `pf issue top`: where the tools live is resolved here, once,
+from this file's own location, so the prose reads the same on every machine.
 
 Everything else forwards to a tool, keeping the tool's own subcommand names so the docs stay
 greppable. Which words those are is the table further down, and `--help` prints that same table. A

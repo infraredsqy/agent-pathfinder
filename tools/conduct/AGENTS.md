@@ -29,4 +29,3 @@
   不许 `dispatch` / `--spawn`。
 - 新增测试不许把 `--spawn` 拼进命令串；临时项目用 `tempfile` 沙箱，跑完清掉。ZCode 侧的沙箱用
   `ZCODE_DATA_BASE_DIR` 指向临时目录（先例：`tests/cases_zcode.py`）。
-- 2026-10-03 出过一次真实事故：测试把管线拉起来，开出了烧 token 的真会话。这条由此而来。

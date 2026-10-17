@@ -158,7 +158,7 @@ class TestHandoff(Base):
         self.assertEqual(sb.next()['action'], 'wait')
 
     def test_it_never_asks_a_spawner_for_anything(self):
-        """No test may ever call dsh-spawn.ps1, and this command no longer wants to."""
+        """No test may ever call dsh-spawn.ps1, and this command stops short of asking one for anything."""
         sb, first = self.started()
         proc = sb.handoff('cyc', NODE, 'completed', 'done', self.outputs(), dry_run=True)
         self.assertNotIn('dry-run', proc.stdout)

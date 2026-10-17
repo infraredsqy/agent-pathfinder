@@ -9,8 +9,7 @@
 # 降级标记的**形状与落点**有一处正本：同目录的 `marker.py`（python 侧与条子那一拍用它）。这一层
 # 按同一份合同**自己写**，是一条例外，理由是物理上的：spawner 跑起来的那台机器、那个时刻可能
 # 没有 python，而 PowerShell 没法 import 一个 python 模块 —— 这条写入恰恰是链断掉之后唯一留给人
-# 的入口，它不能因为解释器不在而消失（改这件事之前，这一层是调 `marker.py` 写的，于是没有 python
-# 就没有标记）。代价是形状有两份实现，所以 `conduct/tests/cases_cli.py` 的 `TestTheSpawnerShell`
+# 的入口，它不能因为解释器不在而消失。代价是形状有两份实现，所以 `conduct/tests/cases_cli.py` 的 `TestTheSpawnerShell`
 # 拿一条等价性用例把两边钉住：同一组键、同一句人话、同落点（`-MarkerPath`）、二次失败不覆盖、
 # 清后不在。改形状时两处一起改，用例当场判红。
 #

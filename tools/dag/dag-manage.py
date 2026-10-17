@@ -87,7 +87,7 @@ def _resolve_project_root(cwd: Path) -> Path:
 
     `conduct_state.store` 与 issue 侧各有一份同样的判定：worktree 根的 `.git` 是文件，指向
     `<主树>/.git/worktrees/<名字>`，`worktrees` 上三级即主树根；`.git/modules/...` 是
-    submodule，不算。主树没有 `.pf/` 时不挪，让老错误照老样子响。
+    submodule，不算。主树没有 `.pf/` 时不挪，让后面的错误当场响。
     """
     dot_git = cwd / '.git'
     if not dot_git.is_file():
@@ -196,7 +196,7 @@ def _forget_session(node_id: str) -> None:
     except (OSError, ValueError) as e:
         print(f'Warning: the session note for {node_id} was not removed: {e}', file=sys.stderr)
 
-#: 卡片状态只有三个词，写出去的就是这三个：`todo` 在局中未交付、`shelved` 出局等人、
+#: 节点状态只有三个词，写出去的就是这三个：`todo` 在局中未交付、`shelved` 出局等人、
 #: `completed` 已交付。读到一个词表外的词就照原样读它，绝不替它猜一个词。
 #: 「正在被某条 cycle 跑」不进状态（那样的节点还是 `todo`），它记在 state.json 的持有关系里。
 VALID_STATUSES = {'todo', 'shelved', 'completed'}
@@ -791,7 +791,7 @@ def cmd_info(args):
         'depended_by': dep_by_list,
         # 和 list 说的必须是同一件事（见 _node_ready）：自己是 todo、依赖都 done。
         'ready': graph._node_ready(node, all_nodes),
-        # shelved 的节点不排优先级（它不在可跑的集合里），所以两项分数照旧归零。
+        # shelved 的节点不排优先级（它不在可跑的集合里），所以两项分数都归零。
         'urgency_level': 0 if blocked else urgency_scores.get(uid, 0),
         'importance_score': 0 if blocked else imp_scores.get(uid, 0),
     }

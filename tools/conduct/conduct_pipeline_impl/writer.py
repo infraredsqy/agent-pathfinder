@@ -51,9 +51,9 @@ def resolve_spawner(project, cycle_id: str | None, cli_value: str | None = None)
 
     `--spawner`（调用方这一次的点名叫什么就是什么）> 这条线自己的 `spawner` 策略（
     `pf cycle policy <cycle> spawner dsh|zcode`，随线记录走）> `DSH_CONDUCT_SPAWNER`（这台机器）
-    > 宿主自认 > `dsh`。线没配策略、调用没带旗子，落回 `SPAWNER_SCRIPT` —— 与这条函数存在之前
-    完全同一条路，所以没配的线行为一字不变。`SPAWNER_SCRIPT` 而不是现算宿主：它是入口那一道可
-    替换的缝（`seam.bind` 的约定），替换它的调用方在线策略缺席时仍被尊重。
+    > 宿主自认 > `dsh`。线没配策略、调用没带旗子，落回 `SPAWNER_SCRIPT` —— 没配的线行为不变。
+    `SPAWNER_SCRIPT` 而不是现算宿主：它是入口那一道可替换的缝（`seam.bind` 的约定），替换它的
+    调用方在线策略缺席时仍被尊重。
     """
     host = _host()
     if cli_value:
@@ -110,12 +110,12 @@ def _claim_spawn(project: Path, cycle_id: str, node_id: str) -> tuple[bool, Path
     mtime alone would take the claim over mid-flight), and only a dead writer falls through to the
     `SPAWN_CLAIM_STALE_SECONDS` takeover.
 
-    Taking a dead claim over used to be stat → unlink → rebuild, and two takers in that window
-    would delete each other's FRESH claim. So the unlink is followed by the create itself as the
-    re-check: the replacement is built with `O_CREAT | O_EXCL` again, and if it loses -- someone
-    rebuilt the claim between the unlink and the open -- the loop re-reads THAT claim's pid and
-    mtime and judges it from the top. Three rounds, then give up with the refusal; a caller that
-    really is alone will win one of them, and a caller that is not must not win any.
+    Two takers in the window between an unlink and a rebuild would delete each other's FRESH claim,
+    so the unlink is followed by the create itself as the re-check: the replacement is built with
+    `O_CREAT | O_EXCL` again, and if it loses -- someone rebuilt the claim between the unlink and the
+    open -- the loop re-reads THAT claim's pid and mtime and judges it from the top. Three rounds,
+    then give up with the refusal; a caller that really is alone will win one of them, and a caller
+    that is not must not win any.
     """
     directory = launch_dir(project, cycle_id) / node_id
     directory.mkdir(parents=True, exist_ok=True)
@@ -263,9 +263,9 @@ def clean_launch_dir(project: Path, cycle_id: str, node_id: str) -> None:
 def _prune_launch_dirs(project: Path, cycle_id: str) -> None:
     """Drop the launch dirs of the nodes this cycle no longer holds.
 
-    A successful spawn used to `rmtree` the directory; a node whose session is running needs its
-    footprint kept (that is where the stamp lives), so the directory outlives the spawn and is reaped
-    here instead. 一个节点离开手里就在收尾那一拍，而收尾后面紧跟的就是派发：扫一遍的时机正好。
+    A node whose session is running needs its footprint kept (that is where the stamp lives), so the
+    directory outlives the spawn and is reaped here instead. 一个节点离开手里就在收尾那一拍，而收尾
+    后面紧跟的就是派发：扫一遍的时机正好。
     """
     import shutil
     try:

@@ -127,7 +127,7 @@ def _node_ready(node: dict, all_nodes: dict) -> bool:
     """`ready` 的唯一定义：节点自己是 `todo`，且每个依赖都已 `completed`（或不存在）。
 
     `completed` 的节点不该被推荐（活已经交了），`shelved` 的节点在等人。这比 _is_ready 更窄：
-    依赖满足了但节点自己不是 `todo`，照旧不 ready。
+    依赖满足了但节点自己不是 `todo`，就不 ready。
 
     另一半是**管线的事，这个工具不碰**：一条 cycle 正拿在手上的节点，管线那边自己不挑
     （那是 state.json 里的记录）。所以这里不读 state.json，也不知道 cycle 是什么 ——

@@ -99,7 +99,7 @@ class TestNodeTags(Base):
         sb.add_node(self.W, '写文案', mode='auto', tags=['writing'], deps=[self.K])
         return sb
 
-    # ── 判据表第一行：过滤集里有就绪节点 → 照旧按 DAG 的排序挑第一名 ──────────
+    # ── 判据表第一行：过滤集里有就绪节点 → 按 DAG 的排序挑第一名 ──────────
 
     def test_the_filter_set_only_drops_rows_from_the_dag_ranking(self):
         """过滤集只删行，排序还是 `dag-manage` 那一处实现。
@@ -382,7 +382,7 @@ class TestNodeTags(Base):
     def test_a_tag_filter_never_touches_the_graph(self):
         """过滤是「挑谁」的事：`list --tags` 不改状态、不改依赖，也不给节点判死。
 
-        挡住一个节点 = 这一格不挑它。它照旧 `todo`、照旧 ready、依赖边原样。
+        挡住一个节点 = 这一格不挑它。它仍是 `todo`、仍是 ready、依赖边原样。
         """
         sb = self.make()
         run_dag(sb.root, 'add', '写代码', '--tags', 'coding')

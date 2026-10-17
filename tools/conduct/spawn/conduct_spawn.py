@@ -120,7 +120,7 @@ def argv_for(spawner, cycle_id: str, prompt_file: str | None, project, *, marker
     writes it in PowerShell as an exception that cannot be shared (a spawner may run where there is no
     python), with a test pinning the two implementations equal.
     `-PythonExe` is the interpreter already running the caller, for a host that needs one (ZCode's
-    dispatcher); the marker write no longer goes through it.
+    dispatcher); the marker write does not go through it.
     """
     argv = ['pwsh', '-NoProfile', '-File', str(spawner), '-CycleId', str(cycle_id)]
     if prompt_file:

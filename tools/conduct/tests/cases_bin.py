@@ -122,7 +122,7 @@ class TestPfCmdShim(unittest.TestCase):
         self.assertIn('python', proc.stderr)
 
     def test_the_py_launcher_is_the_fallback_that_runs_it(self):
-        """`where python` 找不到、`where py` 找得到：走 py 那一支，命令照跑一次、退出码照旧。
+        """`where python` 找不到、`where py` 找得到：走 py 那一支，命令照跑一次、退出码还是它的。
 
         PATH 里留 `System32` 是 `where` 自己要用的：整条 PATH 被清空时 `where` 本身都起不来，
         那时量到的是探针还在不在，与解释器无关。

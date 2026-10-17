@@ -103,7 +103,7 @@ class TestAddNotesTheBirthSession(Base):
         self.assertEqual({'discussion': [SESSION]},
                          {role: ids_of(payload['sessions'], role)
                           for role in ('discussion', 'run') if payload['sessions'][role]})
-        self.assertNotIn('dsh_session', payload, '`info` no longer reads the field that used to hold it')
+        self.assertNotIn('dsh_session', payload, '`info` reads the sessions it knows, not a per-node spawner field')
 
     def test_rm_takes_the_note_with_the_node(self):
         sb = self.make()
@@ -329,7 +329,7 @@ class TestTheRecordDoors(Base):
         other.instruct('别人那边的约束')
 
         store = self.state_package().store
-        store.bind_paths(str(mine.root / '.pf'))        # 进程内那条路的绑定照旧
+        store.bind_paths(str(mine.root / '.pf'))        # 进程内那条路的绑定留在原处
 
         self.assertEqual({'cyc'}, {c['id'] for c in store._read_state()['cycles']})
         self.assertEqual({'other'}, {c['id'] for c in store._read_state(str(other.root))['cycles']})

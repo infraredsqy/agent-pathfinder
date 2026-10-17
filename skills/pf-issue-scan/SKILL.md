@@ -24,7 +24,7 @@ disable-model-invocation: true
 
 按**模块 × 维度**拆面（带写工具的 subagent，发现要落文件），一个面只盯一格。维度：重复代码／职责越界／结构问题。模块只有一两个时，自己裁量要不要合并维度。
 
-面拆完之后按在飞上限收起批来：`pf config max_agents` 是上限，**一个 subagent 可以装几个面**——怎么并、什么时候分批，见 [`../shared/pf/agents.md`](../shared/pf/agents.md)。
+面拆完之后按在飞上限收起批来：`pf config max_agents` 是上限，**一个 subagent 可以装几个面**——怎么并、什么时候分批，见 [`../shared/pf/subagents.md`](../shared/pf/subagents.md)。
 
 每个 prompt 必须给：
 

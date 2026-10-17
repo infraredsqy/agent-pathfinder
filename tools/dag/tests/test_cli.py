@@ -339,7 +339,7 @@ class TestTheModuleBindsNothingAtImport(ProjectCase):
 
 
 class TestTheSessionNoteIsBestEffort(ProjectCase):
-    """便条是管道物：写不成、删不成，都只警告一行，图上那一笔照旧落地。"""
+    """便条是管道物：写不成、删不成，都只警告一行，图上那一笔照常落地。"""
 
     def boom(self):
         """一份加载就炸的 session-note：模块里那两个动作都从这里过。"""
