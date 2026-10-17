@@ -26,7 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import Base, NODE  # noqa: E402
 from harness import (HANDOFF_PY, SIGNAL_PY, TOOLS_DIR, _child_env, _fresh_module, _run_proc,
-                     init_markers, load_pipeline, run_dag, run_signal, shared_loader)  # noqa: E402
+                     init_markers, load_pipeline, run_dag, run_signal, shared_loader,
+                     shipped_sources)  # noqa: E402
 
 __all__ = ['TestTheOneLoader', 'TestOneSharedDoor', 'TestOneReaderOneWording',
            'TestTheLockSerialisesANote', 'TestTheMarkerWaitsOutAReader', 'TestTheMarkerContract',
@@ -53,24 +54,9 @@ def _shared(name, filename):
     return shared_loader().load_by_path(name, SHARED_DIR / filename, register=True, reuse=True)
 
 
-def _shipped_sources():
-    """Every Python file the tools ship. The tests are not among them: the harness keeps its own
-    fresh-load helper on purpose, and a case's own loader is not a shipped mechanism."""
-    return ([CONDUCT_DIR / 'ledger-merge.py']
-            + [path for cluster in ('pipeline', 'spawn')
-               for path in sorted((CONDUCT_DIR / cluster).glob('*.py'))]
-            + sorted((CONDUCT_DIR / 'conduct_pipeline_impl').glob('*.py'))
-            + sorted((CONDUCT_DIR / 'conduct_state').glob('*.py'))
-            + sorted((CONDUCT_DIR / 'ledger_merge').glob('*.py'))
-            + sorted((TOOLS_DIR / 'dag').glob('*.py'))
-            + sorted((TOOLS_DIR / 'issue').glob('*.py'))
-            + sorted(SHARED_DIR.glob('*.py'))
-            + sorted((TOOLS_DIR / 'bin').glob('*.py')))
-
-
 def _definitions():
     """(file, name) for every top-level function and class the shipped tools define."""
-    for path in _shipped_sources():
+    for path in shipped_sources():
         for node in ast.parse(path.read_text(encoding='utf-8')).body:
             if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
                 yield path, node.name
@@ -179,7 +165,7 @@ class TestOneSharedDoor(unittest.TestCase):
         """A neighbour is loaded by path. Putting the tool tree on `sys.path` is what hands a second
         caller the first caller's modules."""
         offenders = set()
-        for path in _shipped_sources():
+        for path in shipped_sources():
             for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
                 if (isinstance(node, ast.Attribute) and node.attr == 'path'
                         and isinstance(node.value, ast.Name) and node.value.id == 'sys'):
@@ -194,7 +180,7 @@ class TestOneSharedDoor(unittest.TestCase):
         call, so a file that already has its bootstrap cannot gain a second one beside it. The only
         site that does not name the shared loader is the loader's own, which takes the name as an
         argument."""
-        sites = {path: _path_load_calls(path) for path in _shipped_sources()}
+        sites = {path: _path_load_calls(path) for path in shipped_sources()}
         crowded = sorted(f'{_relative(path)}: {len(found)} load-by-path call sites'
                          for path, found in sites.items() if len(found) > 1)
         self.assertEqual([], crowded, 'a shipped file loads by path more than once')
@@ -234,7 +220,7 @@ class TestOneSharedDoor(unittest.TestCase):
         各文件自带一份的话，`replace_with_retry` 往后的每一次修改都会漏掉别人。
         """
         callers = []
-        for path in _shipped_sources():
+        for path in shipped_sources():
             for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
                 if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                         and node.func.attr == 'replace'
@@ -442,7 +428,7 @@ class TestTheMarkerContract(Base):
 
     def test_the_marker_is_spelled_in_exactly_one_file(self):
         owners = sorted({_relative(path)
-                         for path in set(_shipped_sources()) | set(_spawn_sources())
+                         for path in set(shipped_sources()) | set(_spawn_sources())
                          if 'CONDUCT-CALLBACK-FAILED' in path.read_text(encoding='utf-8')})
         self.assertEqual(['conduct/spawn/marker.py'], owners,
                          '标记的文件名被抄到了第二处：改一处漏一处的正是这种抄写')
@@ -493,20 +479,20 @@ class TestTheMarkerContract(Base):
         self.assertTrue(path.is_file(), '标记落在了工具不读的位置（自拼 `.pf` 的那条路）')
 
     def test_the_two_writers_leave_one_shape(self):
-        """条子那一拍写下的标记，与正本的形状、那句人话一字不差。"""
+        """`handoff` 那一拍写下的标记，与正本的形状、那句人话一字不差。"""
         sb = self.make()
         marker = _marker_module()
         handoff = _fresh_module('handoff_marker_shape_case', HANDOFF_PY)
 
         with contextlib.redirect_stderr(io.StringIO()):
-            handoff._write_marker(sb.root, 'cyc', 'advance', '条子那一拍断了')
+            handoff._write_marker(sb.root, 'cyc', 'plan', '条子那一拍断了')
 
         written = json.loads(marker.marker_path(sb.root, 'cyc').read_text(encoding='utf-8'))
-        self.assertEqual(sorted(marker.record('cyc', 'advance', 'x')), sorted(written))
+        self.assertEqual(sorted(marker.record('cyc', 'plan', 'x')), sorted(written))
         self.assertEqual(marker.DEFAULT_NOTE, written['note'])
         self.assertEqual({}, written['extra'], '没有宿主事实时也给一个空槽，形状不随调用方变')
         self.assertEqual('cyc', written['cycle_id'])
-        self.assertEqual('advance', written['phase'])
+        self.assertEqual('plan', written['phase'])
 
     def test_the_write_is_the_retrying_one(self):
         """写标记走的不是裸 `os.replace`：读者此刻正开着目标文件，重试该把它救回来。"""

@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import ACTION_VOCABULARY, Base, NODE, NODE2, NODE3, pipeline, normalise  # noqa: E402
 from harness import (  # noqa: E402
-    CONDUCT_DIR, DAG_MANAGE, Sandbox, WorkerSession, patched,
+    CONDUCT_DIR, Sandbox, WorkerSession, patched,
     _dag_hook as harness_dag_hook,
 )
 
@@ -597,12 +597,8 @@ class TestOneChildProcessPath(Base):
             seen.append([str(a) for a in argv])
             return real(argv, cwd)
 
-        with harness_dag_hook(sb.root):
-            pipeline._capture = spy
-            try:
-                action = pipeline.plan(sb.root, 'cyc')
-            finally:
-                pipeline._capture = real
+        with harness_dag_hook(sb.root), patched(pipeline, '_capture', spy):
+            action = pipeline.plan(sb.root, 'cyc')
 
         self.assertEqual(action['action'], 'open_node', action)
         self.assertTrue([argv for argv in seen if Path(argv[1]).name == 'dag-manage.py'],

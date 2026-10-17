@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from harness import Driver, Sandbox, load_pipeline
+from harness import Driver, PIPELINE_PATH, STATE_MANAGE, Sandbox, load_pipeline, run_argv
 
 __all__ = ['ACTION_VOCABULARY', 'Base', 'NODE', 'NODE2', 'NODE3', 'pipeline', 'normalise', 'skill_of']
 
@@ -75,6 +75,14 @@ class Base(unittest.TestCase):
         sb = Sandbox(**kw)
         self.addCleanup(sb.close)
         return sb
+
+    def cli(self, sb, *args):
+        """The shipped `state-manage.py`, as a real process against the sandbox."""
+        return run_argv([STATE_MANAGE, *args], cwd=sb.root, check=False)
+
+    def pipeline_cli(self, sb, *args):
+        """`conduct_pipeline.py` as a real process: the module's own entry, driven the shipped way."""
+        return run_argv([PIPELINE_PATH, *args], check=False)
 
     def run_to_stop(self, sb, cycle='cyc', closer=None, worker=None, max_steps=80):
         driver = Driver(sb, cycle, closer=closer, worker=worker, max_steps=max_steps)

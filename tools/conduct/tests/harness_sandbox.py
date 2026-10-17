@@ -335,7 +335,7 @@ class Sandbox:
         for a spawn is spelled there and nowhere else.
         """
         argv = ['next', '--json'] + (['--plan'] if plan else []) + [str(a) for a in args]
-        proc = self._run_cli(argv, _child_env())
+        proc = hproc.run_state_manage(self.root, *argv, check=False, env=_child_env())
         if check and proc.returncode != 0:
             raise AssertionError(f'next {argv} failed (rc={proc.returncode}):\n'
                                  f'{proc.stdout}\n{proc.stderr}')
@@ -365,7 +365,7 @@ class Sandbox:
         """
         argv, env = self._spawn_argv(['next', '--json', *[str(a) for a in args], SPAWN_FLAG],
                                     spawner, dry_run)
-        proc = self._run_cli(argv, env)
+        proc = hproc.run_state_manage(self.root, *argv, check=False, env=env)
         if check and proc.returncode != 0:
             raise AssertionError(f'next {argv} failed (rc={proc.returncode}):\n'
                                  f'{proc.stdout}\n{proc.stderr}')
@@ -374,7 +374,7 @@ class Sandbox:
     def _spawn_proc(self, argv, spawner=None, dry_run=True, check=True):
         """One CLI command line that may start a session, on the caller's own rail."""
         argv, env = self._spawn_argv(argv, spawner, dry_run)
-        proc = self._run_cli(argv, env)
+        proc = hproc.run_state_manage(self.root, *argv, check=False, env=env)
         if check and proc.returncode != 0:
             raise AssertionError(f'{" ".join(argv)} failed (rc={proc.returncode}):\n'
                                  f'{proc.stdout}\n{proc.stderr}')
@@ -395,11 +395,6 @@ class Sandbox:
                 'a spawn with no drill and no stand-in spawner would reach this host\'s real one')
             env.pop(SPAWN_DRY_RUN, None)
         return argv, env
-
-    def _run_cli(self, argv, env):
-        return subprocess.run([sys.executable, '-X', 'utf8', str(STATE_MANAGE), *argv],
-                              cwd=str(self.root), capture_output=True, text=True,
-                              encoding='utf-8', errors='replace', env=env)
 
     def plan_for(self, cycle_id, *extra):
         """`plan` aimed at a named cycle (the default path uses the single active one)."""
