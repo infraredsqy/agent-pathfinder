@@ -336,4 +336,44 @@ class TestCleanTemp(Base):
         self.assertIn('state.json', proc.stderr)
         self.assertTrue(sb.temp_dir(NODE).is_dir(), 'state.json 读不懂时一个 temp 都不许动')
 
+    def test_the_listing_run_names_what_it_would_sweep_and_removes_nothing(self):
+        """不给 `--yes`：把可清的念一遍就收，盘上一个字节都不动 —— 包括真会被清掉的那一格。"""
+        sb = self.make()
+        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE2, '另一格', mode='auto')
+        sb.start_cycle()
+        sb.add_temp(NODE, 'held.txt')                  # 被握着：只念，不扫
+        sb.add_temp(NODE2, 'free.txt')                 # 没被握着：这一趟也不扫
+        before = sb.tree_hashes()
+
+        proc = sb.clean_temp()
+
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn(NODE2[:8], proc.stdout, '可清的那一格该被念到')
+        self.assertIn(NODE[:8], proc.stdout, '跳过的那一格也该被念到')
+        self.assertEqual(before, sb.tree_hashes(), '没有 --yes 的一趟动过盘')
+
+    def test_a_named_node_is_swept_and_nothing_outside_its_temp_moves(self):
+        """`--node` 只扫点名的那一格：spec、state.json、ideas.json 与别的节点的 temp 一字不动。"""
+        sb = self.make()
+        for uid, title in ((NODE, '写代码'), (NODE2, '写文案'), (NODE3, '第三格')):
+            sb.add_node(uid, title, mode='auto')
+        sb.start_cycle()
+        held = sb.current_node()
+        target, untouched = [uid for uid in (NODE, NODE2, NODE3) if uid != held]
+        for uid in (held, target, untouched):
+            sb.add_temp(uid, 'probe.txt')
+        ledger = {str(path): path.read_bytes() for path in
+                  (sb.root / '.pf' / 'state.json', sb.root / '.pf' / 'ideas.json',
+                   sb.root / '.pf' / 'nodes' / target / 'spec.md')}
+
+        proc = sb.clean_temp(node=target, yes=True)
+
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertFalse(sb.temp_dir(target).exists(), '点名的那一格该被扫掉')
+        self.assertTrue(sb.temp_dir(held).is_dir(), '被握着的另一格不该动')
+        self.assertTrue(sb.temp_dir(untouched).is_dir(), '没点名的那一格不该动')
+        self.assertEqual(ledger, {path: Path(path).read_bytes() for path in ledger},
+                         'temp 之外的记录被动了')
+
 

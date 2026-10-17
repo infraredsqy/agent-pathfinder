@@ -22,7 +22,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from harness_env import patched  # noqa: E402
+from harness import patched  # noqa: E402
 
 CONDUCT_DIR = Path(__file__).resolve().parent.parent
 _spec = importlib.util.spec_from_file_location('chain_spawn', CONDUCT_DIR / 'spawn' / 'chain-spawn.py')
@@ -51,6 +51,10 @@ class ChainCase(unittest.TestCase):
         The stand-in records what it was handed and answers `line`, or raises `error`. `real_door`
         leaves the real one in place, for the case whose subject is the dry-run line itself. Returns
         (exit code, the recorded calls, stdout, stderr).
+
+        `--workspace` is always named, defaulting to this case's own temp project: the tool's own
+        default is the CURRENT DIRECTORY, so a case that left it out would aim the door at the
+        checkout it was started from.
         """
         calls = []
 
@@ -61,6 +65,8 @@ class ChainCase(unittest.TestCase):
                 raise RuntimeError(error)
             return line
 
+        if '--workspace' not in extra:
+            extra = (*extra, '--workspace', str(self.project))
         out, err = StringIO(), StringIO()
         door = contextlib.nullcontext() if real_door else patched(chain_spawn, '_start', start)
         with door, mock.patch.dict(os.environ, {'DSH_CONDUCT_SPAWNER': FAKE_SPAWNER}), \

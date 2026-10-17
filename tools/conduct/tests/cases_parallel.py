@@ -37,9 +37,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import NODE, NODE2, NODE3, Base, pipeline
-from harness_env import (DAG_MANAGE, GIT, SIGNAL_PY, STATE_MANAGE, _child_env, git, init_markers,
-                         run_argv)
-from harness_sandbox import Sandbox
+from harness import (DAG_MANAGE, GIT, SIGNAL_PY, STATE_MANAGE, Sandbox, _child_env, git,
+                     init_markers, run_argv)
 
 __all__ = ['TestLedgerLock', 'TestWorktreeRedirect', 'TestSpawnClaim', 'TestOneNodeOneCycle',
            'TestParallelSlots']

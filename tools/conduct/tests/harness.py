@@ -75,18 +75,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # caller keeps seeing one module (`from harness import Sandbox, Driver, ...` is what every test
 # module does). `harness_sandbox.py` is the one that must not import the CLI runner by name: the
 # test suite patches that module's attribute -- see the comment in that file.
+import harness_env as _env
+import harness_fast as _fast
+import harness_proc as _proc
+import harness_roles as _roles
+import harness_sandbox as _sandbox
+
 from harness_env import *         # noqa: F401,F403
 from harness_proc import *        # noqa: F401,F403
 from harness_fast import *        # noqa: F401,F403
 from harness_sandbox import *     # noqa: F401,F403
 from harness_roles import *       # noqa: F401,F403
 
-__all__ = [
-    'CONDUCT_DIR', 'DAG_MANAGE', 'DELETED_SIGNAL_KEYS', 'PIPELINE_PATH', 'HANDOFF_PY', 'HERE',
-    'NODE_DIR_OF', 'SIGNAL_KEYS', 'SIGNAL_OF', 'SIGNAL_PY', 'SKILLS', 'SPEC_OF', 'STATE_MANAGE',
-    'TERMINAL_ACTIONS', 'TOOLS_DIR',
-    'Closer', 'Driver', 'FastStateManage', 'InProcessDagManage', 'Sandbox',
-    'WorkerSession', 'chdir', 'finish_node', 'keep_going', 'load_pipeline', 'next_action',
-    'plan_action', 'run_dag', 'run_handoff', 'run_signal', 'run_state_manage', 'stop_after',
-    '_dag_hook',
-]
+#: What `from harness import *` reaches: the five parts' own `__all__`, gathered. The parts own the
+#: names, so a name one of them publishes is reachable here with no second list to keep in step --
+#: and a caller never has to know which part a name lives in to import it.
+__all__ = [name for _part in (_env, _proc, _fast, _sandbox, _roles) for name in _part.__all__]

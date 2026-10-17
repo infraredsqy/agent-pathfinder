@@ -20,9 +20,9 @@ import sys
 from pathlib import Path
 
 __all__ = [
-    'CONDUCT_DIR', 'DAG_MANAGE', 'DELETED_SIGNAL_KEYS', 'GIT', 'INIT_GITATTRIBUTES', 'INIT_GITIGNORE',
-    'PIPELINE_PATH', 'HANDOFF_PY', 'HERE', 'NODE_DIR_OF', 'SIGNAL_KEYS', 'SIGNAL_OF', 'SIGNAL_PY',
-    'SKILLS', 'SPAWN_DRY_RUN', 'SPEC_OF', 'STATE_MANAGE', 'TERMINAL_ACTIONS', 'TOOLS_DIR',
+    'CONDUCT_DIR', 'DAG_MANAGE', 'GIT', 'INIT_GITATTRIBUTES', 'INIT_GITIGNORE',
+    'PIPELINE_PATH', 'HANDOFF_PY', 'HERE', 'SIGNAL_PY', 'SPAWN_DRY_RUN', 'STATE_MANAGE',
+    'TERMINAL_ACTIONS', 'TOOLS_DIR',
     '_child_env', '_decode', '_fresh_module', 'chdir', 'git', 'git_env', 'init_markers',
     'load_pipeline', 'patched', 'run_argv', 'shared_loader', 'spawn_dry_run',
 ]
@@ -47,31 +47,21 @@ HANDOFF_PY = CONDUCT_DIR / 'pipeline' / 'handoff.py'
 DAG_MANAGE = TOOLS_DIR / 'dag' / 'dag-manage.py'
 if not DAG_MANAGE.exists():
     _installed = Path(os.path.expanduser('~')) / '.agents' / 'tools' / 'dag' / 'dag-manage.py'
-    if _installed.exists():
-        DAG_MANAGE = _installed
+    if not _installed.exists():
+        # Loud HERE rather than deep inside the first sandbox that loads a module from that path: a
+        # wrong resolution would otherwise surface as a FileNotFoundError from whichever case ran
+        # first, which reads as that case's fault.
+        raise AssertionError(
+            f'dag-manage.py is at neither {DAG_MANAGE} nor {_installed}, and the suite drives the '
+            f'real graph tool: point one of those paths at it')
+    DAG_MANAGE = _installed
 os.environ['DSH_CONDUCT_DAG_MANAGE'] = str(DAG_MANAGE)
 
 #: `git`, resolved once for the whole suite: a case whose fixture needs git skips itself on `GIT`.
 GIT = shutil.which('git')
 
-# The pipeline, kept as a literal on purpose: a test comparing the tools' own tables has to state
-# the expectation itself, not ask the tool what it thinks the answer is.
-SKILLS = ['pf-conduct']
-#: Where a node's own directory lives: the ledger, `<project>/.pf/nodes/<id>/`. It holds the node's
-#: text (`spec.md`, and the reports its session writes, by CONVENTION -- nothing validates them any
-#: more). What the node GENERATES is scratch and goes to `.pf/nodes/<id>/temp/`.
-NODE_DIR_OF = '.pf/nodes/%s'
-SPEC_OF = '.pf/nodes/%s/spec.md'
-#: One signal per node: `.pf/signals/<cycle>/<node_id>.json` -- the ledger, next to `state.json`.
-#: There is no cell index left to put in the file name.
-SIGNAL_OF = '.pf/signals/%s/%s.json'
-#: The `outputs` keys a dispatch prompt asks a worker for. The three old artifact keys
-#: (`spec_path` / `phase_paths` / `run_path`) are NOT among them: they are deleted, along with the
-#: checking that used to read them. `reading` IS read back -- it is the maintenance channel's two
-#: measurements, the one `outputs` key the pipeline has an opinion about.
-SIGNAL_KEYS = ['deliverable', 'acceptance', 'touched', 'reading']
-DELETED_SIGNAL_KEYS = ('spec_path', 'phase_paths', 'run_path')
-
+#: The pipeline, kept as a literal on purpose: a test comparing the tools' own tables has to state
+#: the expectation itself, not ask the tool what it thinks the answer is.
 TERMINAL_ACTIONS = ('stop_pipeline', 'ask_user', 'no_cycle', 'fail_hard')
 
 

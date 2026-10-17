@@ -29,7 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from harness_env import TOOLS_DIR, _child_env
+from harness import TOOLS_DIR, _child_env
 
 __all__ = ['TestPfCmdShim', 'TestDoctorRoot', 'TestCommandList']
 
@@ -51,6 +51,19 @@ here = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(here, 'runs.txt'), 'a', encoding='utf-8') as fh:
     fh.write(' '.join(sys.argv[1:]) + chr(10))
 sys.exit(int(os.environ.get('FAKE_PF_EXIT', '0')))
+'''
+
+#: 假的 `py`（Python launcher）：记下 shim 递给它的整条命令，再把 `-3 -X utf8` 之后的部分交给
+#: `FAKE_PYTHON` 跑。这份量的是「`where python` 找不到时走哪一支、递的是什么」。
+PY_STANDIN = '''\
+@echo off
+setlocal
+>>"%~dp0py-runs.txt" echo %*
+shift
+shift
+shift
+"%FAKE_PYTHON%" -X utf8 "%1" %2 %3 %4 %5 %6 %7 %8 %9
+exit /b %ERRORLEVEL%
 '''
 
 
@@ -107,6 +120,26 @@ class TestPfCmdShim(unittest.TestCase):
         self.assertEqual(127, proc.returncode)
         self.assertEqual([], self.runs(), 'no interpreter was found, so nothing may run')
         self.assertIn('python', proc.stderr)
+
+    def test_the_py_launcher_is_the_fallback_that_runs_it(self):
+        """`where python` 找不到、`where py` 找得到：走 py 那一支，命令照跑一次、退出码照旧。
+
+        PATH 里留 `System32` 是 `where` 自己要用的：整条 PATH 被清空时 `where` 本身都起不来，
+        那时量到的是探针还在不在，与解释器无关。
+        """
+        (self.dir / 'py.cmd').write_text(PY_STANDIN, encoding='utf-8')
+        env = _child_env()
+        env['PATH'] = os.pathsep.join([str(Path(os.environ['SystemRoot']) / 'System32'),
+                                       str(self.dir)])
+        env['FAKE_PYTHON'] = PYTHON
+        proc = self.shim('issue', 'top', exit_code='3', env=env)
+
+        self.assertEqual(3, proc.returncode, proc.stderr)
+        self.assertEqual(['issue top'], self.runs(), 'py 那一支也要恰好跑一次')
+        handed = (self.dir / 'py-runs.txt').read_text(encoding='utf-8')
+        self.assertIn('-3', handed, f'shim 递给 py 的整条命令：{handed!r}')
+        self.assertIn('-X utf8', handed)
+        self.assertIn('pf.py', handed)
 
 
 @unittest.skipUnless(GIT, 'git is not on PATH')

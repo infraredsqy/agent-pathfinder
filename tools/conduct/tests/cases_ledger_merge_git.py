@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_ledger_merge import (EDGE_X, EDGE_Y, MERGE_PY, NODE1, NODE2, NODE3, cycle,  # noqa: E402
                                 ideas, instruction, node, step, tool_bytes)
-from harness_env import GIT, _decode, git, init_markers  # noqa: E402
+from harness import GIT, _decode, git, init_markers  # noqa: E402
 
 __all__ = ['TestGitEndToEnd']
 

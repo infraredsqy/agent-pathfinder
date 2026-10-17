@@ -30,7 +30,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import pipeline
-from harness_env import _child_env, run_argv  # noqa: E402
+from harness import _child_env, run_argv  # noqa: E402
 
 __all__ = ['TestSpawnerChoice', 'TestQueueDedup']
 
@@ -103,6 +103,37 @@ CREATE TABLE tasks (
   cron_automation_id TEXT, off_peak_task_id TEXT,
   PRIMARY KEY (workspace_key, task_id))
 """
+
+
+#: The node the queue-dedup cases queue a prompt for: a prompt under `launch/<node_id>/` is the
+#: shape the dispatcher reads an owning node out of. The spawner-choice cases keep theirs at the
+#: project root, which is what a hand-run prompt looks like.
+QUEUED_NODE = 'dddddddd-4444-4444-8444-dddddddddddd'
+
+
+def zcode_sandbox(test, node_id=None):
+    """A throwaway ZCode host: the desktop's two tables, one workspace, one prompt file.
+
+    `test` is the case the temp directory is registered with. Returns (the database, the workspace,
+    the prompt file, the child environment) -- the four things every dispatcher case hands on.
+    """
+    root = Path(tempfile.mkdtemp(prefix='conduct-zcode-'))
+    test.addCleanup(shutil.rmtree, root, ignore_errors=True)
+    (root / 'sandbox' / '.zcode' / 'v2').mkdir(parents=True)
+    db = root / 'sandbox' / '.zcode' / 'v2' / 'tasks-index.sqlite'
+    con = sqlite3.connect(str(db))
+    con.execute(AUTOMATIONS_DDL)
+    con.execute(TASKS_DDL)
+    con.commit()
+    con.close()
+    ws = root / 'ws'
+    (ws / '.pf').mkdir(parents=True)
+    prompt = (root / 'launch' / node_id / 'prompt.txt') if node_id else (root / 'prompt.txt')
+    prompt.parent.mkdir(parents=True, exist_ok=True)
+    prompt.write_text('# /pf-conduct drill\n', encoding='utf-8')
+    env = dict(_child_env(), ZCODE_DATA_BASE_DIR=str(root / 'sandbox'),
+               DSH_CONDUCT_SPAWN_AT='')
+    return db, ws, prompt, env
 
 
 class TestSpawnerChoice(unittest.TestCase):
@@ -255,24 +286,6 @@ class TestSpawnerChoice(unittest.TestCase):
 
     # ── 那一行 ───────────────────────────────────────────────────────────────
 
-    def sandbox(self):
-        root = Path(tempfile.mkdtemp(prefix='conduct-zcode-'))
-        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
-        (root / 'sandbox' / '.zcode' / 'v2').mkdir(parents=True)
-        db = root / 'sandbox' / '.zcode' / 'v2' / 'tasks-index.sqlite'
-        con = sqlite3.connect(str(db))
-        con.execute(AUTOMATIONS_DDL)
-        con.execute(TASKS_DDL)
-        con.commit()
-        con.close()
-        ws = root / 'ws'
-        (ws / '.pf').mkdir(parents=True)
-        prompt = root / 'prompt.txt'
-        prompt.write_text('# /pf-conduct drill\n', encoding='utf-8')
-        env = dict(_child_env(), ZCODE_DATA_BASE_DIR=str(root / 'sandbox'),
-                   DSH_CONDUCT_SPAWN_AT='')
-        return db, ws, prompt, env
-
     def dispatcher(self):
         """The dispatcher, imported -- for the constants a test should *follow*, not pin.
 
@@ -285,7 +298,7 @@ class TestSpawnerChoice(unittest.TestCase):
         return module
 
     def test_it_writes_one_row_that_means_one_session(self):
-        db, ws, prompt, env = self.sandbox()
+        db, ws, prompt, env = zcode_sandbox(self)
         proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         automation_id = proc.stdout.strip().splitlines()[0]
@@ -321,7 +334,7 @@ class TestSpawnerChoice(unittest.TestCase):
 
     def test_the_model_can_be_pinned(self):
         """Naming the model is how a caller decides whose quota a background node spends."""
-        db, ws, prompt, env = self.sandbox()
+        db, ws, prompt, env = zcode_sandbox(self)
         proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
                                '--model', 'deepseek/deepseek-flash$max', '--no-verify'], env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -334,7 +347,7 @@ class TestSpawnerChoice(unittest.TestCase):
 
     def test_following_the_workspace_pick_is_still_available(self):
         """`workspace` is the one encoding that means "follow whatever model this workspace uses"."""
-        db, ws, prompt, env = self.sandbox()
+        db, ws, prompt, env = zcode_sandbox(self)
         proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
                                '--model', 'workspace', '--no-verify'], env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -345,7 +358,7 @@ class TestSpawnerChoice(unittest.TestCase):
 
     def test_an_unreadable_model_is_refused(self):
         """The desktop refuses a column it cannot parse, three steps later and far from here."""
-        db, ws, prompt, env = self.sandbox()
+        db, ws, prompt, env = zcode_sandbox(self)
         for bad in ('deepseek', 'deepseek/', '/flash', '{"providerId":"x"}',
                     '{"providerId":"a","modelId":"b","extra":1}'):
             proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
@@ -354,7 +367,7 @@ class TestSpawnerChoice(unittest.TestCase):
             self.assertIn('--model', proc.stderr)
 
     def test_the_permission_mode_can_be_turned_down(self):
-        db, ws, prompt, env = self.sandbox()
+        db, ws, prompt, env = zcode_sandbox(self)
         proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
                                '--mode', 'plan', '--no-verify'], env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -363,7 +376,7 @@ class TestSpawnerChoice(unittest.TestCase):
         con.close()
 
     def test_a_prompt_that_is_not_there_is_refused(self):
-        db, ws, prompt, env = self.sandbox()
+        db, ws, prompt, env = zcode_sandbox(self)
         proc = run_dispatcher(['--prompt-file', prompt.parent / 'nope.txt',
                                     '--workspace', ws, '--no-verify'], env)
         self.assertNotEqual(proc.returncode, 0)
@@ -374,14 +387,14 @@ class TestSpawnerChoice(unittest.TestCase):
 
     def test_a_time_too_far_past_is_refused(self):
         """The desktop drops a row more than five minutes overdue as a misfire, so refuse it here."""
-        db, ws, prompt, env = self.sandbox()
+        db, ws, prompt, env = zcode_sandbox(self)
         proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
                                '--at', '2020-01-01T00:00', '--no-verify'], env)
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn('misfire', proc.stderr)
 
     def test_a_time_in_the_future_is_not_waited_for(self):
-        db, ws, prompt, env = self.sandbox()
+        db, ws, prompt, env = zcode_sandbox(self)
         started = time.monotonic()
         proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--at', '+30m'], env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -403,7 +416,7 @@ class TestSpawnerChoice(unittest.TestCase):
         """
         if not shutil.which('pwsh'):
             self.skipTest('pwsh is not on PATH')
-        db, ws, prompt, env = self.sandbox()
+        db, ws, prompt, env = zcode_sandbox(self)
         env = {**env, 'DSH_CONDUCT_SPAWN_MODE': 'yolo',
                'DSH_CONDUCT_SPAWN_MODEL': 'deepseek/deepseek-flash$max'}
         marker = marker_path(ws, 'cyc-case')
@@ -427,7 +440,7 @@ class TestSpawnerChoice(unittest.TestCase):
     def test_the_spawner_records_a_failure_the_way_the_pipeline_reads_it(self):
         if not shutil.which('pwsh'):
             self.skipTest('pwsh is not on PATH')
-        db, ws, prompt, env = self.sandbox()
+        db, ws, prompt, env = zcode_sandbox(self)
         marker = marker_path(ws, 'cyc-case')
         proc = subprocess.run(['pwsh', '-NoProfile', '-File', str(SPAWNER),
                                '-CycleId', 'cyc-case', '-PromptFile', str(prompt.parent / 'nope.txt'),
@@ -452,7 +465,7 @@ class TestSpawnerChoice(unittest.TestCase):
         """
         if not shutil.which('pwsh'):
             self.skipTest('pwsh is not on PATH')
-        _, ws, prompt, env = self.sandbox()
+        _, ws, prompt, env = zcode_sandbox(self)
         no_path = {key: value for key, value in env.items() if key.upper() != 'PATH'}
         marker = marker_path(ws, 'cyc-case')
         proc = subprocess.run(['pwsh', '-NoProfile', '-File', str(SPAWNER),
@@ -468,27 +481,8 @@ class TestSpawnerChoice(unittest.TestCase):
 class TestQueueDedup(unittest.TestCase):
     """同一节点排第二行是两个会话上同一节点的路：在途的行、还热的会话都要挡。"""
 
-    def sandbox(self, node_id='dddddddd-4444-4444-8444-dddddddddddd'):
-        root = Path(tempfile.mkdtemp(prefix='conduct-zcode-dedup-'))
-        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
-        (root / 'sandbox' / '.zcode' / 'v2').mkdir(parents=True)
-        db = root / 'sandbox' / '.zcode' / 'v2' / 'tasks-index.sqlite'
-        con = sqlite3.connect(str(db))
-        con.execute(AUTOMATIONS_DDL)
-        con.execute(TASKS_DDL)
-        con.commit()
-        con.close()
-        ws = root / 'ws'
-        (ws / '.pf').mkdir(parents=True)
-        prompt = root / 'launch' / node_id / 'prompt.txt'
-        prompt.parent.mkdir(parents=True)
-        prompt.write_text('# /pf-conduct drill\n', encoding='utf-8')
-        env = dict(_child_env(), ZCODE_DATA_BASE_DIR=str(root / 'sandbox'),
-                   DSH_CONDUCT_SPAWN_AT='')
-        return db, ws, prompt, env
-
     def test_a_second_row_for_the_same_node_is_refused(self):
-        db, ws, prompt, env = self.sandbox()
+        db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
         first = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(first.returncode, 0, first.stderr)
         second = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
@@ -500,7 +494,7 @@ class TestQueueDedup(unittest.TestCase):
         self.assertEqual(count, 1, 'the refused queue must not leave a row behind')
 
     def test_an_explicit_override_queues_anyway(self):
-        db, ws, prompt, env = self.sandbox()
+        db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
         first = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(first.returncode, 0, first.stderr)
         second = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify',
@@ -509,7 +503,7 @@ class TestQueueDedup(unittest.TestCase):
 
     def test_a_claimed_row_is_no_longer_pending(self):
         """行被桌面认领、且认领已过新鲜窗口（会话也没写出来）之后，文档规定的抢救重排是合法的。"""
-        db, ws, prompt, env = self.sandbox()
+        db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
         first = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(first.returncode, 0, first.stderr)
         con = sqlite3.connect(str(db))
@@ -522,7 +516,7 @@ class TestQueueDedup(unittest.TestCase):
 
     def test_a_claim_just_made_with_no_session_blocks(self):
         """认领到落库之间的窄缝：行刚被认领、会话还没写出来，第二个 queue 两个旧检查都落空。"""
-        db, ws, prompt, env = self.sandbox()
+        db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
         first = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(first.returncode, 0, first.stderr)
         con = sqlite3.connect(str(db))
@@ -540,7 +534,7 @@ class TestQueueDedup(unittest.TestCase):
 
     def test_a_fresh_session_blocks_and_an_old_one_does_not(self):
         """验证超时的竞态：会话其实建出来了——十 分钟内的会话挡住重排，再老的算死会话放行。"""
-        db, ws, prompt, env = self.sandbox()
+        db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
         first = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(first.returncode, 0, first.stderr)
         automation_id = first.stdout.strip().splitlines()[0]
