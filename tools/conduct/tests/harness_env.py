@@ -2,10 +2,10 @@
 
 Owns HERE/CONDUCT_DIR/TOOLS_DIR, the tool paths, the dag-manage resolution that sets
 DSH_CONDUCT_DAG_MANAGE, the pipeline constants, load_pipeline/_fresh_module/shared_loader, chdir/
-_decode/_child_env, and the four seams the `cases_*` files share instead of each writing their own:
+_decode/_child_env, and the pieces the `cases_*` files share instead of each writing their own:
 `init_markers` (what `init` puts in a `.pf/`), `run_argv` and `git` (one child process, one identity),
-`patched` (one place a global name is swapped), and `spawn_dry_run` (the one place a session start is
-turned into a drill).
+`patched` (one place a global name is swapped), `spawn_dry_run` (the one place a session start is
+turned into a drill), and `shipped_sources` (the one list of the shipped tree).
 """
 
 from __future__ import annotations
@@ -23,8 +23,9 @@ __all__ = [
     'CONDUCT_DIR', 'DAG_MANAGE', 'GIT', 'INIT_GITATTRIBUTES', 'INIT_GITIGNORE',
     'PIPELINE_PATH', 'HANDOFF_PY', 'HERE', 'SIGNAL_PY', 'SPAWN_DRY_RUN', 'STATE_MANAGE',
     'TERMINAL_ACTIONS', 'TOOLS_DIR',
-    '_child_env', '_decode', '_fresh_module', 'chdir', 'git', 'git_env', 'init_markers',
-    'load_pipeline', 'patched', 'run_argv', 'shared_loader', 'spawn_dry_run',
+    '_child_env', '_decode', '_fresh_module', '_run_command', 'chdir', 'git', 'git_env',
+    'init_markers', 'load_pipeline', 'patched', 'run_argv', 'shared_loader', 'shipped_sources',
+    'spawn_dry_run',
 ]
 
 
@@ -63,6 +64,25 @@ GIT = shutil.which('git')
 #: The pipeline, kept as a literal on purpose: a test comparing the tools' own tables has to state
 #: the expectation itself, not ask the tool what it thinks the answer is.
 TERMINAL_ACTIONS = ('stop_pipeline', 'ask_user', 'no_cycle')
+
+
+def shipped_sources():
+    """Every Python file the tools ship, tests excluded.
+
+    The ONE list behind the guards that ask the whole tree a question -- who builds the spawner's
+    argv, who spells the broken-chain marker's name, which module defines a top-level name twice --
+    so a new package is added here once and no guard keeps a copy of the tree.
+    """
+    return ([CONDUCT_DIR / 'ledger-merge.py']
+            + [path for cluster in ('pipeline', 'spawn')
+               for path in sorted((CONDUCT_DIR / cluster).glob('*.py'))]
+            + sorted((CONDUCT_DIR / 'conduct_pipeline_impl').glob('*.py'))
+            + sorted((CONDUCT_DIR / 'conduct_state').glob('*.py'))
+            + sorted((CONDUCT_DIR / 'ledger_merge').glob('*.py'))
+            + sorted((TOOLS_DIR / 'dag').glob('*.py'))
+            + sorted((TOOLS_DIR / 'issue').glob('*.py'))
+            + sorted((TOOLS_DIR / 'shared').glob('*.py'))
+            + sorted((TOOLS_DIR / 'bin').glob('*.py')))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -236,20 +256,18 @@ def _child_env():
 
 
 @contextlib.contextmanager
-def spawn_dry_run(env=None):
+def spawn_dry_run():
     """Set the drill switch for the block, and put the old value back afterwards.
 
     The in-process rail reads `os.environ` directly (`cmd_dispatch`), so a caller driving that rail
-    cannot rely on `_child_env()`. `env` defaults to this process's environment; naming a child's
-    environment gets the same record-replace-restore there.
+    cannot rely on `_child_env()`.
     """
-    target = os.environ if env is None else env
-    old = target.get(SPAWN_DRY_RUN)
-    target[SPAWN_DRY_RUN] = '1'
+    old = os.environ.get(SPAWN_DRY_RUN)
+    os.environ[SPAWN_DRY_RUN] = '1'
     try:
-        yield target
+        yield os.environ
     finally:
         if old is None:
-            target.pop(SPAWN_DRY_RUN, None)
+            os.environ.pop(SPAWN_DRY_RUN, None)
         else:
-            target[SPAWN_DRY_RUN] = old
+            os.environ[SPAWN_DRY_RUN] = old

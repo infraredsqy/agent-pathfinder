@@ -67,12 +67,15 @@ from cases_recovery import *      # noqa: F401,F403
 from cases_maintenance import *   # noqa: F401,F403
 from cases_maintenance_run import *  # noqa: F401,F403
 from cases_cli import *           # noqa: F401,F403
+from cases_cli_entries import *   # noqa: F401,F403
+from cases_spawn_shell import *   # noqa: F401,F403
 from cases_e2e import *           # noqa: F401,F403
 from cases_ledger_merge import *  # noqa: F401,F403
 from cases_ledger_merge_git import *  # noqa: F401,F403
 from cases_dispatch import *      # noqa: F401,F403
 from cases_zcode import *         # noqa: F401,F403
 from cases_parallel import *      # noqa: F401,F403
+from cases_parallel_slots import *  # noqa: F401,F403
 from cases_fork import *          # noqa: F401,F403
 from cases_init import *          # noqa: F401,F403
 from cases_config import *        # noqa: F401,F403

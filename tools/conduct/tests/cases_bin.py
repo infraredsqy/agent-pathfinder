@@ -21,7 +21,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -29,7 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from harness import TOOLS_DIR, _child_env
+from harness import GIT, TOOLS_DIR, _child_env, _run_command, git, init_markers, run_argv
 
 __all__ = ['TestPfCmdShim', 'TestDoctorRoot', 'TestCommandList']
 
@@ -37,7 +36,6 @@ PYTHON = sys.executable
 BIN = TOOLS_DIR / 'bin'
 PF = BIN / 'pf.py'
 SHIM = BIN / 'pf.cmd'
-GIT = shutil.which('git')
 CMD = os.environ.get('COMSPEC', 'cmd.exe')
 
 #: 假的 `pf.py`：每跑一次往 `runs.txt` 追一行（记下收到的 argv），然后按 `FAKE_PF_EXIT` 退出。
@@ -67,11 +65,9 @@ exit /b %ERRORLEVEL%
 '''
 
 
-def _git_env():
-    return dict(_child_env(), **{
-        'GIT_AUTHOR_NAME': 'pf bin test', 'GIT_AUTHOR_EMAIL': 'bin@example.invalid',
-        'GIT_COMMITTER_NAME': 'pf bin test', 'GIT_COMMITTER_EMAIL': 'bin@example.invalid',
-    })
+def pf(*args, cwd):
+    """真的 `pf` 入口，一个真进程，从 `cwd` 跑 —— 转发层与它前面的 shim 共用这一条。"""
+    return run_argv([PF, *[str(a) for a in args]], cwd=cwd, check=False)
 
 
 @unittest.skipUnless(os.name == 'nt', 'pf.cmd is the Windows shim')
@@ -97,9 +93,8 @@ class TestPfCmdShim(unittest.TestCase):
     def shim(self, *args, exit_code='0', env=None):
         environ = _child_env() if env is None else env
         environ['FAKE_PF_EXIT'] = exit_code
-        return subprocess.run([CMD, '/c', str(self.dir / 'pf.cmd'), *args],
-                              cwd=str(self.dir), capture_output=True, text=True,
-                              encoding='utf-8', errors='replace', env=environ)
+        return _run_command([CMD, '/c', str(self.dir / 'pf.cmd'), *[str(a) for a in args]],
+                            cwd=self.dir, env=environ, check=False)
     # ── cases ────────────────────────────────────────────────────────────────
     def test_a_zero_exit_runs_the_command_once(self):
         proc = self.shim('version')
@@ -154,41 +149,27 @@ class TestDoctorRoot(unittest.TestCase):
         base = Path(tmp.name)
         self.main = base / 'main'
         self.main.mkdir()
-        self.git('init', '-b', 'main')
+        git(self.main, 'init', '-b', 'main')
 
-        ledger = self.main / '.pf'
+        ledger = init_markers(self.main)
         (ledger / 'nodes' / self.UID).mkdir(parents=True)
-        (ledger / '.gitignore').write_text('meta/\nworktrees/\ntemp/\n', encoding='utf-8')
-        (ledger / '.gitattributes').write_text('** -text\n', encoding='utf-8')
         (ledger / 'AGENTS.md').write_text('# 记录目录\n', encoding='utf-8')
         (ledger / 'ideas.json').write_text(json.dumps({'nodes': {self.UID: {
             'title': '隔着 worktree 也要看得见', 'status': 'todo', 'mode': 'auto',
             'dependencies': []}}}, ensure_ascii=False, indent=2), encoding='utf-8')
         (ledger / 'nodes' / self.UID / 'spec.md').write_text('# spec\n', encoding='utf-8')
         # 合并驱动按登记过的那一种写（相对形式）：体检项就只剩「根对不对」这一件。
-        self.git('config', 'merge.pf.driver', 'pf merge-ledger %O %A %B %P')
+        git(self.main, 'config', 'merge.pf.driver', 'pf merge-ledger %O %A %B %P')
 
         # `.pf/` 不进库：worktree 是完整检出，但只检出进了库的那些 —— 所以 worktree 里没有
         # 记录目录，往上找 `.git` 目录的走法也找不到主树（这条 worktree 是个兄弟目录）。
         (self.main / 'README.md').write_text('# main\n', encoding='utf-8')
-        self.git('add', 'README.md')
-        self.git('commit', '-m', 'seed', '--no-gpg-sign')
+        git(self.main, 'add', 'README.md')
+        git(self.main, 'commit', '-m', 'seed', '--no-gpg-sign')
         self.wt = base / 'wt'
-        self.git('worktree', 'add', str(self.wt), '-b', 'pf/wt')
+        git(self.main, 'worktree', 'add', str(self.wt), '-b', 'pf/wt')
 
     # ── helpers ──────────────────────────────────────────────────────────────
-    def git(self, *args):
-        proc = subprocess.run([GIT, *args], cwd=str(self.main), capture_output=True, text=True,
-                              encoding='utf-8', errors='replace', env=_git_env())
-        self.assertEqual(0, proc.returncode,
-                         f'git {" ".join(args)}:\n{proc.stdout}{proc.stderr}')
-        return proc
-
-    def pf(self, *args, cwd):
-        return subprocess.run([PYTHON, '-X', 'utf8', str(PF), *[str(a) for a in args]],
-                              cwd=str(cwd), capture_output=True, text=True,
-                              encoding='utf-8', errors='replace', env=_child_env())
-
     def reported_root(self, proc):
         """`doctor` 印的那一行项目根，读回来。"""
         line = next(l for l in proc.stdout.splitlines() if l.startswith('项目根：'))
@@ -199,7 +180,7 @@ class TestDoctorRoot(unittest.TestCase):
 
         `<root>/.pf/nodes/<id>/spec.md` 往上四层就是它。
         """
-        proc = self.pf('dag', 'open', self.UID, cwd=cwd)
+        proc = pf('dag', 'open', self.UID, cwd=cwd)
         self.assertEqual(0, proc.returncode, proc.stderr)
         return Path(proc.stdout.strip()).parents[3]
 
@@ -208,7 +189,7 @@ class TestDoctorRoot(unittest.TestCase):
         """worktree 里：doctor 报的根，就是 `pf dag` 读到节点的那个根。"""
         self.assertTrue(self.dag_root(self.wt).samefile(self.main),
                         'pf dag 没有回主树 —— 这条用例的前提没成立')
-        doctor = self.pf('doctor', cwd=self.wt)
+        doctor = pf('doctor', cwd=self.wt)
         self.assertTrue(self.reported_root(doctor).samefile(self.main),
                         f'doctor 报的根不是主树：\n{doctor.stdout}')
         self.assertTrue(self.reported_root(doctor).samefile(self.dag_root(self.wt)),
@@ -217,9 +198,9 @@ class TestDoctorRoot(unittest.TestCase):
 
     def test_the_two_roots_agree_inside_the_project_too(self):
         """主树里：两边同样对得上（回主树那条例外不影响平常这一路）。"""
-        self.assertTrue(self.reported_root(self.pf('doctor', cwd=self.main)).samefile(
+        self.assertTrue(self.reported_root(pf('doctor', cwd=self.main)).samefile(
             self.dag_root(self.main)))
-        self.assertTrue(self.reported_root(self.pf('doctor', cwd=self.main)).samefile(self.main))
+        self.assertTrue(self.reported_root(pf('doctor', cwd=self.main)).samefile(self.main))
 
 
 class TestCommandList(unittest.TestCase):
@@ -230,13 +211,8 @@ class TestCommandList(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.dir = Path(tmp.name)
 
-    def pf(self, *args):
-        return subprocess.run([PYTHON, '-X', 'utf8', str(PF), *args], cwd=str(self.dir),
-                              capture_output=True, text=True, encoding='utf-8',
-                              errors='replace', env=_child_env())
-
     def test_issue_help_prints_the_parser_help(self):
-        verb, flag = self.pf('issue', 'help'), self.pf('issue', '--help')
+        verb, flag = pf('issue', 'help', cwd=self.dir), pf('issue', '--help', cwd=self.dir)
         self.assertEqual(0, verb.returncode, verb.stderr)
         self.assertEqual(0, flag.returncode, flag.stderr)
         self.assertEqual(flag.stdout, verb.stdout)
@@ -249,7 +225,7 @@ class TestCommandList(unittest.TestCase):
         entry = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(entry)
 
-        text = self.pf('--help').stdout
+        text = pf('--help', cwd=self.dir).stdout
         routed = [row[0] for row in entry.SELF_VERBS]
         routed += [row[0] for row in entry.FORWARD_VERBS]
         routed += [row[0] for row in entry.FORWARD_GROUPS]

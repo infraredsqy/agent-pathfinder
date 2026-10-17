@@ -33,7 +33,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import NODE, NODE2, Base, added  # noqa: E402
-from harness import CONDUCT_DIR, TOOLS_DIR, _fresh_module, run_dag, run_state_manage  # noqa: E402
+from harness import (CONDUCT_DIR, TOOLS_DIR, _fresh_module, run_dag, run_state_manage,
+                     shipped_sources)  # noqa: E402
 
 __all__ = ['TestAddNotesTheBirthSession', 'TestTheRunNoteAtDispatch', 'TestTheSpawnerResultLine',
            'TestTheNoteItself', 'TestSessionReadsAndImport', 'TestTheRecordDoors',
@@ -401,10 +402,7 @@ class TestNoLayerDefinesANameTwice(unittest.TestCase):
 
     def test_the_packages_have_no_duplicate_top_level_definitions(self):
         duplicates = {}
-        for module in sorted((CONDUCT_DIR / 'conduct_pipeline_impl').glob('*.py')) + \
-                sorted((CONDUCT_DIR / 'conduct_state').glob('*.py')) + \
-                sorted((CONDUCT_DIR / 'ledger_merge').glob('*.py')) + \
-                [TOOLS_DIR / 'shared' / 'session-note.py', TOOLS_DIR / 'dag' / 'dag-manage.py']:
+        for module in shipped_sources():
             names = [node.name for node in ast.parse(module.read_text(encoding='utf-8')).body
                      if isinstance(node, (ast.FunctionDef, ast.ClassDef))]
             twice = sorted({name for name in names if names.count(name) > 1})

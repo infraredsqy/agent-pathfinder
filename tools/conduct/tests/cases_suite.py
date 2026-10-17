@@ -1,10 +1,11 @@
 """The rules about the tests themselves, pinned where the suite can go red on them.
 
-Four of them, each a fault the suite would otherwise carry silently: a session start spliced into a
+Five of them, each a fault the suite would otherwise carry silently: a session start spliced into a
 case's command line (the drill switch would be the only thing left holding it), a `cases_*.py` that
 only imports once something else has run, an entry-point header that names a class nothing defines,
-and a shipped `.ps1` edited without its BOM -- the cases drive these through pwsh 7, which reads
-either encoding, so a lost BOM leaves the suite green.
+`finish_node` walking a node itself instead of handing `Driver` its finish line, and a shipped `.ps1`
+edited without its BOM -- the cases drive these through pwsh 7, which reads either encoding, so a
+lost BOM leaves the suite green.
 """
 
 from __future__ import annotations
@@ -21,7 +22,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from harness import HERE, SPAWN_FLAG, TOOLS_DIR, run_argv  # noqa: E402
 
 __all__ = ['TestNoRealDispatchInTheSuite', 'TestEveryCasesFileStandsAlone',
-           'TestTheHeaderNamesRealClasses', 'TestShippedPowerShellCarriesItsBom']
+           'TestTheHeaderNamesRealClasses', 'TestFinishNodeStaysADriverShell',
+           'TestShippedPowerShellCarriesItsBom']
 
 #: The repo root this checkout is a worktree of. The shipped tree is everything under it.
 ROOT = TOOLS_DIR.parent
@@ -70,25 +72,58 @@ class TestNoRealDispatchInTheSuite(unittest.TestCase):
     """No case puts a session start on a command line.
 
     The suite's one door to that flag is `Sandbox.spawn_next`, and it owns both the spelling and the
-    drill switch behind it. A case that spells the flag into its own argv leaves the switch as the
-    only thing between that call and a real session -- and the switch is one environment variable
-    that a test asserting spawner behaviour deliberately takes back out.
+    drill switch behind it. A case that spells the flag into its own argv -- as a literal, or through
+    a name bound to it -- leaves the switch as the only thing between that call and a real session,
+    and the switch is one environment variable that a test asserting spawner behaviour deliberately
+    takes back out.
     """
 
     def test_the_flag_is_bound_in_one_place_and_never_spliced_into_an_argv(self):
-        spelled, spliced = set(), []
-        for path in sorted(HERE.glob('*.py')):
-            tree = ast.parse(path.read_text(encoding='utf-8'))
+        trees = {path.name: ast.parse(path.read_text(encoding='utf-8'))
+                 for path in sorted(HERE.glob('*.py'))}
+        spelled, bound = set(), set()
+        for name, tree in trees.items():
             for node in ast.walk(tree):
                 if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
                         and node.value.value == SPAWN_FLAG):
-                    spelled |= {(path.name, target.id) for target in node.targets
-                                if isinstance(target, ast.Name)}
-                if isinstance(node, ast.Call):
-                    for part in [*node.args, *(kw.value for kw in node.keywords)]:
-                        for inner in ast.walk(part):
-                            if isinstance(inner, ast.Constant) and inner.value == SPAWN_FLAG:
-                                spliced.append(f'{path.name}:{inner.lineno}')
+                    for target in node.targets:
+                        if isinstance(target, ast.Name):
+                            spelled.add((name, target.id))
+                            bound.add(target.id)
+                elif (isinstance(node, ast.ImportFrom) and node.level == 0 and node.module
+                        and node.module == Path(SPAWN_OWNER).stem):
+                    # An aliased import (`import SPAWN_FLAG as SF`) binds the flag under a name the
+                    # literal-assignment walk never sees; it is the same flag all the same.
+                    for alias in node.names:
+                        if alias.name == 'SPAWN_FLAG':
+                            bound.add(alias.asname or alias.name)
+        # A chain (`SF2 = SF`) keeps the flag under a new name: follow assignments until none is new.
+        grown = True
+        while grown:
+            grown = False
+            for name, tree in trees.items():
+                for node in ast.walk(tree):
+                    if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Name)
+                            and node.value.id in bound):
+                        for target in node.targets:
+                            if isinstance(target, ast.Name) and target.id not in bound:
+                                bound.add(target.id)
+                                grown = True
+
+        spliced = []
+        for name, tree in trees.items():
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                for part in [*node.args, *(kw.value for kw in node.keywords)]:
+                    for inner in ast.walk(part):
+                        if isinstance(inner, ast.Constant) and inner.value == SPAWN_FLAG:
+                            spliced.append(f'{name}:{inner.lineno}')
+                        elif (isinstance(inner, ast.Name) and inner.id in bound
+                              and name != SPAWN_OWNER):
+                            # The flag's own home builds the one sanctioned argv out of the name it
+                            # binds; anywhere else that name is the literal in disguise.
+                            spliced.append(f'{name}:{inner.lineno} ({inner.id})')
 
         self.assertEqual({(SPAWN_OWNER, 'SPAWN_FLAG')}, spelled,
                          'a case bound the spawn flag to a name of its own: that flag has one home '
@@ -147,6 +182,38 @@ class TestTheHeaderNamesRealClasses(unittest.TestCase):
         self.assertEqual(set(), named - defined,
                          'the header names classes no cases file defines: '
                          f'{sorted(named - defined)}')
+
+
+class TestFinishNodeStaysADriverShell(unittest.TestCase):
+    """`finish_node` walks a node by handing `Driver` its finish line, and holds no walk of its own.
+
+    `Driver` owns the stepping, the applied-state contract and the worker's own act; `finish_node` is
+    the convenience builder that names one finish line (`_closable`). A walk re-inlined here would
+    read perfectly well on its own and drift from the driver's, so the shape is pinned instead of
+    left for a reader to notice.
+    """
+
+    def test_finish_node_is_one_driver_call_with_a_finish_line(self):
+        tree = ast.parse((HERE / 'harness_roles.py').read_text(encoding='utf-8'))
+        fn = next((node for node in ast.walk(tree)
+                   if isinstance(node, ast.FunctionDef) and node.name == 'finish_node'), None)
+        self.assertIsNotNone(fn, 'finish_node is gone: the helpers that call it read as unresolved')
+
+        body = [stmt for stmt in fn.body
+                if not (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant))]
+        self.assertEqual(1, len(body),
+                         f'finish_node carries a walk of its own ({len(body)} statements): the '
+                         f'stepping, the applied-state check and the worker act are Driver\'s')
+        self.assertIsInstance(body[0], ast.Return, 'finish_node no longer returns its walk')
+        call = body[0].value
+        self.assertIsInstance(call, ast.Call, f'finish_node returns {ast.dump(call)}')
+        self.assertIsInstance(call.func, ast.Attribute, 'finish_node no longer runs the driver')
+        self.assertEqual('run', call.func.attr, 'finish_node no longer runs the driver')
+        self.assertIsInstance(call.func.value, ast.Call, 'finish_node runs something else')
+        self.assertEqual('Driver', getattr(call.func.value.func, 'id', None),
+                         'finish_node runs something other than Driver')
+        self.assertIn('until', [kw.arg for kw in call.keywords],
+                      'finish_node runs Driver without a finish line of its own')
 
 
 class TestShippedPowerShellCarriesItsBom(unittest.TestCase):

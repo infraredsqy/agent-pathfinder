@@ -9,7 +9,6 @@ it succeed", and the only thing that ends a step is the worker's own `next --aft
 from __future__ import annotations
 
 import ast
-import json
 import sys
 import traceback
 import types
@@ -687,10 +686,20 @@ class TestTheCloseReadsTheGraphOnce(Base):
         """把实现包**每一层自己绑定的** `load_dag` 都换成计数的包装，用例退出时还原。
 
         层是从手上这个入口模块的全局里找的，不写死名单，也不看 `sys.modules`：这个包每被装载一次
-        就换一套模块对象（`fresh=True`），`sys.modules` 里那一份未必是这里跑的那一份。漏掉一层，
-        那一层的读就数不着 —— 指令那一趟的 scope 判定（`instruct._scope_facts`）正是这样被漏计过
-        一次。每一层拿的都是自己 import 时绑定的那个函数对象，所以每一趟整份读图恰好记一次。记的
-        是调用者的函数名（不记行号，改一行注释不该判红）。
+        就换一套模块对象（`fresh=True`），`sys.modules` 里那一份未必是这里跑的那一份。每一层拿的
+        都是自己 import 时绑定的那个函数对象，所以每一趟整份读图恰好记一次。记的是调用者的函数名
+        （不记行号，改一行注释不该判红）。
+
+        这个找法有两处**不响**的盲区，撞上哪一处都是静静地少记一笔：
+
+          * 层内别名绑定：某一层在**自己模块内**把 `load_dag` 绑到另一个名字上（`_read = load_dag`），
+            入口模块的全局里就没有这个名字可换，那一层的读不计。
+          * 新层不进包命名空间：新加的实现层没有挂进入口模块的全局（例如只被别的层 import），
+            它连一次都不会被找到。
+
+        边界是响的：`load_dag` 的调用者今天全在 `conduct_pipeline_impl` 包里（计数包装按栈帧的
+        文件路径认调用者），包外多出一个直接调用者时那句 `next(...)` 当场抛 `StopIteration`，
+        不会静静地少记一笔。
         """
         callers = []
         real = {}
