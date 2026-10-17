@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -32,7 +33,8 @@ class Sandbox:
 
     That one root carries both the account (`state.json`, `signals/`, `instructions.json`,
     `ideas.json`, each node's own directory) and what may be thrown away (`meta/launch/`, each
-    node's `temp/`).
+    node's `temp/`). It also holds the machine's settings layer (`self.home`) for as long as it
+    lives, so a case never reads the one outside the sandbox.
 
     `cli=True` routes every `state-manage.py` verb through the real process. The default
     (in-process) is the same modules and the same files without the process start;
@@ -48,6 +50,14 @@ class Sandbox:
         self._tmp = tempfile.TemporaryDirectory(prefix=f'conduct-test-{_SANDBOX_SEQ:03d}-')
         self.root = Path(self._tmp.name)
         self.cli = cli
+        # The machine's own settings layer (`~/.pf/config.json`) is pointed inside the sandbox: it is
+        # the one thing a run reads from outside the project (the maintenance channel's switch), and
+        # what a case reads must not change with the machine it happens to run on. `PF_HOME_DIR` is
+        # the same lever `cases_config` pulls; this file's cases have no setUp of their own. `close()`
+        # puts it back.
+        self.home = self.root / '.home'
+        self._env_home = os.environ.get('PF_HOME_DIR')
+        os.environ['PF_HOME_DIR'] = str(self.home)
         # `.pf/` holds the account: state.json + signals/ + instructions.json + ideas.json, and
         # every node's own directory. There is no `loops/`: a cycle carries its own path now.
         ledger = self.root / '.pf'
@@ -73,6 +83,12 @@ class Sandbox:
         timing talking, so it must not turn a green case red: what a case asserts is the project's
         contents, and the directory is about to be reaped by the OS anyway.
         """
+        # The settings home this sandbox claimed (`__init__`) goes back either way: the next case in
+        # this worker process reads its own project, not this one's leftovers.
+        if self._env_home is None:
+            os.environ.pop('PF_HOME_DIR', None)
+        else:
+            os.environ['PF_HOME_DIR'] = self._env_home
         try:
             self._tmp.cleanup()
         except OSError:

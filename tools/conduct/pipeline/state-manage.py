@@ -346,10 +346,12 @@ def main() -> None:
         'config',
         help="This machine's and this project's settings: built-in defaults, then the global and "
              "project overrides, the last one written winning",
-        description='Three keys. max_agents: how many subagents one session may have in flight at '
+        description='Four keys. max_agents: how many subagents one session may have in flight at '
                     'once. test_tier: full (the whole suite) or minimal (the project\'s own few '
                     'checks). worktree_mode: off / fork / reuse (whether a node\'s work gets its '
-                    'own worktree). A value lives in one of two override layers: '
+                    'own worktree). issue_repair: on / off (whether a line that crosses its own '
+                    'maintenance threshold gets a repair node inserted for it; on unless a project '
+                    'says otherwise). A value lives in one of two override layers: '
                     '`~/.pf/config.json` (global, travels with the person and the machine, never '
                     'generated for you) and `<project>/.pf/config.json` (travels with the project; '
                     '`init` puts an empty `{}` there). A layer with no file reads as "never '

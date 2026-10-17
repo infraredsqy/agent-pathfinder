@@ -17,10 +17,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import Base, NODE, NODE2, NODE3, pipeline, normalise
-from harness import HANDOFF_PY, InProcessDagManage, TOOLS_DIR, WorkerSession, _run_proc
+from harness import HANDOFF_PY, InProcessDagManage, TOOLS_DIR, WorkerSession, _run_proc, run_state_manage
+from harness_env import STATE_MANAGE, _fresh_module
 
 __all__ = ['TestMaintenanceDedup', 'TestMaintenanceChannel', 'TestMaintenanceThresholds', 'TestMaintenanceScope',
-           'TestMaintenanceCli', 'TestMaintenanceDrive', 'TestTheForm']
+           'TestMaintenanceCli', 'TestMaintenanceDrive', 'TestTheForm', 'TestIssueRepairSwitch']
 
 #: The tool that owns the issue pool; `pool_weight()` asks it for the number through the same CLI.
 ISSUE_MANAGE = TOOLS_DIR / 'issue' / 'issue_manager.py'
@@ -32,6 +33,15 @@ def seed_pool(sb, *issues) -> None:
         _run_proc(sb.root, [ISSUE_MANAGE, 'add', '--id', item['id'], '--title', item['id'],
                             '--severity', item['severity'],
                             '--decision', item.get('decision', 'autofix')])
+
+
+def set_config(sb, key, value, *extra):
+    """把一个设置写进项目，走它自己的命令（与这条通道读的是同一份正本）。
+
+    `--global` 走的是沙箱自己那个家目录（`Sandbox.home`）—— 这个用例读的那一层，正是 `pf config`
+    写的那一层。
+    """
+    return run_state_manage(sb.root, 'config', 'set', key, value, *extra)
 
 
 class ReadingWorker(WorkerSession):
@@ -292,6 +302,124 @@ class TestMaintenanceChannel(Base):
         self.assertEqual(again['node_id'], made)
         self.assertIn(made, sb.prompt_of(again))
         self.assertEqual(sb.dag()['nodes'][NODE2]['status'], 'todo')
+
+
+class TestIssueRepairSwitch(Base):
+    """这条通道的项目级开关：没设过＝开、写着 on＝开、写着 off＝即使越线也不插。
+
+    开关由**工具**在收尾那一拍读，不由会话读 —— 所以三条用例走的是同一次收尾、同一个判定，差的
+    只是项目设置里那一格。没设过的那一条是回归底线：它与写着 `on` 的那一条必须判出同一个东西。
+    """
+
+    LINE = TestMaintenanceChannel.LINE
+
+    def crossed_line(self, issue_repair=None, global_value=None):
+        """一条两个节点的 coding 线：配好线、条子上带着越线的读数，收尾随时可以走。"""
+        sb = self.make()
+        sb.add_node(NODE, '写代码 A', mode='auto', tags=['coding'])
+        sb.add_node(NODE2, '写代码 B', mode='auto', tags=['coding'], deps=[NODE])
+        sb.start_cycle(tags=['coding'])
+        sb.set_policy('cyc', 'test_seconds_limit', self.LINE)
+        if global_value is not None:
+            set_config(sb, pipeline.ISSUE_REPAIR_KEY, global_value, '--global')
+        if issue_repair is not None:
+            set_config(sb, pipeline.ISSUE_REPAIR_KEY, issue_repair)
+        sb.next()                                  # NODE 的 dispatch
+        sb.write_signal('cyc', NODE, 'completed', 'done',
+                        {'deliverable': 'x', 'reading': {'test_seconds': self.LINE + 40}})
+        return sb
+
+    def assert_inserted(self, sb, action):
+        """插进来了：图上多一个节点、两条边接对、被钉住的是它。"""
+        nodes = sb.dag()['nodes']
+        self.assertEqual(len(nodes), 3, 'the maintenance node was not inserted')
+        made = sb.current_node()
+        self.assertNotIn(made, (NODE, NODE2))
+        self.assertEqual(nodes[made]['dependencies'], [NODE])
+        self.assertEqual(nodes[NODE2]['dependencies'], [made])
+        self.assertEqual(action['action'], 'dispatch')
+        self.assertEqual(action['node_id'], made)
+
+    def assert_not_inserted(self, sb, action):
+        """没插：收尾照常走它原本挑中的那一个，图上不多任何节点。"""
+        self.assertEqual(action['action'], 'dispatch')
+        self.assertEqual(action['node_id'], NODE2)
+        self.assertEqual(sb.current_node(), NODE2)
+        self.assertEqual(sb.path_nodes(), [NODE])
+        self.assertEqual(len(sb.dag()['nodes']), 2, 'nothing may be inserted')
+        self.assertEqual(sb.dag()['nodes'][NODE2]['dependencies'], [NODE],
+                         'the edge the channel would have rewritten is untouched')
+
+    def test_a_project_that_never_set_it_inserts_the_node(self):
+        """没设过这一键的项目：越线照插 —— 这是出厂默认，也是这条通道出现以来的行为。"""
+        sb = self.crossed_line()
+
+        self.assertTrue(pipeline.issue_repair_on(sb.root))
+        action = sb.close_round(NODE)
+
+        self.assert_inserted(sb, action)
+
+    def test_the_switch_on_judges_exactly_what_a_project_that_never_set_it_judges(self):
+        """写着 `on` 与没设过这一键：同一次收尾判出来的东西逐项相同（两个 uuid 除外）。"""
+        unset = self.crossed_line()
+        unset_hit = pipeline.crossed(unset.root, unset.cycle(), unset.read_signal('cyc', NODE))
+        on = self.crossed_line(issue_repair='on')
+        on_hit = pipeline.crossed(on.root, on.cycle(), on.read_signal('cyc', NODE))
+
+        def without_spec(hit):
+            """判定里的 `spec_of` 是个闭包（它拿的是新节点的 uuid），比它没有意义。"""
+            return {k: v for k, v in hit.items() if k != 'spec_of'}
+
+        self.assertIsNotNone(unset_hit)
+        self.assertEqual(without_spec(on_hit), without_spec(unset_hit),
+                         'writing the default down must not change the judgement')
+        self.assertTrue(pipeline.issue_repair_on(on.root))
+        self.assert_inserted(unset, unset.close_round(NODE))
+        self.assert_inserted(on, on.close_round(NODE))
+
+    def test_the_switch_off_keeps_a_crossed_line_from_inserting(self):
+        """关掉它的项目：读数照样越线（判定读得到），但收尾一个新节点都不插。"""
+        sb = self.crossed_line(issue_repair='off')
+        ticket = sb.read_signal('cyc', NODE)
+
+        # 越线这件事记录在案：读数在条子上、线在策略里，两样都还在手上
+        self.assertEqual(pipeline.reading_of(ticket), {'test_seconds': float(self.LINE + 40)})
+        self.assertEqual(pipeline.thresholds_for(sb.cycle())['test_seconds_limit'], self.LINE)
+        self.assertFalse(pipeline.issue_repair_on(sb.root))
+        self.assertIsNone(pipeline.crossed(sb.root, sb.cycle(), ticket),
+                          'the switch must shut the judgement, not the measurement')
+        action = sb.close_round(NODE)
+
+        self.assert_not_inserted(sb, action)
+
+    def test_the_global_layer_can_turn_it_off_too(self):
+        """机器那一层也算数：全局写着 off、项目一个字没说，这个项目就不插。"""
+        sb = self.crossed_line(global_value='off')
+
+        self.assertFalse(pipeline.issue_repair_on(sb.root))
+        self.assert_not_inserted(sb, sb.close_round(NODE))
+
+    def test_the_project_layer_beats_the_global_one(self):
+        """项目层盖全局层：全局关掉，项目自己写着 on，就照项目的来。"""
+        sb = self.crossed_line(global_value='off', issue_repair='on')
+
+        self.assertTrue(pipeline.issue_repair_on(sb.root))
+        self.assert_inserted(sb, sb.close_round(NODE))
+
+    def test_the_two_packages_spell_the_switch_the_same_way(self):
+        """写侧（`pf config` 那张表）与读侧（这条通道）各有一份键名、词表与出厂值：这条比对它们。
+
+        `conduct_pipeline_impl` 与 `conduct_state` 是两个按路径各自加载的包，import 一个进另一个会
+        绕出一个环，所以两边各写一份 —— 两份分头漂移，就是一个项目明明关掉了通道、收尾却照插不误
+        的来路。
+        """
+        spec = _fresh_module('state_manage_switch_probe', STATE_MANAGE).CONFIG_SPEC
+        entry = spec[pipeline.ISSUE_REPAIR_KEY]      # 键名对不上就是这里 KeyError
+        self.assertEqual(entry['kind'], 'choice')
+        self.assertEqual(tuple(entry['values']), tuple(pipeline.ISSUE_REPAIR_VALUES))
+        self.assertEqual(entry['default'], pipeline.ISSUE_REPAIR_DEFAULT)
+        self.assertEqual(pipeline.ISSUE_REPAIR_DEFAULT, 'on',
+                         'the channel is on unless a project says otherwise')
 
 
 class TestMaintenanceThresholds(Base):

@@ -7,8 +7,8 @@ because those are what a caller patches. The machinery is here:
 
     seam.py      the live link back to the entry module's globals (see its docstring)
     store.py     the read layer over one project's .pf/:
-                 load_state / load_signal / load_dag / load_instructions, the cycle lookups,
-                 `ledger_dir` / `meta_dir`
+                 load_state / load_signal / load_dag / load_instructions / load_config, the cycle
+                 lookups, `ledger_dir` / `meta_dir`
     instruct.py  the standing-instructions account and the one scope judgement ("what can be seen
                  from the step being built")
     nodes.py     the DAG ready set, the tag filter, and "which node next"
@@ -55,6 +55,9 @@ __all__ = [
     '_holding_of', '_holding_ids',
     'session_note', 'session_notes', 'note_session', 'SESSION_NOTE_PY',
 
+    # store: the settings -- this project's layer over the machine's
+    'CONFIG_NAME', 'global_config_path', 'project_config_path', 'load_config',
+
     # instruct: the account, and the scope judgement
     'instruction_is_live', 'SCOPES', 'DEFAULT_SCOPE', 'entry_scope',
     'scope_binding', '_scope_facts', 'instruction_in_scope', 'live_instructions',
@@ -71,6 +74,8 @@ __all__ = [
     'POLICY_KEYS', 'READING_KEYS', 'MAINTENANCE_ACTION', 'METRICS', 'crossed', 'reading_of',
     'thresholds_for', 'asked_readings', 'pool_weight', 'insertion', 'read_new_node_id',
     'maintenance_spec', 'maintenance_title', 'substitute',
+    'ISSUE_REPAIR_KEY', 'ISSUE_REPAIR_OFF', 'ISSUE_REPAIR_VALUES', 'ISSUE_REPAIR_DEFAULT',
+    'issue_repair_on',
 
     # actions: state -> an action package
     '_ask', '_dispatch', '_dispatch_many', '_maintenance_due', 'attention_items', '_ticket_wait',

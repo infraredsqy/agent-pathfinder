@@ -15,6 +15,12 @@ Every number here is OPTIONAL. A project that configures none of them gets `None
 `crossed()` and insertion never runs: the close's return value is byte-for-byte what it was before
 this channel existed. That is the regression this feature is built around.
 
+**One switch sits above the numbers, and it belongs to the project.** The debt is project-level, so
+whether the project wants to be handed a node for it now is a project-level answer: turned off, a
+crossed line inserts nothing (`issue_repair_on`, the key `pf config` owns). Default `on`, so a
+project that never writes the key keeps the behaviour above byte for byte. This module owns what the
+words mean; the layers, the default and the words `set` accepts are `pf config`'s.
+
 **The graph edit is commands, and never a write from here.** `insertion()` builds them in the DAG
 tool's own vocabulary (`undepend` / `add` / `depend` / `cycle hold`) and `writer.apply` runs
 them: `plan()` stays a pure reader, and running the commands in one place is what keeps it that way. The
@@ -31,12 +37,13 @@ import re
 from pathlib import Path
 
 from . import seam
-from .store import cycle_policy, load_dag
+from .store import cycle_policy, load_config, load_dag
 
 __all__ = ['POLICY_KEYS', 'READING_KEYS', 'MAINTENANCE_ACTION', 'NEW_NODE', 'METRICS',
+           'ISSUE_REPAIR_KEY', 'ISSUE_REPAIR_OFF', 'ISSUE_REPAIR_VALUES', 'ISSUE_REPAIR_DEFAULT',
            'crossed', 'reading_of', 'thresholds_for', 'asked_readings', 'pool_weight', 'insertion',
            'is_add_slot', 'read_new_node_id', 'maintenance_spec', 'maintenance_title', 'substitute',
-           'write_spec', 'maintenance_nodes_of_metric', 'maintenance_tag']
+           'write_spec', 'maintenance_nodes_of_metric', 'maintenance_tag', 'issue_repair_on']
 
 #: The action this module's insertion is handed over as. Registered in `conduct_pipeline.ACTIONS` and
 #: handled by `writer.apply` / `writer.record` exactly like `dispatch` -- the difference is only
@@ -193,6 +200,29 @@ def pool_weight(project) -> float | None:
 
 # ── the judgement ────────────────────────────────────────────────────────────
 
+#: 这条通道的项目级开关，住在 `pf config` 那一格里。管线这边自己说它认什么词：两个包按路径各自
+#: 加载，import 一个进另一个会绕出一个环，所以键名与词表这边各写一份 —— 写那一侧拒绝词表外的
+#: 值，读这一侧把不认识的词读作缺省（同 `store.cycle_policy`：写拒绝、读兜底）。一条用例比对两份。
+ISSUE_REPAIR_KEY = 'issue_repair'
+#: 关掉它的那个词。
+ISSUE_REPAIR_OFF = 'off'
+#: 这个词表与出厂值。
+ISSUE_REPAIR_VALUES = ('on', ISSUE_REPAIR_OFF)
+ISSUE_REPAIR_DEFAULT = 'on'
+
+
+def issue_repair_on(project) -> bool:
+    """这个项目现在开不开「越线就插一个还债的节点」。
+
+    出厂是开：没写过这一键的项目，收尾怎么做今天还怎么做。全局那一层在这条通道上照样算数
+    （项目层盖全局层），与 `pf config` 印出来的有效值是同一个读法。
+    """
+    value = load_config(project).get(ISSUE_REPAIR_KEY, ISSUE_REPAIR_DEFAULT)
+    if value not in ISSUE_REPAIR_VALUES:
+        value = ISSUE_REPAIR_DEFAULT
+    return value != ISSUE_REPAIR_OFF
+
+
 def _wired(metric: dict, reading: dict, thresholds: dict):
     """(value, line) for one metric, or `None` when either half is missing.
 
@@ -215,15 +245,19 @@ def crossed(project, cycle: dict | None, sig: dict | None):
     `None` covers every way this channel stays shut: no number for the metric, no line on this
     cycle, a number under its line, a cycle that is not about code -- the two metrics are
     code-path debt, so a `writing` / `art` line reads the same numbers and does nothing about them --
+    a project that turned the channel off (`issue_repair`, `issue_repair_on`),
     and a metric that ALREADY has a maintenance node open on the graph:
     one metric, one live maintenance node at a time (`maintenance_nodes_of_metric`).
 
-    池子那一格只有在「这条线真的配了那条线」时才去问 issue 工具，收尾这条路上不白开进程。
+    池子那一格只有在「这条线真的配了那条线」时才去问 issue 工具，收尾这条路上不白开进程。开关
+    读在同样靠后的位置：这条通道根本落不到手（不是代码那一支、一根线都没配）的线，连设置都不读。
     """
     if not _is_coding(cycle):
         return None
     thresholds = thresholds_for(cycle)
     if not thresholds:
+        return None
+    if not issue_repair_on(project):
         return None
     values = reading_of(sig)
     if any(metric['source'] == 'pool' and metric['line'] in thresholds for metric in METRICS):
