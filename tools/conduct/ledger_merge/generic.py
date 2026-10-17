@@ -7,7 +7,7 @@ module owns is the half of the merge that is the same whichever ledger is being 
     changed to two different values is `_UNDECIDED` and the engine decides or flags it
   * the field-by-field walk of one record, and the entry-wise walk of one collection, including the
     deletion rule the graph needs (`dag-manage rm` is a command a human really uses)
-  * the append-only log rule the cycle `path` and an instruction's `applied` share
+  * the append-only log rule the cycle `path` uses
   * the record vocabulary (`KIND_*`), the table that says which ledger a path or a shape is, and the
     two ways a decision is recorded: a line `--dry-run` prints, or a conflict a human settles
 """
@@ -266,13 +266,12 @@ def _extend_or_union(label, key, base_value, ours_value, theirs_value, *,
                      identity, same_act, order_by, rep, same_note=None):
     """An append-only log on one field: a prefix extends, two tails union, a mark disagrees.
 
-    A cycle's `path` and an instruction's `applied` are one rule: one side being a prefix of the other
-    takes the longer one; otherwise, past the common prefix, the two tails are unioned in the order
-    `order_by` gives. What differs between the two is named by the caller -- `identity(mark)` is what
-    makes two elements THE SAME thing (a node / a mark's `at`+`cycle`+`round`), `same_act(prev, mark)`
-    says whether two elements sharing that identity are the same act (the cycle path compares only
-    `result`: two sides recording the same outcome for one node, with two stamps, are not a quarrel),
-    and `same_note` is how that one disagreement is said out loud.
+    A cycle's `path` runs on this rule: one side being a prefix of the other takes the longer one;
+    otherwise, past the common prefix, the two tails are unioned in the order `order_by` gives. The
+    caller names the specifics -- `identity(mark)` is what makes two elements THE SAME thing (a
+    node), `same_act(prev, mark)` says whether two elements sharing that identity are the same act
+    (the cycle path compares only `result`: two sides recording the same outcome for one node, with
+    two stamps, are not a quarrel), and `same_note` is how that one disagreement is said out loud.
     """
     got = _three_way(base_value, ours_value, theirs_value)
     if got is not _UNDECIDED:

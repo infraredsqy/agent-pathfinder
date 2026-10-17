@@ -28,8 +28,8 @@ def instruction_is_live(ins: dict) -> bool:
 
 # ── scope: where an instruction can be seen from ───────────────
 # `scope` is the entry's main attribute, the way a declaration's scope is: it says WHERE the entry
-# is visible from, and nothing about whether it was carried out (`state` / `applied` own
-# that). `global` is visible anywhere; `cycle` only while the cycle it was recorded in is active;
+# is visible from, and nothing about whether it is still in force (`state` owns that). `global` is
+# visible anywhere; `cycle` only while the cycle it was recorded in is active;
 # `node` only while the node it was recorded in is not `completed`.
 SCOPES = ('global', 'cycle', 'node')
 #: No field at all. The noisy direction on purpose: a constraint read as narrow evaporates

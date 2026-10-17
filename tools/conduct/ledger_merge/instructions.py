@@ -3,26 +3,18 @@
 One record per instruction, keyed by `id`, and the collection goes back out as a list. What this
 engine adds to the generic walk:
 
-  * the resolution act is ONE thing: `state` / `resolved_at` / `resolved_by` / `superseded_by` are
-    written by one code path (`instruct resolve`), so the side whose `resolved_at` is newer wins all
-    four together. `note` deliberately does NOT travel with them: a hand-written note is never
-    silently overwritten, so a `note` both sides changed is a conflict
-  * the `applied` log (and its older spelling `applied_rounds`) is append-only: two machines that
-    each honoured the same global constraint appended different marks, and stopping the pull for that
-    would be the driver inventing work for a human. The SAME mark -- same `at` + `cycle` + `round` --
-    with different contents is a real disagreement, and that one is flagged
+  * the resolution act is ONE thing: `state` / `resolved_at` / `resolved_by` are written by one code
+    path (`instruct resolve`), so the side whose `resolved_at` is newer wins all three together.
+    `note` deliberately does NOT travel with them: a hand-written note is never silently
+    overwritten, so a `note` both sides changed is a conflict
   * the same `id` added by both sides with different content is an add/add collision: a conflict
 """
 
-from .generic import (_MISSING, _UNDECIDED, _as_dict, _extend_or_union, _get, _merge_collection,
-                      _merge_mapping, _plain_field, _three_way)
+from .generic import (_MISSING, _UNDECIDED, _as_dict, _get, _merge_collection, _merge_mapping,
+                      _plain_field, _three_way)
 
 #: One `instruct resolve` writes these together; they are one act and move as one.
-RESOLUTION_GROUP = ('state', 'resolved_at', 'resolved_by', 'superseded_by')
-#: Append-only logs on an instruction entry: one mark per node that honoured the constraint (a
-#: `scope: global` one is honoured once per node it applies to). `applied` is the name the CLI
-#: appends to today; `applied_rounds` is the name the same log carries in files written before it.
-APPLIED_LOGS = ('applied', 'applied_rounds')
+RESOLUTION_GROUP = ('state', 'resolved_at', 'resolved_by')
 
 
 def merge_instructions(base, ours, theirs, rep) -> dict:
@@ -44,30 +36,8 @@ def _merge_instruction(label, base, ours, theirs, rep):
     def resolve(key, b, o, t):
         if key in RESOLUTION_GROUP:
             return _resolution(label, key, b, o, t, ours, theirs, rep)
-        if key in APPLIED_LOGS:
-            return _applied_log(label, key, b, o, t, rep)
         return _plain_field(label, key, b, o, t, rep)
     return _merge_mapping(_as_dict(base), _as_dict(ours), _as_dict(theirs), rep, label, resolve)
-
-
-def _mark_identity(mark):
-    """What makes two marks THE SAME honouring: when, on which line, in which round.
-
-    `applied` marks carry no `round`, so it is `None` there -- still a sound identity: two marks of
-    one constraint on one cycle taken at the same moment are the same act.
-    """
-    return (mark.get('at'), mark.get('cycle'), mark.get('round'))
-
-
-def _applied_log(label, key, base_value, ours_value, theirs_value, rep):
-    """An append-only log of "this constraint was honoured here": prefix extends, tails union."""
-    return _extend_or_union(
-        label, key, base_value, ours_value, theirs_value, rep=rep,
-        identity=_mark_identity,
-        same_act=lambda prev, mark: prev == mark,
-        order_by=lambda mark: (mark.get('at') or ''),
-        same_note=lambda tag, prev, mark: (f'同一项（at={tag[0]} cycle={tag[1]} round={tag[2]}）'
-                                           f'两侧内容不同'))
 
 
 def _resolution(label, key, base_value, ours_value, theirs_value, ours, theirs, rep):
