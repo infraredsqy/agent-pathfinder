@@ -230,7 +230,8 @@ def _replace_with_retry(tmp: str, path: Path, attempts: int = 4) -> None:
 
 STATE_JSON = LEDGER_DIR / 'state.json'
 SIGNALS_DIR = LEDGER_DIR / 'signals'
-# One append-only account, one writer (this CLI).
+# The standing-instruction account: one writer (this CLI), and the owner is the only one who takes an
+# entry off it (archive or removal).
 INSTRUCTIONS_JSON = LEDGER_DIR / 'instructions.json'
 #: How a path step may end. A node's own work is not tracked here, only the outcome it reported.
 VALID_NODE_RESULTS = {'completed', 'failed', 'stopped'}

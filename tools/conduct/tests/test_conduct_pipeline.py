@@ -33,7 +33,7 @@ What this suite is organised around
      own `path` inside `state.json` (no stage, no round, no per-round file, no second pointer)
   2. the close: the worker's own `next --after <node_id>`, the outcome read off the signal it
      already wrote, and the next node picked by the DAG's own rule
-  3. instructions: one append-only account, three scopes, two targets, read fresh by the session
+  3. instructions: one account, two states, three scopes, two targets, read fresh by the session
   4. the invariants that each cost a bug (the stop rule, tags as a pick filter, `wait` being
      stable, plan being read-only)
   5. the levers that survive: `cycle retry` + `cycle hold`, `--stop`, `clean-temp`

@@ -33,6 +33,7 @@ One record per entry, and what identifies it
     .pf/ideas.json          nodes{}          key: the node uuid
     .pf/state.json          cycles[]         key: `id`
     .pf/instructions.json   instructions[]   key: `id`
+                            removed[]        key: `id` -- the trace a removal leaves (id + moment)
     .pf/signals/<cyc>/<node>.json            the file IS one record: one node's ticket
 
 Every rule below runs ONLY when both sides changed a field to different values; `ours == base` takes
@@ -42,9 +43,12 @@ AUTO-MERGE  (no question asked)
 -------------------------------
   * a field only one side changed                     -> that side
   * an entry only one side ever HAD                   -> that side (an addition)
-  * an entry `dag-manage rm` deleted, with the other
-    side leaving it alone                             -> deleted (the graph propagates deletions;
-                                                         see NOTES for the three other shapes)
+  * an entry `dag-manage rm` / `instruction rm`
+    deleted, with the other side leaving it alone     -> deleted (both collections propagate
+                                                         deletions; see NOTES for the three other
+                                                         shapes)
+  * instructions `removed` traces                     -> union, keyed by `id` (a trace is never
+                                                         dropped)
   * ideas node `status`                               -> the higher rung:
                                                          todo < shelved < completed
   * ideas node `dependencies`                         -> union, when NEITHER side removed an edge
@@ -72,6 +76,9 @@ FLAG  (nothing is written, exit 1, a human decides)
   * state cycle: `title` / `tags` / `policies` both changed to different values (`status` is
     reachable only as a real disagreement: two sides naming two different words)
   * instructions: the same `id` added by BOTH sides with different content (an add/add collision)
+  * instructions: an entry one side removed with `rm`, an EDIT of that entry on the other -- the
+    graph's delete-vs-edit shape, for the same reason (a human said "take it off", a machine said
+    something else about it)
   * instructions: any field both sides changed, except the resolution group. The fields an older
     tool wrote (`applied` / `applied_rounds` / `superseded_by`) are ordinary fields with no rule of
     their own, so changing one on both sides lands here too
@@ -80,22 +87,34 @@ NOTES  (deliberate consequences, worth knowing before trusting a clean merge)
 ------------------------------------------------------------------------------
   * A side that is missing (the whole FILE) is "take the side that exists", so a file one side
     deleted comes back. That is about the files git hands the driver, not about entries inside one.
-  * Deletions propagate for the GRAPH (`.pf/ideas.json`) only, because `dag-manage rm` is a command a
-    human really uses: one side deletes a node, the other leaves it alone -> it is gone. The other
-    three shapes are the ones listed above (added / edited-that-way -> conflict / deleted both ways).
-    Cycles and instruction entries keep the old union rule: no tool deletes one, so a resurrection is
-    a no-op rather than a surprise.
+  * Deletions propagate for the two collections a human really deletes from: the GRAPH
+    (`.pf/ideas.json`, `dag-manage rm`) and the standing instructions (`instruction rm`). One side
+    takes an entry off, the other leaves it alone -> it is gone. The other three shapes are the ones
+    listed above (added / edited-that-way -> conflict / removed both ways). Cycles keep the old union
+    rule: no tool deletes one, so a resurrection is a no-op rather than a surprise.
+  * An instruction removal leaves a trace -- the id and the moment, no text, under the account's own
+    key -- and it travels like any other record (the union rule above). It is what keeps a ledger two
+    machines pull from each other from minting the same id twice: an id is minted one past the
+    highest one ever handed out, and after a removal the entry list alone no longer remembers the id
+    it just gave back. No view of the account shows traces.
   * A node deleted while another node still depends on it is checked (`_flag_broken_dependency`), but
     only for edges THIS merge breaks: an edge already dangling on one side stays that side's problem,
     and `dag-manage validate` is the place for the graph as a whole.
-  * instructions: `state`/`resolved_at`/`resolved_by` are written by ONE code path
-    (`cmd_instruction_resolve`), so they are one act and the newer `resolved_at` wins for all of them.
+  * instructions: `state`/`resolved_at` are written by ONE code path as one act --
+    `cmd_instruction_resolve` archives, `cmd_instruction_revive` clears the same two fields back to
+    in force -- so the rule reads them as a unit: a field only one side changed is that side's, and
+    two sides that both changed it are ordered by `resolved_at`, the newer act winning for both.
+    A revive CLEARS that stamp, so a revive on one side against a withdrawal on the other has nothing
+    left to order the two acts by: that is a conflict, and a human settles it. Where the other side
+    left the two alone -- the ordinary revive -- the side that wrote them wins whole, and the merged
+    record cannot come back half-archived.
     `note` deliberately does NOT travel with them: a hand-written note is never silently
     overwritten, so a `note` both sides changed is a conflict.
-  * instructions: an older tool's bookkeeping (`applied` / `applied_rounds` / `superseded_by`) is not
-    claimed by anything any more, so the driver gives it no rule. A record still carrying those
-    fields merges as it stands and needs no repair: a reader treats any `state` other than `live` as
-    archived, and these fields are ordinary data nobody reads.
+  * instructions: an older tool's bookkeeping (`applied` / `applied_rounds` / `superseded_by`, and the
+    hand an archive used to record in `resolved_by`) is not claimed by anything any more, so the
+    driver gives it no rule. A record still carrying those fields merges as it stands and needs no
+    repair: a reader treats any `state` other than `live` as archived, and these fields are ordinary
+    data nobody reads -- which is also why a merge never rewrites one.
   * Key order in the merged file: ours', with keys only theirs has appended (`ideas.json` is sorted
     by its own writer). An existing record is never reordered, so a merge that decides nothing new
     leaves the bytes alone -- and `main` skips the write entirely when they are unchanged.
@@ -136,8 +155,14 @@ EXIT_USAGE = 2
 
 #: The rungs, low to high: what the graph's three words say about how far along a node is.
 NODE_STATUS_ORDER = ('todo', 'shelved', 'completed')
-#: One `instruct resolve` writes these together; they are one act and move as one.
-RESOLUTION_GROUP = ('state', 'resolved_at', 'resolved_by')
+#: One act of archiving (or putting back) writes these together, and the driver resolves them as a
+#: unit. An archived entry used to record the hand that did it as well; nothing writes that any more,
+#: so it is ordinary data with no rule of its own (see NOTES).
+RESOLUTION_GROUP = ('state', 'resolved_at')
+#: instructions.json: the key the trace a removal leaves lives under -- the `id` and the moment, no
+#: text. The instruction collection propagates deletions like the graph; the traces themselves are
+#: unioned, because nothing ever takes one back.
+REMOVED = 'removed'
 #: 终态：这一格的活有结论了 —— `completed` 交付了，`failed` / `stopped` 没交付。
 #: `pending` 是还没结论的记号（重试留下的），永远进不了这张表。
 TERMINAL_SIGNAL_STATUSES = ('completed', 'failed', 'stopped')
@@ -710,7 +735,11 @@ def _merge_instructions(base, ours, theirs, rep) -> dict:
     for key in _keys(ours, theirs):
         if key == 'instructions':
             merged = _merge_entries(_get(base, key), _get(ours, key), _get(theirs, key), rep,
-                                    _merge_instruction, _index_instructions)
+                                    _merge_instruction, _index_by_id, propagate_delete=True)
+            out[key] = list(merged.values())
+        elif key == REMOVED:
+            merged = _merge_entries(_get(base, key), _get(ours, key), _get(theirs, key), rep,
+                                    _merge_tombstone, _index_by_id)
             out[key] = list(merged.values())
         else:
             out[key] = _plain_field('instructions.json', key, _get(base, key), _get(ours, key),
@@ -718,7 +747,8 @@ def _merge_instructions(base, ours, theirs, rep) -> dict:
     return {k: v for k, v in out.items() if v is not _MISSING}
 
 
-def _index_instructions(items) -> dict:
+def _index_by_id(items) -> dict:
+    """A collection of records keyed by their `id`: the entries, and their removal traces."""
     if isinstance(items, list):
         return {e.get('id'): e for e in items if isinstance(e, dict) and e.get('id')}
     if isinstance(items, dict):
@@ -730,6 +760,21 @@ def _merge_instruction(label, base, ours, theirs, rep):
     def resolve(key, b, o, t):
         if key in RESOLUTION_GROUP:
             return _resolution(label, key, b, o, t, ours, theirs, rep)
+        return _plain_field(label, key, b, o, t, rep)
+    return _merge_mapping(_as_dict(base), _as_dict(ours), _as_dict(theirs), rep, label, resolve)
+
+
+def _merge_tombstone(label, base, ours, theirs, rep):
+    """One removal trace: the id, and when it went away.
+
+    A trace is not an entry anyone edits -- it is the record of one act, and nothing in the tools
+    ever takes one back -- so the fields are resolved the plain way, with the moment going to the
+    EARLIER side: two machines that removed the same entry independently differ only in the stamp,
+    and whoever removed it first is when it left the account.
+    """
+    def resolve(key, b, o, t):
+        if key == 'at':
+            return _stamp(label, key, b, o, t, rep, pick=min)
         return _plain_field(label, key, b, o, t, rep)
     return _merge_mapping(_as_dict(base), _as_dict(ours), _as_dict(theirs), rep, label, resolve)
 
@@ -746,7 +791,12 @@ def _resolution(label, key, base_value, ours_value, theirs_value, ours, theirs, 
                    f'（{newer} {max(o_stamp, t_stamp)}）')
         winner = ours if o_stamp > t_stamp else theirs
         return _get(winner, key)
-    rep.conflict(label, key, ours_value, theirs_value, 'resolved_at 分不出先后')
+    # A revive CLEARS the stamp, and a cleared one can only meet a stamped one when both sides moved
+    # this group: two owner acts on two machines, which no stamp in either record orders. Worth
+    # saying in those words -- "resolved_at 分不出先后" would send the reader looking for two stamps.
+    note = ('一侧把这条放回生效（收掉的时刻清空了）、另一侧又改过它 —— 两次机主动作撞了'
+            if (o_stamp is None) != (t_stamp is None) else 'resolved_at 分不出先后')
+    rep.conflict(label, key, ours_value, theirs_value, note)
     return _MISSING
 
 

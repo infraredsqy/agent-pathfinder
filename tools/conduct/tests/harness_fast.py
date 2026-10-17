@@ -127,6 +127,8 @@ class FastStateManage:
         'resolve': (('ins_id',), {'--state': ('state', True, None),
                                   '--note': ('note', True, None),
                                   '--project': ('project', True, None)}),
+        'rm': (('ins_id',), {'--project': ('project', True, None)}),
+        'revive': (('ins_id',), {'--project': ('project', True, None)}),
     }
     #: Verb -> the module function that verb runs, as `function(namespace)`.
     _CALLS = {
@@ -194,7 +196,7 @@ class FastStateManage:
         if argv[0] == 'instruction':
             sub = argv[1] if len(argv) > 1 else None
             if sub not in self._INSTRUCTION_SPEC:
-                self.stderr = 'usage: state-manage.py instruction {add|list|resolve} ...'
+                self.stderr = 'usage: state-manage.py instruction {add|list|resolve|rm|revive} ...'
                 return 1
             ns = self._namespace(argv[2:], *self._INSTRUCTION_SPEC[sub])
             ns.instruction_command = sub

@@ -78,7 +78,8 @@ pf -- the agent pipeline's own command
             issue <verb>                the issue pool: add / top / weight / resolve ...
             config <verb>               this machine's and this project's settings:
                                         list / get / set / unset
-            instruction <verb>          standing user instructions: list / add / resolve
+            instruction <verb>          standing user instructions: list / add / resolve / rm /
+                                        revive
             session <verb>              a node's own conversations, which live on this machine only:
                                         show / list / import
 

@@ -113,8 +113,9 @@ def cycle(path=(), status='active', updated='2026-10-01T01:00:00Z', **extra):
 
 
 def instruction(**changes):
-    # The last three fields are an older tool's bookkeeping. Records in the wild still carry them,
-    # so the fixture does too; nothing claims them any more (see `TestInstructionsMerge`).
+    # The account's own shape, plus fields an older tool left behind: records in the wild still carry
+    # the likes of `resolved_by` / `superseded_by`, so the fixture does too; nothing claims them any
+    # more (see `TestInstructionsMerge`).
     entry = {'id': 'i-0001', 'text': 't', 'scope': 'global', 'target': 'stage', 'state': 'live',
              'cycle': None, 'node': None, 'said_by': 'user', 'at': '2026-09-01T00:00:00Z',
              'resolved_at': None, 'resolved_by': None, 'superseded_by': None, 'note': None}
@@ -458,10 +459,21 @@ class TestStateMerge(LedgerCase):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestInstructionsMerge(LedgerCase):
-    """The account: whole-field edits merge, a resolution moves as one act."""
+    """The account: whole-field edits merge, a resolution moves as one act, a removal is a deletion
+    of the graph's kind."""
 
     LEDGER = '.pf/instructions.json'
     SORT_KEYS = False
+
+    def two_entries(self):
+        """One account with two instructions: the ancestor the removal cases start from."""
+        first = instruction()['instructions'][0]
+        return {'instructions': [first, dict(first, id='i-0002', text='t2')]}
+
+    def without(self, account, ins_id, at='2026-10-02T00:00:00Z'):
+        """The same account after one entry was removed: the entry is gone, the trace is not."""
+        return {'instructions': [e for e in account['instructions'] if e['id'] != ins_id],
+                'removed': [{'id': ins_id, 'at': at}]}
 
     def test_each_side_edits_a_different_field(self):
         """The regression that matters: `cycle`/`node`/`resolved_at` are null on BOTH sides, and a
@@ -488,10 +500,8 @@ class TestInstructionsMerge(LedgerCase):
 
     def test_the_resolution_moves_as_one_act(self):
         base = instruction()
-        ours = instruction(state='withdrawn', resolved_at='2026-10-02T00:00:00Z',
-                           resolved_by='boundary', note='ours')
-        theirs = instruction(state='withdrawn', resolved_at='2026-10-03T00:00:00Z',
-                             resolved_by='owner')
+        ours = instruction(state='withdrawn', resolved_at='2026-10-02T00:00:00Z', note='ours')
+        theirs = instruction(state='withdrawn', resolved_at='2026-10-03T00:00:00Z')
 
         proc, ours_path = self.merge(base, ours, theirs)
 
@@ -499,8 +509,24 @@ class TestInstructionsMerge(LedgerCase):
         entry = self.merged(ours_path)['instructions'][0]
         self.assertEqual('withdrawn', entry['state'])
         self.assertEqual('2026-10-03T00:00:00Z', entry['resolved_at'])  # theirs is the newer act
-        self.assertEqual('owner', entry['resolved_by'])             # the act travels whole
-        self.assertEqual('ours', entry['note'])                    # a hand-written note is kept
+        self.assertEqual('ours', entry['note'])                     # a hand-written note is kept
+
+    def test_a_legacy_resolved_by_is_ordinary_data(self):
+        """The hand an archive used to record: nothing writes it any more, and a record still
+        carrying it merges like any other field -- one side's edit is taken, two sides' edits are a
+        human's call."""
+        base = instruction(resolved_by=None)
+        ours = instruction(resolved_by='boundary')
+        theirs = instruction(note='theirs note')
+
+        proc, ours_path = self.merge(base, ours, theirs)
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual('boundary', self.merged(ours_path)['instructions'][0]['resolved_by'])
+
+        proc, ours_path = self.merge(base, ours, instruction(resolved_by='owner'))
+
+        self.assertRefused(proc, ours_path, '字段 resolved_by', ours_data=ours)
 
     def test_the_same_id_added_by_both_sides_is_a_conflict(self):
         base = {'instructions': []}
@@ -554,6 +580,93 @@ class TestInstructionsMerge(LedgerCase):
         proc, ours_path = self.merge(base, both, rival)
 
         self.assertRefused(proc, ours_path, '字段 applied', ours_data=both)
+
+    def test_a_removed_entry_stays_removed_when_the_other_side_left_it_alone(self):
+        """A removal on one machine must not be undone by a pull on the other -- the same rule the
+        graph has, for the same reason: a human really runs this command."""
+        base = self.two_entries()
+        removed = self.without(base, 'i-0001')
+
+        for removed_by, ours, theirs in (('ours', removed, base), ('theirs', base, removed)):
+            with self.subTest(removed_by=removed_by):
+                proc, ours_path = self.merge(base, ours, theirs)
+
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                merged = self.merged(ours_path)
+                self.assertEqual(['i-0002'], [e['id'] for e in merged['instructions']])
+                self.assertEqual(['i-0001'], [t['id'] for t in merged['removed']])
+
+    def test_a_removed_entry_that_the_other_side_edited_is_a_conflict(self):
+        """One side says "take it off", the other says something about the entry itself: that is a
+        human's call, exactly as it is for a node."""
+        base = self.two_entries()
+        ours = self.without(base, 'i-0001')
+        theirs = {'instructions': [dict(base['instructions'][0], note='theirs note'),
+                                   base['instructions'][1]]}
+
+        proc, ours_path = self.merge(base, ours, theirs)
+
+        self.assertRefused(proc, ours_path, '删与改撞了', ours_data=ours)
+
+    def test_removals_on_both_sides_are_unioned(self):
+        """Each machine took a different entry off: both removals stand, and both traces survive --
+        the traces are all that is left to remember those ids ever existed."""
+        base = self.two_entries()
+        ours = self.without(base, 'i-0001')
+        theirs = self.without(base, 'i-0002', at='2026-10-03T00:00:00Z')
+
+        proc, ours_path = self.merge(base, ours, theirs)
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        merged = self.merged(ours_path)
+        self.assertEqual([], merged['instructions'])
+        self.assertEqual(['i-0001', 'i-0002'], sorted(t['id'] for t in merged['removed']))
+
+    def test_the_earlier_of_two_removals_of_one_entry_is_the_moment_kept(self):
+        """Both machines removed the same entry: one trace, and the moment it left the account
+        first."""
+        base = self.two_entries()
+        ours = self.without(base, 'i-0001', at='2026-10-02T00:00:00Z')
+        theirs = self.without(base, 'i-0001', at='2026-10-03T00:00:00Z')
+
+        proc, ours_path = self.merge(base, ours, theirs)
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        merged = self.merged(ours_path)
+        self.assertEqual(['i-0002'], [e['id'] for e in merged['instructions']])
+        self.assertEqual([{'id': 'i-0001', 'at': '2026-10-02T00:00:00Z'}], merged['removed'])
+
+    def test_a_revive_merges_clean_when_the_other_side_left_it_alone(self):
+        """Putting an entry back writes the fields one code path owns, so with the other side
+        untouched the act moves whole: no half-archived record, and nothing to settle by hand. A
+        field an older tool left on the record is not part of the act, and the merge leaves it."""
+        base = instruction(state='withdrawn', resolved_at='2026-10-02T00:00:00Z',
+                           resolved_by='boundary')
+        revived = instruction(state='live', resolved_at=None, resolved_by='boundary')
+
+        for revived_by, ours, theirs in (('ours', revived, base), ('theirs', base, revived)):
+            with self.subTest(revived_by=revived_by):
+                proc, ours_path = self.merge(base, ours, theirs)
+
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                entry = self.merged(ours_path)['instructions'][0]
+                self.assertEqual('live', entry['state'])
+                self.assertIsNone(entry['resolved_at'])
+                self.assertEqual('boundary', entry['resolved_by'])
+
+    def test_a_revive_against_a_rival_withdrawal_is_a_legible_conflict(self):
+        """The one shape no rule can decide: putting an entry back CLEARS the stamp, so a revive on
+        one machine and a fresh withdrawal on the other leave nothing in the record to order the two
+        owner acts by. The refusal has to say that, not blame a missing tie-break."""
+        base = instruction(state='withdrawn', resolved_at='2026-10-02T00:00:00Z',
+                           resolved_by='boundary')
+        ours = instruction(state='live', resolved_at=None, resolved_by='boundary')
+        theirs = instruction(state='withdrawn', resolved_at='2026-10-03T00:00:00Z',
+                             resolved_by='boundary')
+
+        proc, ours_path = self.merge(base, ours, theirs)
+
+        self.assertRefused(proc, ours_path, '两次机主动作撞了', ours_data=ours)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
