@@ -1,0 +1,174 @@
+"""`search`：一个正则撒到池子上，命中的分三档回、字段里命中的那一段截出来看。
+
+三档的次序是这份输出的正本：id/title 最相关（整条描述一并回）、description/suggestion 次之
+（回 ±20 字符的窗口，同一个字段里命中两次就整段回）、files/functions/module 再次之（报命中的
+字段与那个值）。一条条目只进一档。
+
+跑法（两种都行）：
+
+    python -m unittest discover -s issue/tests -t .      （cwd 在 tools/）
+    python issue/tests/test_search.py
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+TOOL = Path(__file__).resolve().parent.parent / 'issue_manager.py'
+
+
+class PoolCase(unittest.TestCase):
+    """一个 temp 假项目：记录目录摆成 init 过的样子，命令起真进程。"""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix='issue-search-'))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        # 两枚标记文件就是「这个记录目录 init 过」的凭据：写命令见不到它们会停手。
+        ledger = self.root / '.pf'
+        ledger.mkdir(parents=True, exist_ok=True)
+        (ledger / '.gitignore').write_text('meta/\nworktrees/\ntemp/\n', encoding='utf-8')
+        (ledger / '.gitattributes').write_text('** -text\n', encoding='utf-8')
+
+    def cli(self, *argv: str):
+        proc = subprocess.run([sys.executable, '-X', 'utf8', str(TOOL), *argv], cwd=str(self.root),
+                              capture_output=True, text=True, encoding='utf-8', errors='replace')
+        return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+
+    def add(self, uid: str, **fields):
+        argv = ['add', '--id', uid, '--title', fields.pop('title', uid)]
+        for key, value in fields.items():
+            flag = '--' + key.replace('_', '-')
+            argv += [flag, *value] if isinstance(value, list) else [flag, value]
+        code, out, err = self.cli(*argv)
+        self.assertEqual(code, 0, err or out)
+
+    def search(self, query: str, *extra: str) -> list:
+        code, out, err = self.cli('search', query, *extra)
+        self.assertEqual(code, 0, err or out)
+        return json.loads(out)
+
+
+class TestSearchTiers(PoolCase):
+
+    def test_the_three_tiers_come_back_in_this_order(self):
+        """一条条目只进一档：id/title、description/suggestion、files/functions/module。"""
+        self.add('needle-id', title='plain', description='nothing')
+        self.add('title-hit', title='a needle in the title', description='nothing')
+        self.add('desc-hit', title='plain', description='nothing needle here')
+        self.add('file-hit', title='plain', description='nothing', files=['src/needle.py'])
+
+        result = self.search('needle')
+
+        self.assertEqual(['id', 'title', 'description', 'files'], [i['match'] for i in result])
+
+    def test_a_title_hit_carries_the_whole_description(self):
+        self.add('both', title='needle up here', description='needle down here too')
+
+        hit = self.search('needle')[0]
+
+        self.assertEqual('title', hit['match'])
+        self.assertEqual('needle down here too', hit['description'])
+        self.assertNotIn('snippet', hit)
+
+    def test_a_description_hit_shows_a_window_of_twenty_characters_on_each_side(self):
+        """窗口是命中处起算的 ±20 个字符，两头的 `...` 是截断的记号。"""
+        description = 'x' * 30 + 'needle' + 'y' * 30
+        self.add('desc-hit', title='plain', description=description)
+
+        hit = self.search('needle')[0]
+
+        self.assertEqual('description', hit['match'])
+        self.assertEqual('...' + description[10:50] + '...', hit['snippet'])
+
+    def test_a_hit_at_the_very_start_has_no_leading_ellipsis(self):
+        description = 'needle at the very start'
+        self.add('desc-hit', title='plain', description=description)
+
+        hit = self.search('needle')[0]
+
+        self.assertEqual(description[:20] + '...', hit['snippet'])
+
+    def test_two_hits_in_one_field_show_the_whole_text(self):
+        self.add('twice', title='plain', description='needle one, needle two')
+
+        hit = self.search('needle')[0]
+
+        self.assertEqual('needle one, needle two', hit['snippet'])
+
+    def test_a_suggestion_hit_names_that_field(self):
+        self.add('sugg-hit', title='plain', description='nothing', suggestion='try a needle')
+
+        hit = self.search('needle')[0]
+
+        self.assertEqual('suggestion', hit['match'])
+        self.assertEqual('try a needle', hit['snippet'])
+
+    def test_a_module_hit_wins_over_the_files_of_the_same_entry(self):
+        self.add('mod-hit', title='plain', module='needle-module', files=['src/needle.py'])
+
+        hit = self.search('needle')[0]
+
+        self.assertEqual('module', hit['match'])
+        self.assertEqual('needle-module', hit['value'])
+
+    def test_a_file_hit_reports_the_path_that_matched(self):
+        self.add('file-hit', title='plain', files=['src/other.py', 'src/needle.py'])
+
+        hit = self.search('needle')[0]
+
+        self.assertEqual('files', hit['match'])
+        self.assertEqual('src/needle.py', hit['value'])
+
+    def test_a_function_hit_names_the_functions_field(self):
+        self.add('func-hit', title='plain', functions=['_needle_helper'])
+
+        hit = self.search('needle')[0]
+
+        self.assertEqual('functions', hit['match'])
+        self.assertEqual('_needle_helper', hit['value'])
+
+    def test_the_query_ignores_case(self):
+        self.add('title-hit', title='A NEEDLE in the title')
+
+        self.assertEqual(['title-hit'], [i['id'] for i in self.search('needle')])
+
+
+class TestSearchFilters(PoolCase):
+
+    def test_a_search_can_be_narrowed_by_status(self):
+        self.add('settled', title='a needle')
+        self.add('held', title='a needle')
+        code, out, err = self.cli('resolve', 'settled', '--reason', 'fixed')
+        self.assertEqual(code, 0, err or out)
+
+        self.assertEqual(['held', 'settled'], sorted(i['id'] for i in self.search('needle')))
+        self.assertEqual(['held'], [i['id'] for i in self.search('needle', '--status', 'open')])
+
+    def test_a_search_can_be_narrowed_by_severity(self):
+        self.add('heavy', title='a needle', severity='P0')
+        self.add('light', title='a needle', severity='P3')
+
+        self.assertEqual(['heavy'], [i['id'] for i in self.search('needle', '--severity', 'P0')])
+
+    def test_a_search_can_be_narrowed_by_source(self):
+        self.add('from-scan', title='a needle', source='scan')
+        self.add('from-manual', title='a needle', source='manual')
+
+        self.assertEqual(['from-manual'],
+                         [i['id'] for i in self.search('needle', '--source', 'manual')])
+
+    def test_an_invalid_regex_stops_with_a_message(self):
+        code, out, err = self.cli('search', 'a(')
+
+        self.assertEqual(1, code)
+        self.assertIn('invalid regex', err)
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

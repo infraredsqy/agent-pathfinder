@@ -21,30 +21,22 @@ CLI runs in sees the same one.
 import json
 import os
 import re
-import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from harness_env import _child_env
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from harness import STATE_MANAGE, TOOLS_DIR, init_markers, run_argv  # noqa: E402
 
 __all__ = ['TestConfig']
 
-CONDUCT = Path(__file__).resolve().parent.parent
-STATE_MANAGE = CONDUCT / 'pipeline' / 'state-manage.py'
-PF = CONDUCT.parent / 'bin' / 'pf.py'
-PYTHON = sys.executable
+PF = TOOLS_DIR / 'bin' / 'pf.py'
 
 #: `list` prints `key<pad> = value（layer）`; the layer is the human label, not the key.
 LINE = re.compile(r'^(?P<key>[a-z_]+)\s+=\s+(?P<value>.+?)（(?P<layer>.+?)）$')
-
-
-def _run(argv, cwd):
-    return subprocess.run([PYTHON, '-X', 'utf8', *[str(a) for a in argv]],
-                          cwd=str(cwd), capture_output=True, text=True,
-                          encoding='utf-8', errors='replace', env=_child_env())
 
 
 class TestConfig(unittest.TestCase):
@@ -56,12 +48,9 @@ class TestConfig(unittest.TestCase):
         self.root = self.base / 'proj'
         self.home = self.base / 'home'
         self.home.mkdir()
-        self.ledger = self.root / '.pf'
-        self.ledger.mkdir(parents=True)
         # What `init` writes, and the only thing that says this `.pf/` was put there on purpose:
         # a write into the project layer is refused without them.
-        (self.ledger / '.gitignore').write_text('meta/\n', encoding='utf-8')
-        (self.ledger / '.gitattributes').write_text('** -text\n', encoding='utf-8')
+        self.ledger = init_markers(self.root)
         # The sandbox's own home, so `--global` can never reach the machine's real one.
         home = mock.patch.dict(os.environ, {'PF_HOME_DIR': str(self.home)})
         home.start()
@@ -69,10 +58,10 @@ class TestConfig(unittest.TestCase):
 
     # ── helpers ──────────────────────────────────────────────────────────────
     def state(self, *args, cwd=None):
-        return _run([STATE_MANAGE, *args], cwd or self.root)
+        return run_argv([STATE_MANAGE, *args], cwd=cwd or self.root, check=False)
 
     def pf(self, *args, cwd=None):
-        return _run([PF, *args], cwd or self.root)
+        return run_argv([PF, *args], cwd=cwd or self.root, check=False)
 
     def effective(self, cwd=None):
         """`list`, read back as {key: (value, layer)} -- the tool's own answer, parsed."""
@@ -191,6 +180,19 @@ class TestConfig(unittest.TestCase):
         self.assertIn("['on', 'off']", proc.stderr)
         self.assertFalse((self.ledger / 'config.json').exists(),
                          'a refused write leaves no file behind')
+
+    def test_a_quoted_number_on_disk_is_the_same_number(self):
+        """`count` 只问「是不是一个正整数」：盘上写 `"3"` 与写 3 走同一个规则。
+
+        命令行给的是字、盘上给的是 JSON 值，两种输入从同一个门过 —— 一个 kind 的边界只有一处，
+        所以这里放行的正是「写得进的那个形状」。
+        """
+        self.write_project('{"max_agents": "3"}')
+
+        proc = self.state('config', 'get', 'max_agents')
+
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual('3\n', proc.stdout)
 
     def test_a_key_this_tool_does_not_own_survives_a_write(self):
         self.write_project('{"something_else": 1}')

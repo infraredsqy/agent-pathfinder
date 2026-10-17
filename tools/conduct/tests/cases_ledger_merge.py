@@ -5,9 +5,11 @@ Run it either way:
     python conduct/tests/cases_ledger_merge.py      # this file alone
     python conduct/tests/test_conduct_pipeline.py       # with the rest of the suite (it star-imports this)
 
-Cases here build their own throwaway directories; they deliberately do NOT touch the shared harness
-(`harness*.py`), because the driver is a standalone program with two inputs: three files, and the
-tools it borrows its reader and writers from. What is pinned:
+Cases here build their own throwaway directories and never use the `Sandbox`: the driver is a
+standalone program with two inputs -- three files, and the tools it borrows its reader and writers
+from, so one fixture of its own is the whole of what it needs. What they do share is the leaf level
+the whole suite stands on (`harness_env`): the paths, the child environment, the one loader, the
+decoder, the process runner, and the two files `init` writes. What is pinned:
 
   * the three-way rules, one case per rule in the driver's AUTO-MERGE / FLAG table -- decided by
     the driver's own `main()` in this process, because the rules track the ledger's shape and
@@ -24,7 +26,6 @@ tools it borrows its reader and writers from. What is pinned:
 from __future__ import annotations
 
 import contextlib
-import importlib.util
 import io
 import json
 import os
@@ -34,11 +35,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-CONDUCT_DIR = HERE.parent
-TOOLS_DIR = CONDUCT_DIR.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from harness import (CONDUCT_DIR, DAG_MANAGE, TOOLS_DIR, _child_env, _decode, init_markers,
+                     run_argv, shared_loader)  # noqa: E402
+
 MERGE_PY = CONDUCT_DIR / 'ledger-merge.py'
-DAG_MANAGE = TOOLS_DIR / 'dag' / 'dag-manage.py'
+MERGE_PKG = CONDUCT_DIR / 'ledger_merge'
 
 NODE1 = 'aaaa1111-0000-4000-8000-000000000001'
 NODE2 = 'bbbb2222-0000-4000-8000-000000000002'
@@ -50,33 +53,23 @@ EDGE_X, EDGE_Y, EDGE_Z = 'edge-x', 'edge-y', 'edge-z'
 #  The driver and the tools it must agree with, loaded by path
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _load_by_path(name: str, path: Path, package_dir: Path | None = None):
-    kwargs = {'submodule_search_locations': [str(package_dir)]} if package_dir else {}
-    spec = importlib.util.spec_from_file_location(name, path, **kwargs)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-DRIVER = _load_by_path('ledger_merge_under_test', MERGE_PY)
-STORE = _load_by_path('ledger_merge_test_conduct_state',
-                      CONDUCT_DIR / 'conduct_state' / '__init__.py',
-                      CONDUCT_DIR / 'conduct_state').store
-
-
-def child_env():
-    return dict(os.environ, PYTHONIOENCODING='utf-8')
+#: The entry, and the package it forwards to. Both come through the one loader, the package under the
+#: name the entry loads it by and `reuse`d: `MERGE` here is the object `DRIVER.main()` runs in, and
+#: that is what makes `MERGE.store().bind_paths()` below aim THIS case's run at its own project.
+LOADER = shared_loader()
+DRIVER = LOADER.load_by_path('ledger_merge_under_test', MERGE_PY, register=True, reuse=True)
+MERGE = LOADER.load_by_path('pf_conduct_ledger_merge', MERGE_PKG / '__init__.py',
+                            package_dir=MERGE_PKG, register=True, reuse=True)
+STORE = LOADER.load_by_path('ledger_merge_test_conduct_state',
+                            CONDUCT_DIR / 'conduct_state' / '__init__.py',
+                            package_dir=CONDUCT_DIR / 'conduct_state',
+                            register=True, reuse=True).store
 
 
 def tool_bytes(data, sort_keys=False) -> bytes:
     """A ledger file exactly as the tools write it: CRLF, indent=2, no trailing newline."""
     text = json.dumps(data, indent=2, ensure_ascii=False, sort_keys=sort_keys)
     return text.replace('\n', os.linesep).encode('utf-8')
-
-
-def read(path: Path):
-    return json.loads(path.read_text(encoding='utf-8'))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -152,10 +145,7 @@ class LedgerCase(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name)
         # init 的两枚文件：驱动写回时也要拿项目那把锁，而锁只肯落在 init 过的 `.pf/` 里。
-        ledger = self.root / '.pf'
-        ledger.mkdir(parents=True, exist_ok=True)
-        (ledger / '.gitignore').write_text('meta/\nworktrees/\ntemp/\n', encoding='utf-8')
-        (ledger / '.gitattributes').write_text('** -text\n', encoding='utf-8')
+        init_markers(self.root)
 
     # ── the fixture ──────────────────────────────────────────────────────────
     def side_path(self, side: str) -> Path:
@@ -188,20 +178,18 @@ class LedgerCase(unittest.TestCase):
         git runs the driver with the merging repo as cwd, and the driver's ledger-lock path is
         resolved from that cwd, so the lock file lands here instead of next to the test runner.
         """
-        argv = [sys.executable, str(MERGE_PY)]
+        argv = [MERGE_PY]
         if dry:
             argv.append('--dry-run')
-        argv += [str(self.side_path('base')), str(self.side_path('ours')),
-                 str(self.side_path('theirs'))]
-        return subprocess.run(argv, capture_output=True, text=True, encoding='utf-8',
-                              errors='replace', env=child_env(), cwd=str(self.root))
+        argv += [self.side_path('base'), self.side_path('ours'), self.side_path('theirs')]
+        return run_argv(argv, cwd=self.root, check=False)
 
     def run_driver_in_process(self, dry=False):
         """The same argv, decided in this process: `main()` itself, output captured.
 
-        The process gets its project from cwd at store-import time; this in-process copy reads its
-        bindings at call time, so the call re-points the store at THIS case's throwaway project
-        first and the ledger lock lands in it -- exactly where the process would have put it.
+        The process gets its project from cwd at store-import time; the store this module binds reads
+        its bindings at call time, so the call re-points it at THIS case's throwaway project first and
+        the ledger lock lands in it -- exactly where the process would have put it.
         """
         argv = [str(self.side_path('base')), str(self.side_path('ours')),
                 str(self.side_path('theirs'))]
@@ -209,7 +197,7 @@ class LedgerCase(unittest.TestCase):
             argv.insert(0, '--dry-run')
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            DRIVER.store().bind_paths(self.root.resolve() / '.pf')
+            MERGE.store().bind_paths(self.root.resolve() / '.pf')
             code = DRIVER.main(argv)
         return subprocess.CompletedProcess(argv, code, out.getvalue(), err.getvalue())
 
@@ -219,7 +207,7 @@ class LedgerCase(unittest.TestCase):
         return self.run_driver(dry=dry), self.side_path('ours')
 
     def merged(self, ours_path: Path):
-        return read(ours_path)
+        return _decode(ours_path)
 
     def assertRefused(self, proc, ours_path: Path, needle: str, ours_data=None):
         """A conflict: non-zero, a line naming the field, and `<ours>` untouched on disk."""
@@ -427,6 +415,23 @@ class TestStateMerge(LedgerCase):
         proc, ours_path = self.merge(base, ours, theirs)
 
         self.assertRefused(proc, ours_path, 'path', ours_data=ours)
+
+    def test_one_node_with_the_same_result_twice_is_no_quarrel(self):
+        """同一个节点两侧各记了一次同样的结果，收工时刻差了几秒：并集里留先来的那一条就够。
+
+        规则判的是两侧同一个节点的 `result`；判整个条目的话，两台机器把同一个节点记成完成、各自
+        记下自己的收工时刻，就会变成一次要人裁决的 pull —— 规则自己在给人找活。
+        """
+        shared = step(NODE1, '2026-10-01T00:00:00Z', '2026-10-01T01:00:00Z')
+        ours = cycle([shared, step(NODE2, '2026-10-01T01:00:00Z', '2026-10-01T02:00:00Z')])
+        theirs = cycle([shared, step(NODE2, '2026-10-01T01:00:00Z', '2026-10-01T09:00:00Z')])
+
+        proc, ours_path = self.merge(cycle([shared]), ours, theirs)
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        path = self.merged(ours_path)['cycles'][0]['path']
+        self.assertEqual([NODE1, NODE2], [s['node'] for s in path])
+        self.assertEqual('2026-10-01T02:00:00Z', path[1]['ended_at'])
 
     def test_a_status_only_one_side_changed_is_taken(self):
         base = cycle([], status='active')
@@ -794,31 +799,60 @@ class TestDriverContract(LedgerCase):
         other.write_text('{"hello": "world"}', encoding='utf-8')
         for target in (path, other):
             with self.subTest(target=target.name):
-                proc = subprocess.run([sys.executable, str(MERGE_PY), str(target), str(target),
-                                       str(target)], capture_output=True, text=True,
-                                      encoding='utf-8', errors='replace', env=child_env(),
-                                      cwd=str(self.root))
+                proc = run_argv([MERGE_PY, target, target, target], cwd=self.root, check=False)
                 self.assertEqual(2, proc.returncode)
                 self.assertEqual('hello' if target is path else '{"hello": "world"}',
                                  target.read_text(encoding='utf-8'))
 
+    def test_a_file_that_is_not_json_is_refused_with_exit_2(self):
+        """读不动的一侧：rc=2、那枚文件原样，驱动与读者各说一句，两句都点名是哪个文件。"""
+        self.write_side('base', ideas(aaaa=node('one')))
+        broken = self.side_path('ours')
+        broken.parent.mkdir(parents=True, exist_ok=True)
+        broken.write_text('{not json', encoding='utf-8')
+        before = broken.read_bytes()
+
+        proc = run_argv([MERGE_PY, self.side_path('base'), broken, self.side_path('theirs')],
+                        cwd=self.root, check=False)
+
+        self.assertEqual(2, proc.returncode, proc.stderr)
+        self.assertIn('parse failure', proc.stderr)          # the shared reader's words
+        self.assertIn('不是合法 JSON', proc.stderr)           # and the driver's own line
+        self.assertIn(broken.name, proc.stderr)
+        self.assertEqual(before, broken.read_bytes(), 'a refused read still touched the file')
+
     def test_the_ledger_name_is_the_dispatch(self):
-        self.assertEqual('ideas', DRIVER._kind_of('.pf/ideas.json'))
-        self.assertEqual('state', DRIVER._kind_of(r'C:\repo\.pf\state.json'))
-        self.assertEqual('instructions', DRIVER._kind_of('.pf/instructions.json'))
-        self.assertEqual('signal', DRIVER._kind_of('.pf/signals/cyc/aaaa1111.json'))
-        self.assertIsNone(DRIVER._kind_of('.pf/notes.json'))
+        self.assertEqual('ideas', MERGE._kind_of('.pf/ideas.json'))
+        self.assertEqual('state', MERGE._kind_of(r'C:\repo\.pf\state.json'))
+        self.assertEqual('instructions', MERGE._kind_of('.pf/instructions.json'))
+        self.assertEqual('signal', MERGE._kind_of('.pf/signals/cyc/aaaa1111.json'))
+        self.assertIsNone(MERGE._kind_of('.pf/notes.json'))
 
     def test_the_shape_is_the_dispatch_when_there_is_no_name(self):
         """Under git `%O`/`%A`/`%B` are `.merge_file_XXXXXXXX`; `%P` names the file, but the driver
         still has to work if somebody configures it without `%P`."""
-        self.assertEqual('ideas', DRIVER._kind_from_shape(ideas(aaaa=node('one'))))
-        self.assertEqual('state', DRIVER._kind_from_shape(cycle([])))
-        self.assertEqual('instructions', DRIVER._kind_from_shape(instruction()))
-        self.assertEqual('signal', DRIVER._kind_from_shape(signal('completed')))
-        self.assertEqual('state', DRIVER._kind_from_shape(None, {'cycles': []}))
-        self.assertIsNone(DRIVER._kind_from_shape({}, None))
-        self.assertIsNone(DRIVER._kind_from_shape({'hello': 'world'}))
+        self.assertEqual('ideas', MERGE._kind_from_shape(ideas(aaaa=node('one'))))
+        self.assertEqual('state', MERGE._kind_from_shape(cycle([])))
+        self.assertEqual('instructions', MERGE._kind_from_shape(instruction()))
+        self.assertEqual('signal', MERGE._kind_from_shape(signal('completed')))
+        self.assertEqual('state', MERGE._kind_from_shape(None, {'cycles': []}))
+        self.assertIsNone(MERGE._kind_from_shape({}, None))
+        self.assertIsNone(MERGE._kind_from_shape({'hello': 'world'}))
+
+    def test_help_prints_the_driver_spelling_of_the_git_arguments(self):
+        """`--help` 是 git 那条命令的说明书：`%O`/`%A`/`%B`/`%P` 原样印出来，命令自己 rc=0。
+
+        argparse 会把每条 `help=` 当格式串（`%` 要写成 `%%`），一个漏掉的双写就让 `--help` 抛
+        `ValueError`：git 配置里认不出驱动的人正是靠这一段。
+        """
+        proc = run_argv([MERGE_PY, '--help'], cwd=self.root, check=False)
+
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual('', proc.stderr)
+        for printed in ("git's %O -- the common ancestor", "git's %A -- the merged result is written",
+                        "git's %B -- the other branch",
+                        'a git merge driver: %O %A %B [%P]'):
+            self.assertIn(printed, proc.stdout)
 
     def test_the_fourth_argument_names_the_file(self):
         """`git config ... %O %A %B %P`: the temp-file names carry no ledger name, `%P` does."""
@@ -829,12 +863,10 @@ class TestDriverContract(LedgerCase):
         # aim the driver at the temp-file names git actually uses, and name the file with %P
         temp = self.root / '.merge_file_ABC123'
         temp.write_bytes(tool_bytes(mins, sort_keys=True))
-        proc = subprocess.run([sys.executable, str(MERGE_PY), str(self.side_path('base')),
-                               str(temp), str(self.side_path('theirs')), '.pf/ideas.json'],
-                              capture_output=True, text=True, encoding='utf-8', errors='replace',
-                              env=child_env(), cwd=str(self.root))
+        proc = run_argv([MERGE_PY, self.side_path('base'), temp, self.side_path('theirs'),
+                         '.pf/ideas.json'], cwd=self.root, check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        merged = read(temp)
+        merged = _decode(temp)
         self.assertEqual({NODE1, NODE2}, set(merged['nodes']))     # ours' two nodes, unioned
         self.assertEqual('completed', merged['nodes'][NODE1]['status'])
 
@@ -842,15 +874,17 @@ class TestDriverContract(LedgerCase):
 class TestTheBytesAreTheToolsOwn(LedgerCase):
     """The merged file must be byte-for-byte what the tool would have written.
 
-    This is the whole reason the driver borrows `conduct_state.store` and dag-manage instead of doing
-    its own `json.dumps`: a ledger that differs by one byte from what the tools write would show up
-    as a change on every single merge, forever.
+    This is the whole reason the driver asks `conduct_state.store` and dag-manage for a record's own
+    bytes instead of doing its own `json.dumps`: a ledger that differs by one byte from what the tools
+    write would show up as a change on every single merge, forever. The reference is the file the
+    OWNER's writer really lands, so a writer that moves on its own turns these cases red.
     """
 
     def reference(self, kind: str, data, path: Path) -> bytes:
-        """Write `data` with the tool that OWNS that file, and hand back the bytes."""
+        """Write `data` with the writer that OWNS that file, and hand back the bytes it left."""
         if kind == 'ideas':
-            dag = _load_by_path('ledger_merge_test_dag_manage', DAG_MANAGE)
+            dag = LOADER.load_by_path('ledger_merge_test_dag_manage', DAG_MANAGE,
+                                      register=True, reuse=True)
             dag.LEDGER_DIR = path.parent
             dag.DATA_DIR = path.parent
             dag.NODES_DIR = path.parent / 'nodes'
@@ -865,7 +899,7 @@ class TestTheBytesAreTheToolsOwn(LedgerCase):
         proc, ours_path = self.merge(base, ours, theirs)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         written = ours_path.read_bytes()
-        reference = self.reference(kind, read(ours_path),
+        reference = self.reference(kind, _decode(ours_path),
                                    self.root / 'reference' / Path(ledger).name)
         self.assertEqual(reference, written, f'{kind}: the merged bytes are not the tools\' bytes')
         self.assertNotIn(b'\n', written.replace(b'\r\n', b''), 'not CRLF throughout')
@@ -890,6 +924,128 @@ class TestTheBytesAreTheToolsOwn(LedgerCase):
     def test_signal_bytes(self):
         self.check('signal', f'.pf/signals/cyc/{NODE1}.json', signal('pending'),
                    signal('pending', summary='ours'), signal('completed', summary='theirs'), False)
+
+
+class TestTheDoorsGiveTheWritersBytes(unittest.TestCase):
+    """A door's bytes and the bytes its writer lands are one thing, whichever file it is.
+
+    `store.record_bytes` / `dag-manage.ideas_bytes` are what the merge driver compares the merged
+    result against ("would this write change anything at all") and lands. That comparison holds while
+    the door and the writer agree byte for byte; either side moving alone leaves the driver treating
+    its own idea of the format as the file's, which is a change on every single merge. These two cases
+    name both sides side by side, so a writer that moves alone turns them red.
+    """
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix='ledger-merge-door-')
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+
+    def _graph(self):
+        return LOADER.load_by_path('ledger_merge_test_dag_manage', DAG_MANAGE,
+                                   register=True, reuse=True)
+
+    def test_the_store_door_gives_the_bytes_its_writer_lands(self):
+        """`record_bytes` 与 `_atomic_write` 就同一份数据各说一次，两次必须一模一样。"""
+        data = cycle([step(NODE1, '2026-10-01T00:00:00Z', '2026-10-01T01:00:00Z')])
+        landed = self.root / 'reference' / 'state.json'
+
+        STORE._atomic_write(landed, data)
+
+        self.assertEqual(landed.read_bytes(), STORE.record_bytes(data))
+
+    def test_the_graph_door_gives_the_bytes_its_writer_lands(self):
+        """`ideas_bytes` 与 `_write` 同上；`_write` 的落点由这次调用点名（三个绑定挪到 temp 里）。"""
+        data = ideas(aaaa=node('one'), bbbb=node('two'))
+        landed = self.root / 'reference' / '.pf' / 'ideas.json'
+        dag = self._graph()
+        dag.LEDGER_DIR = landed.parent
+        dag.DATA_DIR = landed.parent
+        dag.NODES_DIR = landed.parent / 'nodes'
+        dag.IDEAS_JSON = landed
+
+        dag._write(data)
+
+        self.assertEqual(landed.read_bytes(), dag.ideas_bytes(data))
+
+
+class TestAMissingToolIsAUsageError(LedgerCase):
+    """A tool the driver was pointed at by name that holds nothing: one line, exit 2, file untouched.
+
+    `DSH_CONDUCT_DAG_MANAGE` / `DSH_CONDUCT_STATE_DIR` name where the graph's writer and the store
+    live. The driver reads the record's bytes from them for the "would this write change anything"
+    question, so both a merge with something to write and one with nothing to write reach for the tool
+    -- and a wrong path gets the same answer either way: a person fixes the command or the setting.
+    Four shapes, one per kind crossed with the two merge outcomes, plus the control that the same
+    fixture still merges when the tool is where the variable did not have to point it.
+    """
+
+    def _merge_with(self, ledger: str, env_name: str, base, ours, theirs, env=None):
+        """The shipped driver as a process, with `env_name` aimed wherever the caller says."""
+        self.LEDGER = ledger
+        self.SORT_KEYS = ledger.endswith('ideas.json')
+        self.write_sides(base, ours, theirs)
+        argv = [MERGE_PY, self.side_path('base'), self.side_path('ours'), self.side_path('theirs'),
+                ledger]
+        child = dict(_child_env(), **(env or {}))
+        return run_argv(argv, cwd=self.root, env=child, check=False)
+
+    def _nowhere(self, env_name: str):
+        """The environment that aims `env_name` at a path holding no such tool."""
+        return {env_name: str(self.missing_tool())}
+
+    def missing_tool(self):
+        """The path those environments point at: what the refusal line has to name."""
+        return self.root / 'nowhere' / 'the-tool'
+
+    def assertUsageError(self, proc, ours_data):
+        """One line naming the path that came up empty, exit 2, `<ours>` exactly as this case wrote it."""
+        self.assertEqual(2, proc.returncode, proc.stdout)
+        self.assertNotIn('Traceback', proc.stderr)
+        self.assertEqual(1, len(proc.stderr.strip().splitlines()), proc.stderr)
+        self.assertIn('ledger-merge:', proc.stderr)
+        # The line spells the missing path either plainly or through the OS error's own `repr`
+        # (that one doubles every backslash); flatten the repr form before matching.
+        self.assertIn(str(self.missing_tool()), proc.stderr.replace('\\\\', '\\'),
+                      'a person has to read which path came up empty off this one line')
+        self.assertEqual(tool_bytes(ours_data, sort_keys=self.SORT_KEYS),
+                         self.side_path('ours').read_bytes(), '<ours> was touched')
+
+    def test_a_missing_store_with_nothing_to_write_is_a_usage_error(self):
+        same = cycle([step(NODE1, '2026-10-01T00:00:00Z', '2026-10-01T01:00:00Z')])
+        proc = self._merge_with('.pf/state.json', 'DSH_CONDUCT_STATE_DIR', same, same, same,
+                                env=self._nowhere('DSH_CONDUCT_STATE_DIR'))
+        self.assertUsageError(proc, same)
+
+    def test_a_missing_store_with_something_to_write_is_a_usage_error(self):
+        base = cycle([step(NODE1, '2026-10-01T00:00:00Z', '2026-10-01T01:00:00Z')])
+        theirs = cycle([step(NODE2, '2026-10-01T01:00:00Z', '2026-10-01T02:00:00Z')])
+        proc = self._merge_with('.pf/state.json', 'DSH_CONDUCT_STATE_DIR', base, base, theirs,
+                                env=self._nowhere('DSH_CONDUCT_STATE_DIR'))
+        self.assertUsageError(proc, base)
+
+    def test_a_missing_graph_tool_with_nothing_to_write_is_a_usage_error(self):
+        same = ideas(aaaa=node('one'))
+        proc = self._merge_with('.pf/ideas.json', 'DSH_CONDUCT_DAG_MANAGE', same, same, same,
+                                env=self._nowhere('DSH_CONDUCT_DAG_MANAGE'))
+        self.assertUsageError(proc, same)
+
+    def test_a_missing_graph_tool_with_something_to_write_is_a_usage_error(self):
+        base = ideas(aaaa=node('one'))
+        theirs = ideas(aaaa=node('one'), cccc=node('three'))
+        proc = self._merge_with('.pf/ideas.json', 'DSH_CONDUCT_DAG_MANAGE', base, base, theirs,
+                                env=self._nowhere('DSH_CONDUCT_DAG_MANAGE'))
+        self.assertUsageError(proc, base)
+
+    def test_the_same_merge_lands_when_the_tool_is_there(self):
+        """对照：变量留在缺省（工具在出厂位置）时，同一份夹具照合、照写。"""
+        base = ideas(aaaa=node('one'))
+        theirs = ideas(aaaa=node('one'), cccc=node('three'))
+
+        proc = self._merge_with('.pf/ideas.json', 'DSH_CONDUCT_DAG_MANAGE', base, base, theirs)
+
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual({NODE1, NODE3}, set(_decode(self.side_path('ours'))['nodes']))
 
 
 # `cases_ledger_merge_git.py` holds the REAL-git cases (merge / merge conflict / rebase). They live in

@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from harness import Driver, Sandbox, load_pipeline
+from harness import Driver, PIPELINE_PATH, STATE_MANAGE, Sandbox, load_pipeline, run_argv
 
 __all__ = ['ACTION_VOCABULARY', 'Base', 'NODE', 'NODE2', 'NODE3', 'pipeline', 'normalise', 'skill_of']
 
@@ -32,7 +32,7 @@ NODE3 = 'cccccccc-3333-4333-8333-cccccccccccc'
 # maintenance node and pins the cycle on it, then `apply` re-plans into its dispatch. No caller ever
 # receives either of them.
 ACTION_VOCABULARY = {'dispatch', 'open_node', 'maintenance_due', 'stop_pipeline', 'wait', 'ask_user',
-                     'no_cycle', 'fail_hard'}
+                     'no_cycle'}
 
 
 def skill_of(action):
@@ -76,15 +76,13 @@ class Base(unittest.TestCase):
         self.addCleanup(sb.close)
         return sb
 
-    def independent(self, count=2):
-        """A sandbox whose nodes do not depend on each other.
+    def cli(self, sb, *args):
+        """The shipped `state-manage.py`, as a real process against the sandbox."""
+        return run_argv([STATE_MANAGE, *args], cwd=sb.root, check=False)
 
-        Used wherever the subject is one node's own record, not the graph.
-        """
-        sb = self.make()
-        for i in range(count):
-            sb.add_node(f'n{i}-0000-4000-8000-00000000000{i}', f'节点 {i}', mode='auto')
-        return sb
+    def pipeline_cli(self, sb, *args):
+        """`conduct_pipeline.py` as a real process: the module's own entry, driven the shipped way."""
+        return run_argv([PIPELINE_PATH, *args], check=False)
 
     def run_to_stop(self, sb, cycle='cyc', closer=None, worker=None, max_steps=80):
         driver = Driver(sb, cycle, closer=closer, worker=worker, max_steps=max_steps)

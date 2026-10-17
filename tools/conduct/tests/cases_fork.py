@@ -17,8 +17,6 @@
 from __future__ import annotations
 
 import json
-import shutil
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -26,20 +24,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from cases_base import NODE
-from harness_env import STATE_MANAGE, _child_env
+from cases_base import NODE  # noqa: E402
+from harness import GIT, STATE_MANAGE, git, init_markers, run_argv  # noqa: E402
 
 __all__ = ['TestForkWorktree']
-
-PYTHON = sys.executable
-GIT = shutil.which('git')
-
-
-def _child(cwd):
-    return dict(_child_env(), **{
-        'GIT_AUTHOR_NAME': 'fork test', 'GIT_AUTHOR_EMAIL': 'fork@example.invalid',
-        'GIT_COMMITTER_NAME': 'fork test', 'GIT_COMMITTER_EMAIL': 'fork@example.invalid',
-    })
 
 
 @unittest.skipUnless(GIT, 'git is not on PATH')
@@ -54,12 +42,10 @@ class TestForkWorktree(unittest.TestCase):
         self.short = NODE[:8]
         self.record = self.repo / '.pf' / 'meta' / f'FORK-{self.short}.json'
         self.wt = self.repo / '.pf' / 'worktrees' / self.short
-        self.git('init', '-b', 'main')
-        pf = self.repo / '.pf'
-        (pf / 'signals' / 'cyc').mkdir(parents=True)
+        git(self.repo, 'init', '-b', 'main')
         # init 的两枚文件：没有它们，任何会写的命令都会拒。
-        (pf / '.gitignore').write_text('meta/\nworktrees/\ntemp/\n', encoding='utf-8')
-        (pf / '.gitattributes').write_text('** -text\n', encoding='utf-8')
+        pf = init_markers(self.repo)
+        (pf / 'signals' / 'cyc').mkdir(parents=True)
         (pf / 'state.json').write_text(json.dumps(
             {'cycles': [{'id': 'cyc', 'title': 't', 'status': 'active', 'tags': ['coding'],
                          'holding': [{'id': NODE, 'since': '2026-10-01T00:00:00Z'}],
@@ -71,22 +57,12 @@ class TestForkWorktree(unittest.TestCase):
             {'cycle': 'cyc', 'node': NODE, 'status': 'completed', 'summary': 'done',
              'outputs': {}, 'timestamp': '2026-10-01T00:00:00Z'}, indent=2), encoding='utf-8')
         # 这个仓库是"提交档"：`.pf/` 跟着一起进库，只靠 `.pf/.gitignore` 把 meta/ 挡在外面。
-        self.git('add', '-A')
-        self.git('commit', '-m', 'seed', '--no-gpg-sign')
-        self.head = self.git('rev-parse', 'HEAD').stdout.strip()
-
-    def git(self, *args, check=True):
-        proc = subprocess.run([GIT, *args], cwd=str(self.repo), capture_output=True, text=True,
-                              encoding='utf-8', errors='replace', env=_child(self.repo))
-        if check and proc.returncode != 0:
-            raise AssertionError(f'git {" ".join(args)} failed ({proc.returncode}):\n'
-                                 f'{proc.stdout}\n{proc.stderr}')
-        return proc
+        git(self.repo, 'add', '-A')
+        git(self.repo, 'commit', '-m', 'seed', '--no-gpg-sign')
+        self.head = git(self.repo, 'rev-parse', 'HEAD').stdout.strip()
 
     def _state_manage(self, *args):
-        return subprocess.run([PYTHON, '-X', 'utf8', str(STATE_MANAGE), *args],
-                              cwd=str(self.repo), capture_output=True, text=True,
-                              encoding='utf-8', errors='replace', env=_child(self.repo))
+        return run_argv([STATE_MANAGE, *args], cwd=self.repo, check=False)
 
     def _cycle(self):
         return json.loads((self.repo / '.pf' / 'state.json').read_text(encoding='utf-8'))['cycles'][0]
@@ -106,7 +82,7 @@ class TestForkWorktree(unittest.TestCase):
         proc = self._state_manage('fork-worktree', NODE)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertTrue(self.wt.is_dir())
-        self.assertIn(f'pf/{self.short}', self.git('branch', '--list', f'pf/{self.short}').stdout)
+        self.assertIn(f'pf/{self.short}', git(self.repo, 'branch', '--list', f'pf/{self.short}').stdout)
         rec = json.loads(self.record.read_text(encoding='utf-8'))
         self.assertEqual(NODE, rec['node'])
         self.assertEqual('main', rec['branch'], 'the record must carry the branch forked from')
@@ -129,15 +105,15 @@ class TestForkWorktree(unittest.TestCase):
         self.assertIn('already exists', proc.stderr)
 
         # 只摘 worktree、分支还在：第二个占位 face 也要点名。
-        self.git('worktree', 'remove', f'.pf/worktrees/{self.short}')
+        git(self.repo, 'worktree', 'remove', f'.pf/worktrees/{self.short}')
         proc = self._state_manage('fork-worktree', NODE)
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn(f'pf/{self.short}', proc.stderr)
 
     def test_a_close_after_the_cleanup_passes_and_drops_the_record(self):
         self.assertEqual(0, self._state_manage('fork-worktree', NODE).returncode)
-        self.git('worktree', 'remove', f'.pf/worktrees/{self.short}')
-        self.git('branch', '-D', f'pf/{self.short}')
+        git(self.repo, 'worktree', 'remove', f'.pf/worktrees/{self.short}')
+        git(self.repo, 'branch', '-D', f'pf/{self.short}')
 
         proc = self._state_manage('next', '--after', NODE)
 

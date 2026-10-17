@@ -6,13 +6,22 @@
 The pipeline (`next --spawn` / `dispatch <cycle>`) decides WHAT the next session works on before it
 reaches the spawner. This file is the other caller shape: a chain a skill runs on itself --
 text-repair rounds, say -- where the prompt file already carries the whole handoff (its first line is
-the next invocation line) and no ledger is involved.
-It adds nothing of its own: pick the host's spawner (`conduct_pipeline.py`'s `_default_spawner`), make
-the one call (`conduct_spawn.spawn_session`), print its last line.
+the next invocation line).
 
-The failure-marker policy is the spawners' own, and it is correct here as it stands: this call IS
-the chain advancing, so a failure leaves `.pf/meta/CONDUCT-CALLBACK-FAILED-<cycle-id>.json` on
-disk -- the human's entry point -- and a success clears this chain's stale one.
+It is a CLI over the SAME door: the session is started by the pipeline's `spawn_session`
+(`conduct_pipeline_impl/writer.py`), the one place that starts sessions, so what that door carries comes
+with this call too -- the session note that makes the conversation visible to `session show/list`, the
+marker's write/clear policy (the spawner on the other end writes and clears it), and the spawner's own
+answer to "which one" (`spawn/host.py`'s `default_spawner`, honoring `DSH_CONDUCT_SPAWNER`; a line's
+`spawner` policy is read by `resolve_spawner` inside that door when the caller names a cycle this
+project records).
+
+One guarantee does NOT come with it, and stating it beats assuming it: the spawn claim. A claim is
+taken only for a prompt that sits in the launch directory it belongs to
+(`meta/launch/<cycle>/<node_id>/prompt.txt`), and a skill-run chain keeps its prompt next to itself
+(`.pf/repair/chain/…`), so this path takes no claim -- two concurrent handoffs of the same prompt file
+have no mutual exclusion. That gap is open: the door refuses a double dispatch only where the pipeline
+placed the prompt itself.
 
 Exit codes
 ----------
@@ -28,14 +37,40 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+CONDUCT = HERE.parent                      # the conduct tool directory
+
+# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
+# loaded by path through `loader.py`. This function is that bootstrap, the same shape in every file
+# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+SHARED = CONDUCT.parent / 'shared'
+
+_LOADER = None
+
+
+def _loader():
+    """`tools/shared/loader.py`: the one loader, for the modules this tree keeps outside `shared/`."""
+    global _LOADER
+    if _LOADER is None:
+        spec = importlib.util.spec_from_file_location('pf_shared_loader', SHARED / 'loader.py')
+        _LOADER = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_LOADER)
+    return _LOADER
 
 
 def _loaded(path: Path, name: str):
     """A sibling loaded by path -- how every file in this directory calls its neighbours."""
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return _loader().load_by_path(name, path)
+
+
+def _start(workspace: Path, cycle_id: str, prompt_file: Path, dry_run: bool) -> str:
+    """Start the session: the pipeline's own door, and nothing else.
+
+    A name rather than an inline call so that a caller can stand in front of it without patching
+    `subprocess` process-wide: what a chain hands on is the workspace, the cycle and the prompt, and
+    which script the door ends up running is answered below it, by the module that owns that argv.
+    """
+    pipeline = _loaded(CONDUCT / 'pipeline' / 'conduct_pipeline.py', 'conduct_pipeline')
+    return pipeline.spawn_session(workspace, cycle_id, str(prompt_file), dry_run=dry_run)
 
 
 def main(argv=None) -> int:
@@ -45,7 +80,7 @@ def main(argv=None) -> int:
 
     parser = argparse.ArgumentParser(
         prog='chain-spawn.py',
-        description='按 prompt 文件开一个新 session：宿主自动挑 spawner，链在这里交棒。')
+        description='按 prompt 文件开一个新 session：走管线那一道门，链在这里交棒。')
     parser.add_argument('--prompt-file', required=True,
                         help='下一棒的 prompt 全文；第一行是下一棒的调用行')
     parser.add_argument('--cycle-id', default=None,
@@ -59,12 +94,13 @@ def main(argv=None) -> int:
     prompt_file = Path(args.prompt_file).resolve()
     workspace = Path(args.workspace).resolve()
     cycle_id = args.cycle_id or prompt_file.stem
-    spawner = _loaded(HERE.parent / 'pipeline' / 'conduct_pipeline.py', 'conduct_pipeline_host')._default_spawner()
     try:
-        output = _loaded(HERE / 'conduct_spawn.py', 'conduct_spawn').spawn_session(
-            workspace, cycle_id, prompt_file, spawner=spawner, dry_run=args.dry_run)
-    except (OSError, RuntimeError) as error:
-        marker = workspace / '.pf' / 'meta' / f'CONDUCT-CALLBACK-FAILED-{cycle_id}.json'
+        # 管线那一道门：开会的口只此一个（`writer.spawn_session`）。spawner 由它的末档回答
+        # （入口算好的宿主自认），会话便条与标记的写、清都在那一道门里；claim 认领的只是落在
+        # launch 目录里的 prompt，这条链拿不到它（见模块说明）。
+        output = _start(workspace, cycle_id, prompt_file, args.dry_run)
+    except (OSError, RuntimeError, ValueError) as error:
+        marker = _loaded(HERE / 'marker.py', 'pf_spawn_marker').marker_path(workspace, cycle_id)
         print(f'没开起来：{error}\n'
               f'prompt 还在 {prompt_file}；spawner 若已落降级标记，就在 {marker}。',
               file=sys.stderr)

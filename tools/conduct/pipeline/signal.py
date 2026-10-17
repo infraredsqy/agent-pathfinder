@@ -16,59 +16,53 @@ Exit codes:
 import argparse
 import importlib.util
 import json
-import os
 import sys
-import tempfile
-import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+CONDUCT = HERE.parent                      # the conduct tool directory
+
+# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
+# loaded by path through `loader.py`. This function is that bootstrap, the same shape in every file
+# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+SHARED = CONDUCT.parent / 'shared'
+
+_LOADER = None
+
+
+def _loader():
+    """`tools/shared/loader.py`: the one loader, for the modules this tree keeps outside `shared/`."""
+    global _LOADER
+    if _LOADER is None:
+        spec = importlib.util.spec_from_file_location('pf_shared_loader', SHARED / 'loader.py')
+        _LOADER = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_LOADER)
+    return _LOADER
+
+
+_STORE = None
 
 
 def _store():
-    """`conduct_state.store`, loaded by path -- the same file every tool in this directory borrows.
+    """`conduct_state.store`, loaded by path -- the record's owner, and the one writer of a signal.
 
     The record commands (state / dag / issue) do not write where cwd points when cwd is a linked
     worktree: they map the worktree back to the main tree, because `.pf/` lives there and only
     there. A worker that runs THIS script directly (not through handoff.py, which resolves the root
-    itself and passes `base_dir`) used to trust cwd and drop the signal into the worktree's stale
-    `.pf/` fork -- data the main tree never reads, lost in effect. Loading store by path reuses its
-    one implementation of that sense: its `PROJECT_ROOT` is resolved from cwd at import, which is
-    exactly the binding this script wants.
+    itself and passes `base_dir`) would otherwise trust cwd and drop the signal into the worktree's
+    stale `.pf/` fork -- data the main tree never reads, lost in effect. Loading store by path reuses
+    its one implementation of that sense, and `handoff.py` asks for the same copy under this name.
     """
-    spec = importlib.util.spec_from_file_location('conduct_signal_store',
-                                                  HERE.parent / 'conduct_state' / 'store.py')
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    global _STORE
+    if _STORE is None:
+        _STORE = _loader().load_by_path('pf_conduct_state_store',
+                                        CONDUCT / 'conduct_state' / 'store.py',
+                                        register=True, reuse=True)
+    return _STORE
 
 
-_STORE = _store()
-#: `<project>/.pf/signals/`: a signal belongs with the rest of what this project's pipeline
-#: records, so it goes next to `state.json`. Resolved through store's worktree sense, so a worktree
-#: cwd lands the signal in the main tree.
-SIGNALS_DIR = _STORE.PROJECT_ROOT / _STORE.LEDGER_NAME / 'signals'
 # 'stopped' is distinct from 'failed': a node may end because the user called it off.
 VALID_STATUSES = {'completed', 'failed', 'stopped'}
-
-
-def _replace_with_retry(tmp: str, path: Path, attempts: int = 4) -> None:
-    """`os.replace`, tolerating a reader that holds the target open this instant.
-
-    Copied from `conduct_state.store` (a convention this small sits beside every writer in the
-    tree): on Windows a plain `open()` for reading does not carry FILE_SHARE_DELETE, so a concurrent
-    reader mid-`json.load` makes the replace fail with PermissionError. The window is tiny and the
-    retry is bounded well under a second.
-    """
-    for attempt in range(attempts):
-        try:
-            os.replace(tmp, path)
-            return
-        except PermissionError:
-            if attempt == attempts - 1:
-                raise
-            time.sleep(0.05 * (attempt + 1))
 
 
 def write_signal(cycle: str, node: str, status: str, summary: str,
@@ -77,34 +71,24 @@ def write_signal(cycle: str, node: str, status: str, summary: str,
 
     Factored out of main() so handoff.py can write the signal and carry on in the same process,
     instead of shelling out to a second Python start on the last line of every node.
+
+    The record -- its six keys, its path under `.pf/signals/`, its timestamp -- belongs to
+    `conduct_state.store`, which writes it: this function checks what a caller handed over and hands
+    it on. `base_dir` is that store's signals directory, for a caller that already resolved the
+    project root (`handoff.py` does, from a worktree cwd); it is where THIS one write lands and
+    nothing more -- the store's own binding is left exactly where it was, and a write that names no
+    `base_dir` still uses it (cwd resolved at call time).
     """
-    signal = {
-        'cycle': cycle,
-        'node': node,
-        'status': status,
-        'summary': summary,
-        'outputs': outputs,
-        'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-    }
-
-    signal_dir = Path(base_dir or SIGNALS_DIR) / cycle
-    signal_dir.mkdir(parents=True, exist_ok=True)
-
-    final_path = signal_dir / f'{node}.json'
-    fd, tmp = tempfile.mkstemp(dir=str(signal_dir), suffix='.tmp')
-    try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            json.dump(signal, f, indent=2, ensure_ascii=False)
-            f.flush()
-            os.fsync(f.fileno())
-        _replace_with_retry(tmp, final_path)
-    except Exception as e:
-        print(f'Error: write failed: {e}', file=sys.stderr)
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+    if not isinstance(status, str) or not status:
+        print('Error: a signal needs a status', file=sys.stderr)
+        sys.exit(1)
+    if not isinstance(outputs, dict):
+        print('Error: outputs must be a JSON object', file=sys.stderr)
         sys.exit(1)
 
-    return final_path
+    store = _store()
+    return store._write_signal(cycle, node, status, summary, outputs,
+                               signals_dir=None if base_dir is None else Path(base_dir))
 
 
 def main() -> None:

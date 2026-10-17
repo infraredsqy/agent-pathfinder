@@ -9,7 +9,7 @@ from __future__ import annotations
 from harness_env import TERMINAL_ACTIONS
 from harness_sandbox import Sandbox
 
-__all__ = ['WorkerSession', 'Closer', 'keep_going', 'stop_after', 'Driver', 'finish_node']
+__all__ = ['WorkerSession', 'Closer', 'stop_after', 'Driver', 'finish_node']
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -80,7 +80,6 @@ class Closer:
         self.cases = dict(cases or {})   # {node_id: 'continue'|'stop'|(decision, node, note)}
         self.default = default
         self.on_node = on_node           # callable(sb, action) -> override
-        self.answers = []                # what it actually answered, in order
 
     def answer_for(self, sb, action):
         if self.on_node:
@@ -104,13 +103,7 @@ class Closer:
 
     def close(self, sb, action):
         ans = self.answer_for(sb, action)
-        self.answers.append({'node': action.get('node_id'), **ans})
         return sb.close_node_call(action['node_id'], **ans)
-
-
-def keep_going(sb, action):
-    """The commonest closing call: nothing wrong, carry on."""
-    return 'continue'
 
 
 def stop_after(nodes):
@@ -158,7 +151,6 @@ class Driver:
         self.applied = []           # (action, state_before, state_after) for each applied action
         self.dispatched = []        # (node_id, skill) in order
         self.nodes_closed = []      # nodes whose closing call ran
-        self.waits = []             # the "only the close is left" waits the closer answered
 
     # ── one step ─────────────────────────────────────────────────────────────
     def step(self):
@@ -176,64 +168,88 @@ class Driver:
                     f'{after}')
         return action
 
-    def run(self):
+    def run(self, until=None):
+        """Play both roles until `until(action)` says stop, or the pipeline answers terminally.
+
+        `until` is how a caller picks its own finish line -- `finish_node` stops at the node's own
+        close. The pipeline answering terminally before that line is reached means the walk ended
+        somewhere the caller did not ask for, so it is raised rather than returned.
+        """
         for _ in range(self.max_steps):
             action = self.step()
             kind = action['action']
 
+            if until is not None and until(action):
+                return action
+
             if kind == 'dispatch':
-                self._new_action(action)
-                self.worker.work(action)
+                self._work(action)
                 # The worker's next act is its closing call; the planner answers that state with
                 # `wait` + `close_with`, which is what the next step reads.
                 continue
 
             if kind == 'wait' and action.get('close_with'):
                 # Only the node's own close is left. The worker that just reported runs it.
-                self.waits.append(action)
-                self.nodes_closed.append(action.get('node_id'))
-                answer = self.closer.close(self.sb, action)
-                self.actions.append(answer)
-                # The closing call is applied by the tool: it records the path step, marks the
-                # node in the DAG and points the cycle at the next node (or parks it).
-                if answer.get('applied'):
-                    self.applied.append((answer, None, self.sb.state_sig(self.cycle)))
+                answer = self._close(action)
                 if answer['action'] == 'dispatch':
-                    self._new_action(answer)
-                    self.worker.work(answer)
+                    self._work(answer)
                     continue
                 if answer['action'] in TERMINAL_ACTIONS:
+                    if until is not None:
+                        raise AssertionError(
+                            f'the pipeline stopped before the point asked for: {answer}')
                     return answer
                 if answer['action'] == 'wait':
                     raise AssertionError(f'stalled on wait after the closing call: {answer}')
                 continue
 
             if kind in TERMINAL_ACTIONS:
+                if until is not None:
+                    raise AssertionError(
+                        f'the pipeline stopped before the point asked for: {action}')
                 return action
+
             if kind == 'wait':
-                # No `close_with`: the node has not reported yet (its worker is still running).
-                # Nothing is being asked of the caller that the loop does not already do, so
-                # reaching here means the run stalled for real.
-                raise AssertionError(f'stalled on wait: {action}')
+                # A node already in flight: the report that settles it is the worker's next act.
+                self._work(action)
+                continue
             raise AssertionError(f'unexpected action {kind!r}: {action}')
         raise AssertionError('the pipeline never settled; last actions: '
                              + str(self.kinds()[-8:]))
 
-    def _new_action(self, action):
-        self.dispatched.append((action.get('node_id'), action.get('skill')))
+    def _work(self, action):
+        """One worker act: report on the node this action names.
+
+        Two kinds of action ask for it -- a fresh `dispatch`, and a `wait` naming a node already in
+        flight, which is the planner waiting for the report that closes it. Which is which is read
+        here and nowhere else, so `run` and `finish_node` cannot drift apart on it.
+        """
+        if action['action'] == 'dispatch':
+            self.dispatched.append((action.get('node_id'), action.get('skill')))
+        self.worker.work(action)
+
+    def _close(self, action):
+        """Run the closer's own call for `action` and record what it moved. Returns its answer.
+
+        The closing call is applied by the tool: it records the path step, marks the node in the
+        DAG and points the cycle at the next node (or parks it).
+        """
+        self.nodes_closed.append(action.get('node_id'))
+        answer = self.closer.close(self.sb, action)
+        self.actions.append(answer)
+        if answer.get('applied'):
+            self.applied.append((answer, None, self.sb.state_sig(self.cycle)))
+        return answer
 
     # ── inspection helpers ───────────────────────────────────────────────────
     def kinds(self):
         return [a['action'] for a in self.actions]
 
-    def dispatch_plan(self):
-        return list(self.dispatched)
-
     def no_commands_anywhere(self):
         """No returned action carries commands for the caller to RUN.
 
         An action that answers "nothing to do" may say so with an empty list (`commands: []` on
-        `ask_user` / `no_cycle` / `fail_hard`) -- there is nothing in it to run, so it is not a
+        `ask_user` / `no_cycle`) -- there is nothing in it to run, so it is not a
         handover. A populated list is, and that is what the action set must never contain.
         """
         return [a for a in self.actions if a.get('commands')]
@@ -241,22 +257,17 @@ class Driver:
 
 # ── convenience builders used by several test classes ────────────────────────
 
+def _closable(action):
+    """`finish_node`'s stop line: only the node's own close is left."""
+    return action['action'] == 'wait' and bool(action.get('close_with'))
+
+
 def finish_node(sb, cycle='cyc', worker=None):
     """Walk one node to the point where only its close is left. Returns that `wait` action.
 
     The action is the worker's own cue: `close_with` names the command that settles the node, and
-    running it (through `sandbox.close_node_call`) is what closes it.
+    running it (through `sandbox.close_node_call`) is what closes it. The walk itself is `Driver`'s
+    -- stepping, the applied-state contract and the worker's act all live there -- with this
+    predicate as its finish line.
     """
-    worker = worker or WorkerSession(sb, cycle)
-    for _ in range(20):
-        action = sb.next()
-        if action['action'] == 'wait' and action.get('close_with'):
-            return action
-        if action['action'] == 'dispatch':
-            worker.work(action)
-            continue
-        if action['action'] == 'wait' and action.get('node_id'):
-            worker.work(action)              # a node already in flight; its worker reports next
-            continue
-        raise AssertionError(f'the node never finished its work; got {action["action"]!r}')
-    raise AssertionError('the node never finished its work')
+    return Driver(sb, cycle, worker=worker, max_steps=20).run(until=_closable)

@@ -1,7 +1,11 @@
-"""Paths, the real modules loaded by path, and the small shared helpers.
+"""Paths, the real modules loaded by path, and the small helpers every fixture is built on.
 
 Owns HERE/CONDUCT_DIR/TOOLS_DIR, the tool paths, the dag-manage resolution that sets
-DSH_CONDUCT_DAG_MANAGE, the pipeline constants, load_pipeline/_fresh_module, chdir/_decode/_child_env.
+DSH_CONDUCT_DAG_MANAGE, the pipeline constants, load_pipeline/_fresh_module/shared_loader, chdir/
+_decode/_child_env, and the pieces the `cases_*` files share instead of each writing their own:
+`init_markers` (what `init` puts in a `.pf/`), `run_argv` and `git` (one child process, one identity),
+`patched` (one place a global name is swapped), `spawn_dry_run` (the one place a session start is
+turned into a drill), and `shipped_sources` (the one list of the shipped tree).
 """
 
 from __future__ import annotations
@@ -10,12 +14,18 @@ import contextlib
 import importlib.util
 import json
 import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 __all__ = [
-    'CONDUCT_DIR', 'DAG_MANAGE', 'DELETED_SIGNAL_KEYS', 'PIPELINE_PATH', 'HANDOFF_PY', 'HERE',
-    'NODE_DIR_OF', 'SIGNAL_KEYS', 'SIGNAL_OF', 'SIGNAL_PY', 'SKILLS', 'SPEC_OF', 'STATE_MANAGE',
-    'TERMINAL_ACTIONS', 'TOOLS_DIR', '_child_env', '_decode', '_fresh_module', 'chdir', 'load_pipeline',
+    'CONDUCT_DIR', 'DAG_MANAGE', 'GIT', 'INIT_GITATTRIBUTES', 'INIT_GITIGNORE',
+    'PIPELINE_PATH', 'HANDOFF_PY', 'HERE', 'SIGNAL_PY', 'SPAWN_DRY_RUN', 'STATE_MANAGE',
+    'TERMINAL_ACTIONS', 'TOOLS_DIR',
+    '_child_env', '_decode', '_fresh_module', '_run_command', 'chdir', 'git', 'git_env',
+    'init_markers', 'load_pipeline', 'patched', 'run_argv', 'shared_loader', 'shipped_sources',
+    'spawn_dry_run',
 ]
 
 
@@ -38,29 +48,111 @@ HANDOFF_PY = CONDUCT_DIR / 'pipeline' / 'handoff.py'
 DAG_MANAGE = TOOLS_DIR / 'dag' / 'dag-manage.py'
 if not DAG_MANAGE.exists():
     _installed = Path(os.path.expanduser('~')) / '.agents' / 'tools' / 'dag' / 'dag-manage.py'
-    if _installed.exists():
-        DAG_MANAGE = _installed
+    if not _installed.exists():
+        # Loud HERE rather than deep inside the first sandbox that loads a module from that path: a
+        # wrong resolution would otherwise surface as a FileNotFoundError from whichever case ran
+        # first, which reads as that case's fault.
+        raise AssertionError(
+            f'dag-manage.py is at neither {DAG_MANAGE} nor {_installed}, and the suite drives the '
+            f'real graph tool: point one of those paths at it')
+    DAG_MANAGE = _installed
 os.environ['DSH_CONDUCT_DAG_MANAGE'] = str(DAG_MANAGE)
 
-# The pipeline, kept as a literal on purpose: a test comparing the tools' own tables has to state
-# the expectation itself, not ask the tool what it thinks the answer is.
-SKILLS = ['pf-conduct']
-#: Where a node's own directory lives: the ledger, `<project>/.pf/nodes/<id>/`. It holds the node's
-#: text (`spec.md`, and the reports its session writes, by CONVENTION -- nothing validates them any
-#: more). What the node GENERATES is scratch and goes to `.pf/nodes/<id>/temp/`.
-NODE_DIR_OF = '.pf/nodes/%s'
-SPEC_OF = '.pf/nodes/%s/spec.md'
-#: One signal per node: `.pf/signals/<cycle>/<node_id>.json` -- the ledger, next to `state.json`.
-#: There is no cell index left to put in the file name.
-SIGNAL_OF = '.pf/signals/%s/%s.json'
-#: The `outputs` keys a dispatch prompt asks a worker for. The three old artifact keys
-#: (`spec_path` / `phase_paths` / `run_path`) are NOT among them: they are deleted, along with the
-#: checking that used to read them. `reading` IS read back -- it is the maintenance channel's two
-#: measurements, the one `outputs` key the pipeline has an opinion about.
-SIGNAL_KEYS = ['deliverable', 'acceptance', 'touched', 'reading']
-DELETED_SIGNAL_KEYS = ('spec_path', 'phase_paths', 'run_path')
+#: `git`, resolved once for the whole suite: a case whose fixture needs git skips itself on `GIT`.
+GIT = shutil.which('git')
 
-TERMINAL_ACTIONS = ('stop_pipeline', 'ask_user', 'no_cycle', 'fail_hard')
+#: The pipeline, kept as a literal on purpose: a test comparing the tools' own tables has to state
+#: the expectation itself, not ask the tool what it thinks the answer is.
+TERMINAL_ACTIONS = ('stop_pipeline', 'ask_user', 'no_cycle')
+
+
+def shipped_sources():
+    """Every Python file the tools ship, tests excluded.
+
+    The ONE list behind the guards that ask the whole tree a question -- who builds the spawner's
+    argv, who spells the broken-chain marker's name, which module defines a top-level name twice --
+    so a new package is added here once and no guard keeps a copy of the tree.
+    """
+    return ([CONDUCT_DIR / 'ledger-merge.py']
+            + [path for cluster in ('pipeline', 'spawn')
+               for path in sorted((CONDUCT_DIR / cluster).glob('*.py'))]
+            + sorted((CONDUCT_DIR / 'conduct_pipeline_impl').glob('*.py'))
+            + sorted((CONDUCT_DIR / 'conduct_state').glob('*.py'))
+            + sorted((CONDUCT_DIR / 'ledger_merge').glob('*.py'))
+            + sorted((TOOLS_DIR / 'dag').glob('*.py'))
+            + sorted((TOOLS_DIR / 'issue').glob('*.py'))
+            + sorted((TOOLS_DIR / 'shared').glob('*.py'))
+            + sorted((TOOLS_DIR / 'bin').glob('*.py')))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  A throwaway project's ledger: the one thing `init` is
+# ═══════════════════════════════════════════════════════════════════════════════
+
+#: What `init` writes into `.pf/`, and the only thing that says a ledger was put there on purpose:
+#: every mutating command refuses a `.pf/` without these two. Stated once -- a fixture that gets one
+#: of them wrong is refused deep inside a tool, where it reads as the tool's fault, not the fixture's.
+INIT_GITIGNORE = 'meta/\nworktrees/\ntemp/\n'
+INIT_GITATTRIBUTES = '** -text\n'
+
+
+def init_markers(project) -> Path:
+    """Write the two `init` markers into `<project>/.pf/` and return that ledger directory.
+
+    For a throwaway project these two files are the whole of what `init` would do (`init` also
+    clones the ledger and writes its usage note; nothing a case reads depends on either).
+    """
+    ledger = Path(project) / '.pf'
+    ledger.mkdir(parents=True, exist_ok=True)
+    (ledger / '.gitignore').write_text(INIT_GITIGNORE, encoding='utf-8')
+    (ledger / '.gitattributes').write_text(INIT_GITATTRIBUTES, encoding='utf-8')
+    return ledger
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  One child process, one identity
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _run_command(command, *, cwd=None, env=None, check=True):
+    """Run one command line, decoded as UTF-8, and report a non-zero exit loudly."""
+    proc = subprocess.run([str(part) for part in command],
+                          cwd=str(cwd) if cwd is not None else None, capture_output=True,
+                          text=True, encoding='utf-8', errors='replace',
+                          env=_child_env() if env is None else env)
+    if check and proc.returncode != 0:
+        raise AssertionError(f'command failed: {" ".join(str(p) for p in command)}\n  cwd={cwd}\n'
+                             f'  rc={proc.returncode}\n{proc.stdout}\n{proc.stderr}')
+    return proc
+
+
+def run_argv(argv, *, cwd=None, env=None, check=True):
+    """One child process: `argv` after the interpreter, run from `cwd`, decoded as UTF-8.
+
+    The suite's ONE python runner. `-X utf8` on top of `_child_env()`'s `PYTHONIOENCODING`: the
+    tools' messages are Chinese, and together they make the child's streams UTF-8 whatever codepage
+    the console is on. `check` raises with the command line and both streams, which is what every
+    caller wants to read when a tool refuses.
+    """
+    return _run_command([sys.executable, '-X', 'utf8', *argv], cwd=cwd, env=env, check=check)
+
+
+def git_env():
+    """The environment a `git` child needs to commit: `_child_env()` plus this suite's identity.
+
+    Every repository these cases touch is a throwaway one, so the identity is fixed here instead of
+    configured into the repository (two `git config` starts saved per case), and it can never fall
+    back to the machine's global one.
+    """
+    return dict(_child_env(), GIT_AUTHOR_NAME='pf test', GIT_AUTHOR_EMAIL='pf-test@example.invalid',
+                GIT_COMMITTER_NAME='pf test', GIT_COMMITTER_EMAIL='pf-test@example.invalid')
+
+
+def git(cwd, *args, check=True, env=None):
+    """One `git` process against `cwd`, under this suite's own identity.
+
+    The caller keeps its own `skipUnless(GIT)`: this helper assumes git is there.
+    """
+    return _run_command([GIT, *args], cwd=cwd, check=check, env=env or git_env())
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -68,6 +160,7 @@ TERMINAL_ACTIONS = ('stop_pipeline', 'ask_user', 'no_cycle', 'fail_hard')
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _PIPELINE_MODULE = None
+_SHARED_LOADER = None
 
 
 def load_pipeline():
@@ -88,6 +181,19 @@ def _fresh_module(name: str, path: Path):
     return mod
 
 
+def shared_loader():
+    """`tools/shared/loader.py`, loaded by path and kept for the process.
+
+    Cached for the same reason the tools cache it: `reuse` hands one module object back only when
+    every caller comes through the same loader, and the ledger lock's reentrancy record is one per
+    process. A second loader would quietly hand a second module to the same file.
+    """
+    global _SHARED_LOADER
+    if _SHARED_LOADER is None:
+        _SHARED_LOADER = _fresh_module('pf_shared_loader', TOOLS_DIR / 'shared' / 'loader.py')
+    return _SHARED_LOADER
+
+
 @contextlib.contextmanager
 def chdir(path):
     old = os.getcwd()
@@ -96,6 +202,24 @@ def chdir(path):
         yield
     finally:
         os.chdir(old)
+
+
+@contextlib.contextmanager
+def patched(target, name: str, value):
+    """Put `value` on `target.name` for the block, and put the old one back afterwards.
+
+    The suite's ONE place a process-global name is swapped: the fast path swaps `subprocess.run` and
+    the three streams it captures, a case swaps `pipeline._run`, the parser probe swaps
+    `argparse.ArgumentParser.parse_args`. Every one of them is record-replace-restore, and the
+    restore is the half that matters -- a leak aims every later case in the same worker at the wrong
+    thing. Yields the value that was there.
+    """
+    old = getattr(target, name)
+    setattr(target, name, value)
+    try:
+        yield old
+    finally:
+        setattr(target, name, old)
 
 
 def _decode(path: Path):
@@ -108,13 +232,42 @@ def _decode(path: Path):
         raise AssertionError(f'{path} is not valid UTF-8') from None
 
 
-def _child_env():
-    """Every child gets `PYTHONIOENCODING=utf-8`.
+#: The switch that turns "start a session" into "print the argv it would have run". `_child_env()`
+#: sets it, so every child a case starts is a drill; the one rail that needs a started session's
+#: footprint takes it back out again, and that rail is `harness_sandbox`'s spawn entries.
+SPAWN_DRY_RUN = 'DSH_CONDUCT_SPAWN_DRY_RUN'
 
-    Without it Python picks the console codepage for stdout/stderr, the tools' Chinese messages go
-    out as GBK, and a parent decoding as UTF-8 loses the whole stream -- including the exit-code
-    diagnostics a failed test needs.
+
+def _child_env():
+    """Every child gets `PYTHONIOENCODING=utf-8`, and the drill switch.
+
+    Without the encoding Python picks the console codepage for stdout/stderr, the tools' Chinese
+    messages go out as GBK, and a parent decoding as UTF-8 loses the whole stream -- including the
+    exit-code diagnostics a failed test needs.
+
+    The switch is what makes "no case starts a session" a property of the harness rather than of each
+    case: a child that reaches the spawn door prints the argv instead of running it. The one caller
+    that needs a spawner really to run names its own stand-in script and takes the switch back out.
     """
     env = dict(os.environ)
     env['PYTHONIOENCODING'] = 'utf-8'
+    env[SPAWN_DRY_RUN] = '1'
     return env
+
+
+@contextlib.contextmanager
+def spawn_dry_run():
+    """Set the drill switch for the block, and put the old value back afterwards.
+
+    The in-process rail reads `os.environ` directly (`cmd_dispatch`), so a caller driving that rail
+    cannot rely on `_child_env()`.
+    """
+    old = os.environ.get(SPAWN_DRY_RUN)
+    os.environ[SPAWN_DRY_RUN] = '1'
+    try:
+        yield os.environ
+    finally:
+        if old is None:
+            os.environ.pop(SPAWN_DRY_RUN, None)
+        else:
+            os.environ[SPAWN_DRY_RUN] = old

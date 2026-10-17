@@ -1,13 +1,15 @@
-"""The closing call's own contract, node ownership across cycles, the two driving paths, and the
-guards each of them cost a bug.
+"""Node ownership across cycles, the two driving paths, and the guards each of them cost a bug.
 
 `TestContract.test_the_fast_path_and_the_cli_agree` is the case that keeps the in-process fast path
 and the shipped CLI agreeing file for file; `TestPurity` pins "plan writes nothing"; the guards are
-the invariants that survive from the old model.
+the invariants that survive from the old model. The closing call itself (one worker ending the node
+it just ran, and what a close refuses) lives in `cases_close.py`.
 """
 
 from __future__ import annotations
 
+import ast
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -15,146 +17,24 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import ACTION_VOCABULARY, Base, NODE, NODE2, NODE3, pipeline, normalise  # noqa: E402
-from harness import Driver, Sandbox, WorkerSession, finish_node  # noqa: E402
+from harness import (  # noqa: E402
+    CONDUCT_DIR, Sandbox, WorkerSession, patched,
+    _dag_hook as harness_dag_hook,
+)
 
 __all__ = [
-    'TestWorkerClosesItsOwnNode',
     'TestNodeOwnershipAcrossCycles',
     'TestContract',
     'TestPurity',
-    'TestCloseGuards',
+    'TestOneChildProcessPath',
 ]
-
-
-class TestWorkerClosesItsOwnNode(Base):
-    """`next --after <node_id>`: the worker closes the node it just ran.
-
-    A boundary session used to be the only actor that could turn a finished step into a verdict.
-    The outcome is read off the signal the worker already wrote, so what is left is one call that
-    says "the node I just finished is done; carry on or stop" -- and a node that has not finished
-    answers `wait` rather than being taken as delivered.
-    """
-
-    def finished_node(self, sb, cli=False):
-        """Pin the node, let its worker report `completed`."""
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.start_cycle()
-        first = sb.next()
-        WorkerSession(sb).work(first)
-        return first
-
-    def test_it_closes_the_node_and_spawns_the_next_one(self):
-        sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.add_node(NODE2, '另一条支线', mode='auto')
-        sb.start_cycle()
-        first = sb.next()
-        WorkerSession(sb).work(first)
-
-        settled, proc = sb.next_cli('--after', first['node_id'], '--spawn')
-
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(settled['action'], 'dispatch')
-        self.assertEqual(settled['node_id'], NODE2)
-        self.assertTrue(settled.get('spawned'), 'the closing call did not run --spawn')
-        self.assertIn('dry-run', settled['spawned'])
-        self.assertEqual(sb.path_nodes(), [NODE])
-        self.assertEqual(sb.current_node(), NODE2)
-
-    def test_the_last_node_stops_the_run(self):
-        """No next node means stop: the same outcome the planner computes either way, and the
-        `attention` list still reaches whoever is reading."""
-        sb = self.make()
-        first = self.finished_node(sb)
-
-        settled, proc = sb.next_cli('--after', first['node_id'])
-
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(settled['action'], 'stop_pipeline')
-        self.assertEqual(sb.cycle()['status'], 'inactive')
-        self.assertEqual(sb.path_nodes(), [NODE])
-
-    def test_a_node_that_is_still_running_is_not_closed(self):
-        """A `running` signal is never a green light -- the rule every path enforces."""
-        sb = self.make()
-        first = self.finished_node(sb)
-        sb.write_signal('cyc', NODE, 'pending', '还没跑完')
-
-        settled, proc = sb.next_cli('--after', first['node_id'])
-
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(settled['action'], 'wait')
-        self.assertEqual(sb.current_node(), NODE)
-        self.assertEqual(sb.path(), [])
-
-    def test_naming_the_wrong_node_changes_nothing(self):
-        """The guard runs before every write, so a mistyped node id leaves the run untouched."""
-        sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.add_node(NODE2, '另一条支线', mode='auto')
-        sb.start_cycle()
-        sb.set_current_node(NODE)
-        sb.write_signal('cyc', NODE, 'completed', 'done')
-        before = sb.tree_hashes()
-
-        _, proc = sb.next_cli('--after', NODE2, check=False)
-
-        self.assertEqual(proc.returncode, 2)
-        self.assertIn('does not name', proc.stderr)
-        self.assertEqual(sb.tree_hashes(), before)
-        self.assertEqual(sb.path(), [])
-
-    def test_a_non_delivery_parks_the_node_shelved_and_stops(self):
-        """A worker that reports `failed` is asking to be looked at, and the DAG's node status is
-        where that shows: the node becomes `shelved`, out of play until a human revives it."""
-        sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.add_node(NODE2, '另一条支线', mode='auto')
-        sb.start_cycle()
-        first = sb.next()
-        WorkerSession(sb, fail_nodes={NODE}).work(first)
-
-        settled, proc = sb.next_cli('--after', first['node_id'])
-
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(settled['action'], 'stop_pipeline')
-        self.assertEqual(sb.dag_status(NODE), 'shelved')
-        self.assertIn(NODE, [a.get('node_id') for a in settled.get('attention', [])])
-
-    def test_a_closed_node_is_not_closed_twice(self):
-        """The second call has nothing to settle and must say so rather than closing something
-        again. On a one-node run the cycle is finished, which is the honest reason."""
-        sb = self.make()
-        first = self.finished_node(sb)
-        sb.next_cli('--after', first['node_id'])
-        before = sb.tree_hashes()
-
-        _, proc = sb.next_cli('--after', first['node_id'], check=False)
-
-        self.assertNotEqual(proc.returncode, 0)
-        self.assertIn('already closed', proc.stderr)
-        self.assertEqual(sb.tree_hashes(), before)
-
-    def test_a_node_nobody_rounds_is_refused_by_name(self):
-        """`--after` is aimed by node alone, so an id that is not any cycle's current node has to
-        be refused by name -- with a reading of where every cycle actually stands."""
-        sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.start_cycle()
-
-        _, proc = sb.next_cli('--after', NODE3, check=False)
-
-        self.assertEqual(proc.returncode, 2)
-        self.assertIn(NODE3, proc.stderr)
-        self.assertIn(NODE, proc.stderr)
-        self.assertEqual(sb.path(), [])
 
 
 class TestNodeOwnershipAcrossCycles(Base):
     """一个节点一次只归一条 cycle：收尾认节点，挑人不碰别人正拿着的。
 
-    `--after` is aimed by NODE, not by cycle: a round used to be the unit, and the node that round
-    carried is unique, so the closing call can settle the right line without being told its name.
+    `--after` is aimed by NODE, not by cycle: a node belongs to exactly one line, so the closing call
+    can settle the right line without being told its name.
     """
 
     def two_lines(self):
@@ -268,7 +148,7 @@ class TestNodeOwnershipAcrossCycles(Base):
         self.deliver(sb, 'one', a)
         sb.set_cycle_status('one', 'inactive')
 
-        settled, proc = sb.next_cli('--after', a, '--continue', '--spawn')
+        settled, proc = sb.spawn_next('--after', a, '--continue')
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(settled['action'], 'stop_pipeline')
@@ -297,8 +177,7 @@ class TestNodeOwnershipAcrossCycles(Base):
     def test_a_next_aimed_at_an_inactive_line_neither_picks_nor_dispatches(self):
         """驱动型 `next` 不碰一条不是 active 的线 —— 不管别的线在不在跑。
 
-        以前这里的判据是「这个项目有没有 active 的 cycle」：别的线 active 时，一条停住的线会被
-        当成可以驱动，于是它被挑人、被派发，而人从来没让它开工。
+        判据落在这条线自己的状态上：别的线在跑，一条停住的线照样不许被挑人、被派发 —— 人没让它开工。
         """
         sb, a, bridge, tail = self.two_lines()
         sb.set_cycle_status('one', 'inactive')
@@ -364,42 +243,52 @@ class TestContract(Base):
             caught['parser'] = parser
             return argparse.Namespace(command=None)     # no verb: `main()` only prints the help
 
-        real_parse, real_argv = argparse.ArgumentParser.parse_args, sys.argv
-        argparse.ArgumentParser.parse_args = grab
-        sys.argv = [str(harness_env.STATE_MANAGE)]
-        try:
-            with contextlib.redirect_stdout(io.StringIO()), \
-                    contextlib.redirect_stderr(io.StringIO()):
-                with self.assertRaises(SystemExit):
-                    mod.main()
-        finally:
-            argparse.ArgumentParser.parse_args = real_parse
-            sys.argv = real_argv
+        with patched(argparse.ArgumentParser, 'parse_args', grab), \
+                patched(sys, 'argv', [str(harness_env.STATE_MANAGE)]), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                mod.main()
         return caught['parser']
+
+    def dag_parser(self):
+        """`dag-manage.py`'s own argparse tree, built by the module's own `_build_parser()`.
+
+        Nothing is patched and nothing is run: the builder is a module-level function, and this is
+        the parser the shipped process parses its own argv with.
+        """
+        import harness_env
+
+        mod = harness_env._fresh_module('dag_manage_parser_probe', harness_env.DAG_MANAGE)
+        return mod._build_parser()
 
     @staticmethod
     def read_parser(parser):
-        """One parser as `(positionals, flags, sub-verbs, int-typed destinations)`.
+        """One parser as `(positionals, flags, sub-verbs, int-typed destinations, nargs='*' ones)`.
 
         `flags` is the harness's own `{flag: (namespace attribute, takes a value, default)}`, and
-        `sub-verbs` is the same reading of a group's sub-parsers (`{}` for a leaf verb).
+        `sub-verbs` is the same reading of a group's sub-parsers (`{}` for a leaf verb). The last two
+        are what a stand-in has to cast or fill differently from the shape alone: a destination the
+        CLI declares `type=int`, and a positional declared `nargs='*'`.
         """
         import argparse
-        positionals, flags, subs, ints = [], {}, {}, set()
+        positionals, flags, subs, ints, star = [], {}, {}, set(), set()
         for action in parser._actions:
             if isinstance(action, argparse._SubParsersAction):
                 subs = {name: TestContract.read_parser(sp) for name, sp in action.choices.items()}
                 continue
+            if action.type is int:
+                ints.add(action.dest)
             if not action.option_strings:                 # `-h` is an option; a positional is not
                 positionals.append(action.dest)
+                if action.nargs == '*':
+                    star.add(action.dest)
                 continue
             if action.dest == 'help':
                 continue
-            if action.type is int:
-                ints.add(action.dest)
             for flag in action.option_strings:
                 flags[flag] = (action.dest, action.nargs != 0, action.default)
-        return tuple(positionals), flags, subs, ints
+        return tuple(positionals), flags, subs, ints, star
 
     def test_the_harness_restates_the_real_parser(self):
         """The fast path's one restatement of the CLI is pinned against the CLI, item by item.
@@ -437,6 +326,128 @@ class TestContract(Base):
         # this harness compares as the wrong type instead of failing visibly.
         self.assertTrue(ints <= set(harness_fast._INT_FLAGS),
                         f'declared type=int but not cast: {ints - set(harness_fast._INT_FLAGS)}')
+
+    def test_the_harness_restates_the_dag_parser(self):
+        """The in-process dag-manage stand-in is pinned against dag-manage's own parser, item by item.
+
+        `InProcessDagManage` answers the argv the pipeline builds for dag-manage by running
+        dag-manage's own `cmd_*`; only the process start is gone. What it restates is the argv shape:
+        which positional is called what, which flag lands in which namespace attribute, what its
+        default is, which positional swallows the rest, which destinations are cast to `int`, and
+        which command a verb reaches.
+
+        The maintenance channel writes the graph through this stand-in (`add` / `depend` /
+        `undepend`), minting a real uuid and writing real edges, so a drift in the restatement --
+        `--mode`'s default becoming `auto`, say -- writes different nodes than the shipped process
+        would while every fast-path case stays green. The one case that drives the real processes
+        for that channel reads the new edges and statuses back, never the new node's own attributes.
+        """
+        import argparse
+
+        import harness_fast
+        dag = harness_fast.InProcessDagManage
+
+        parser = self.dag_parser()
+        choices = next(action for action in parser._actions
+                       if isinstance(action, argparse._SubParsersAction)).choices
+        verbs = self.read_parser(parser)[2]         # the same reading the state-manage pin uses
+
+        self.assertTrue(set(dag._SPEC) <= set(verbs),
+                        f'the harness drives verbs dag-manage has not: {set(dag._SPEC) - set(verbs)}')
+        self.assertEqual(set(dag._SPEC), set(dag._CALLS), 'a served verb has no command behind it')
+
+        int_flags, int_positionals = set(), set()
+        for verb, (positionals, flags) in dag._SPEC.items():
+            real_positionals, real_flags, _subs, ints, star = verbs[verb]
+            self.assertEqual((positionals, flags), (real_positionals, real_flags), verb)
+            # A `nargs='*'` positional defaults to the empty list and swallows the run where it
+            # stands: a stand-in that reads one token would cut the description short.
+            self.assertEqual(set(dag._VARIADIC.get(verb, ())), star, verb)
+            int_positionals |= set(positionals) & ints
+            int_flags |= ints - set(positionals)
+            # The verb reaches the command dag-manage's own parser binds to it (`_CALLS` names it,
+            # and `handle` reaches it by that name on its own copy of the module).
+            bound = choices[verb]._defaults.get('func')
+            self.assertIsNotNone(bound, f'{verb} has no command bound to it')
+            self.assertEqual(dag._CALLS[verb], bound.__name__, verb)
+
+        self.assertEqual(set(dag._INT_POSITIONALS), int_positionals,
+                         f'declared type=int but not cast: {int_positionals}')
+        self.assertEqual(set(dag._INT_FLAGS), int_flags,
+                         f'declared type=int but not cast: {int_flags}')
+
+    def test_the_cli_scope_vocabulary_is_the_pipelines_own(self):
+        """`--scope` 的词表来自判定的正本，CLI 没有自己的第二份。
+
+        钉死在本地副本上的话，给判定加第四个 scope 之后 CLI 先在 argparse 那一步把合法的值拒了，
+        借来的判定根本轮不到跑 —— 两个词表，两个答案。
+        """
+        import argparse
+
+        parser = self.real_parser()
+        scopes = []
+
+        def walk(p):
+            for action in p._actions:
+                if isinstance(action, argparse._SubParsersAction):
+                    for sub in action.choices.values():
+                        walk(sub)
+                elif action.option_strings and action.dest == 'scope':
+                    scopes.append(list(action.choices))
+
+        walk(parser)
+
+        self.assertEqual(2, len(scopes), '`instruction add` 与 `instruction list` 各有一处 --scope')
+        for choices in scopes:
+            self.assertEqual(list(pipeline.SCOPES), choices)
+
+    def test_next_reads_the_parsed_line_itself(self):
+        """`cmd_next` / `cmd_dispatch` 各只收解析好的那一份，字段自己读。
+
+        转发那一行摆着一串位置实参（12 个）的话，给 `next` 加一个旗标就要同时改 parser、那一行、
+        函数的签名；其中大半是重推 argparse 已有的缺省，另有两个是同一个答案算两遍。收成一个名字
+        空间之后，加旗标就是 parser 一行加读它的那一行。
+        """
+        source = (CONDUCT_DIR / 'conduct_state' / 'nextcmd.py').read_text(encoding='utf-8')
+        tree = ast.parse(source)
+        for name in ('cmd_next', 'cmd_dispatch'):
+            fn = next(node for node in tree.body
+                      if isinstance(node, ast.FunctionDef) and node.name == name)
+            self.assertEqual([a.arg for a in fn.args.args], ['args'],
+                             f'{name} 收的还是散开的那些实参')
+
+    def test_the_prompt_text_builder_takes_the_node_id_alone(self):
+        """`build_prompt_text`：这一行的输入就是节点 id。
+
+        派发文本不随项目或随线而变（节点自己的 mode、权重、spec 落点由会话读 `dag-manage.py info`），
+        所以签名的三个形参只该留一个 —— 多出来的形参读起来是「这个值会影响文本」的错觉。这一行怎么
+        拼也只有一处：导出面上不带第二个拼它的名字。
+        """
+        self.assertEqual(['node_id'],
+                         list(inspect.signature(pipeline.build_prompt_text).parameters))
+        self.assertEqual(f'/pf-conduct {NODE} [pipeline]\n', pipeline.build_prompt_text(NODE))
+        with self.assertRaises(ValueError):
+            pipeline.build_prompt_text(None)
+        self.assertFalse(hasattr(pipeline, 'prompt_for'),
+                         '导出面上又多了一个拼这行的名字')
+
+    def test_the_impl_package_keeps_the_one_export_list(self):
+        """导出面只有 `conduct_pipeline_impl/__init__.py` 那一张表。
+
+        模块级的第二张名单没有读者，却跟包的那张分头长：两边列的名字各说各话时，谁也没报错。层里
+        不留名单，就没有第二处可漂。
+        """
+        def carries_a_list(path):
+            for node in ast.parse(path.read_text(encoding='utf-8')).body:
+                if isinstance(node, ast.Assign) and any(
+                        isinstance(t, ast.Name) and t.id == '__all__' for t in node.targets):
+                    return True
+            return False
+
+        carrying = [path.name for path in
+                    sorted((CONDUCT_DIR / 'conduct_pipeline_impl').glob('*.py'))
+                    if carries_a_list(path)]
+        self.assertEqual(['__init__.py'], carrying)
 
     def test_no_action_in_a_whole_run_carries_commands(self):
         """The one rule that survived every rewrite, plus what a whole run is made of: the actions
@@ -476,6 +487,23 @@ class TestContract(Base):
         self.assertTrue(applied)
         for action, before, after in driver.applied:
             self.assertNotEqual(before, after, action)
+
+    def test_the_snapshot_answers_one_shape(self):
+        """`_snapshot` 只有一种形状：这条线在不在盘上，三个位置都在、位置的含义也一样。
+
+        契约那一趟按 `[0]` / `[1]` 读它写进 `progress`，另一个形状里含义错开的话，缺线那一趟读到的
+        就是别的东西 —— 缺线时每个位置答的都是「没有」。
+        """
+        sb = self.make()
+        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.start_cycle()
+
+        on_disk = pipeline._snapshot(sb.root, 'cyc')
+        absent = pipeline._snapshot(sb.root, 'no-such-cycle')
+
+        self.assertEqual(3, len(on_disk))
+        self.assertEqual(len(on_disk), len(absent), '_snapshot 的两条路答的不是一个形状')
+        self.assertEqual((None, None, None), absent)
 
     def test_the_fast_path_and_the_cli_agree(self):
         """The in-process path and the shipped processes produce the same project.
@@ -545,80 +573,50 @@ class TestPurity(Base):
         self.assertEqual(Path(action['prompt']).read_text(encoding='utf-8'), action['prompt_text'])
 
 
-class TestCloseGuards(Base):
-    """A node's step may only be closed over work that actually reports."""
+class TestOneChildProcessPath(Base):
+    """子进程只有一条通路：入口的 `_run` / `_capture`（同一条缝的两半）。
 
-    def test_a_close_arriving_before_the_worker_reports_is_refused(self):
-        """No ticket means nothing to settle. The tool must not read "no signal" as "delivered":
-        closing here would throw away the work the session is still doing."""
+    `seam` 许下的承诺是「patch 入口的那几个名字，到处都生效」。有一条调用自己复制一遍
+    `subprocess.run` 的写法时，那份承诺就不成立：按文档 patch 入口的人拦不到它，只能在 stdlib
+    的 `subprocess` 上做进程级猴子补丁（并为此加锁、并解释「必须打在共享模块上」）。
+    """
+
+    def test_the_dag_ranking_goes_through_the_seam(self):
+        """就绪集的排序那次子进程调用走接缝：patch 入口的 `_capture` 就拦得住它。
+
+        `dag-manage list` 是包内唯一一次「要看输出」的子进程调用（维护通道的 `add` 是另一次），
+        它自己复制过一份 `subprocess.run` 的写法，这一条钉住它从缝里走。
+        """
         sb = self.make()
         sb.add_node(NODE, '界面设计', mode='auto')
-        sb.start_cycle()
-        sb.next()
-        before = sb.tree_hashes()
+        sb.create_cycle('cyc')            # 手里没有节点：挑人要先问就绪集，就绪集要先问排序
+        seen = []
+        real = pipeline._capture
 
-        action = sb.close_node_call(NODE, decision='continue')
+        def spy(argv, cwd):
+            seen.append([str(a) for a in argv])
+            return real(argv, cwd)
 
-        self.assertEqual(action['action'], 'wait')
-        self.assertFalse(action.get('applied'))
-        self.assertEqual(sb.tree_hashes(), before)
-        self.assertEqual(sb.path(), [])
-        self.assertEqual(sb.current_node(), NODE)
+        with harness_dag_hook(sb.root), patched(pipeline, '_capture', spy):
+            action = pipeline.plan(sb.root, 'cyc')
 
-    def test_a_running_signal_is_not_a_green_light(self):
-        sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.start_cycle()
-        sb.next()
-        sb.write_signal('cyc', NODE, 'pending', '重试已备好')
-        action = sb.next()
+        self.assertEqual(action['action'], 'open_node', action)
+        self.assertTrue([argv for argv in seen if Path(argv[1]).name == 'dag-manage.py'],
+                        f'排序那次调用没走接缝：{seen}')
 
-        self.assertEqual(action['action'], 'wait')
-        self.assertIn('cycle retry', action['note'])
-        self.assertIn(NODE, action['note'])
+    def test_no_logic_module_reaches_a_child_process_on_its_own(self):
+        """包里的模块一个都不许自己起子进程：自己起的那些调用，patch 接缝就拦不到。
 
-    def test_the_close_reports_a_half_open_state_stably(self):
-        """Asked twice with the ticket on disk and the close not yet run, the answer is the same
-        and nothing is consumed -- the whole point of `wait` being a stable state."""
-        sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.start_cycle()
-        sb.next()
-        sb.write_signal('cyc', NODE, 'completed', 'done')
-        before = sb.tree_hashes()
-
-        first, second = sb.next(), sb.next()
-
-        self.assertEqual(first['close_with'], second['close_with'])
-        self.assertEqual(sb.tree_hashes(), before)
-
-    def test_a_whole_run_of_nodes_closed_by_their_own_workers(self):
-        """Three auto nodes, each closed by its own worker's call: the DAG drains, the path
-        lists every step in order, and nothing needs a human.
-
-        Two invariants ride along with the drain: the dispatches come out in chain order (a run
-        IS the line), and the last close takes the line out of service (`inactive`) -- the
-        uniform end-of-line write, whatever is left in the graph."""
-        sb = self.make()
-        ids = sb.add_chain(3)
-        sb.start_cycle()
-        final, driver = self.run_to_stop(sb)
-
-        self.assertEqual(final['action'], 'stop_pipeline')
-        self.assertEqual(sb.path_nodes(), ids)
-        self.assertEqual(driver.nodes_closed, ids)
-        self.assertEqual([sb.dag_status(uid) for uid in ids], ['completed'] * 3)
-        self.assertEqual([uid for uid, _ in driver.dispatched], ids)   # 派发顺序=链序
-        self.assertEqual(sb.cycle()['status'], 'inactive')             # 收尾把线下线
-
-    def test_the_cycle_can_be_driven_by_the_cli_alone(self):
-        """The shipped path end to end: `next --after <node> --spawn` closes one node and pins the
-        next, with no session ever started (the dry-run switch)."""
-        sb = self.make(cli=True)
-        ids = sb.add_chain(2)
-        sb.start_cycle()
-        driver = Driver(sb, worker=WorkerSession(sb))
-        final = driver.run()
-
-        self.assertEqual(final['action'], 'stop_pipeline')
-        self.assertEqual(sb.path_nodes(), ids)
+        看去掉注释与字符串后的源码（AST），不是找字面量 —— 说明里提一句 `subprocess` 不算数，
+        真的用上它才算。
+        """
+        offenders = []
+        for path in sorted((CONDUCT_DIR / 'conduct_pipeline_impl').glob('*.py')):
+            tree = ast.parse(path.read_text(encoding='utf-8'))
+            used = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+            imported = {alias.name for node in ast.walk(tree)
+                        if isinstance(node, (ast.Import, ast.ImportFrom))
+                        for alias in node.names}
+            if 'subprocess' in used | imported:
+                offenders.append(path.name)
+        self.assertEqual(offenders, [], f'这些模块自己起了子进程，绕过了接缝：{offenders}')

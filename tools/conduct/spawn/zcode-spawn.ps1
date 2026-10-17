@@ -10,11 +10,19 @@
 # 一次性播种的投影，本地 workspace 没有重读入口），而你盯进度、叫停、放行都靠那份列表。
 # 细节见 zcode-dispatch.py 的模块说明。
 #
-# Usage: pwsh -File zcode-spawn.ps1 -CycleId <id> -PromptFile <path> [-WorkspacePath <dir>]
+# 外壳（参数缺省、prompt 校验、降级标记的写与清）与 `dsh-spawn.ps1` 共用同一份：
+# `spawn-common.ps1`，本文件只留 ZCode 这一半（找 dispatcher、排那一行、读回结果、末行）。
+# 标记的形状与落点在 `marker.py`（ZCode 自己的库路径进标记的 `extra`）。
+#
+# Usage: pwsh -File zcode-spawn.ps1 -CycleId <id> -PromptFile <path> -MarkerPath <path>
+#                                  [-WorkspacePath <dir>] [-PythonExe <path>]
 #                                  [-At <when>] [-Mode <mode>] [-Model <pick>] [-NoVerify]
 #   -CycleId       必填。cycle 标识（同 state-manage.py 的 cycle id）。
 #   -PromptFile    必填。节点 session 的 prompt 全文（第一行是 skill 调用行）；缺了直接报错退出。
+#   -MarkerPath    必填。降级标记的完整路径（`conduct_spawn.argv_for` 从 marker.py 取）。
 #   -WorkspacePath 可选。子会话的工作目录，也是 GUI 里的分组键；缺省用当前目录。
+#   -PythonExe     可选。跑 zcode-dispatch.py 那个 python；缺省认 PATH 上的 python（写标记
+#                  不经过它）。
 #   -At            可选。什么时候跑：`+30m` / `+2h` / 本地时刻（如 `2026-10-07T23:00`）。
 #                  用它把节点排进夜里那口免费窗口；缺省=立刻。
 #                  环境变量 `DSH_CONDUCT_SPAWN_AT` 同义（管线的 argv 不带这个参数）。
@@ -42,15 +50,19 @@
 #
 # 与 dsh-spawn.ps1 的共同契约（别改）：
 #   ① 成功时最后一行是 `spawned: ...`；
-#   ② 任何失败都把原因写进 .pf/meta/CONDUCT-CALLBACK-FAILED-<cycle>.json，且不清除；
+#   ② 任何失败都写下降级标记，且不清除；
 #   ③ 成功时清掉本线自己留下的旧标记（标记存在 = 链现在是断的）；按线分文件，并行=2 时
 #      本线成功不抹别线的断链记号。
+#   ① 末行由本文件自己打（两个宿主的末行不同）；② 与 ③ 由 `spawn-common.ps1` 那一份外壳保证 ——
+#   这一半独有的「找不到 python」那一拍也照 ② 写下降级标记再退出。
 # ============================================================================
 
 param(
     [Parameter(Mandatory = $true)][string]$CycleId,
     [Parameter(Mandatory = $true)][string]$PromptFile,
+    [string]$MarkerPath,
     [string]$WorkspacePath,
+    [string]$PythonExe,
     [string]$At,
     [string]$Mode,
     [string]$Model,
@@ -59,60 +71,26 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# —— 工作目录与降级标记：在任何调用之前先定下来，失败时才写得了盘 ——
-$target = if ($WorkspacePath) { $WorkspacePath } else { (Get-Location).Path }
-$script:MarkerPath = Join-Path $target ('.pf\meta\CONDUCT-CALLBACK-FAILED-' + $CycleId + '.json')
-# 只进标记文本，给人看的；真正的库路径由 zcode-dispatch.py 算（它认同一个环境变量）。
-$dataBase = if ($env:ZCODE_DATA_BASE_DIR) { $env:ZCODE_DATA_BASE_DIR } else { $env:USERPROFILE }
-$script:DbPath = Join-Path $dataBase '.zcode\v2\tasks-index.sqlite'
+. (Join-Path $PSScriptRoot 'spawn-common.ps1')
 
-function Write-CallbackFailureMarker {
-    param(
-        [Parameter(Mandatory)][string]$Phase,
-        [Parameter(Mandatory)][string]$Reason
-    )
-    if ($script:MarkerWritten) { return }
-    $script:MarkerWritten = $true
-    try {
-        $dir = Split-Path -Parent $script:MarkerPath
-        if (-not (Test-Path $dir)) { $null = New-Item -ItemType Directory -Force -Path $dir }
-        $record = [ordered]@{
-            cycle_id    = $CycleId
-            phase       = $Phase
-            attempts    = 1
-            reason      = $Reason
-            workspace   = $target
-            db          = $script:DbPath
-            detected_at = [DateTimeOffset]::UtcNow.ToString('o')
-            note        = ('conductor 的下一棒断在这里：节点会话没有排进 ZCode 的任务队列，管线不会再 ' +
-                           '自己往前走。手动跑 state-manage.py next 接管；确认无碍后删掉本文件。')
-        }
-        # 不带 BOM 写出：这份 JSON 是要被工具读的，BOM 会让 json.load(encoding='utf-8') 炸。
-        # 落盘走临时文件 + 同卷改名：并发读者要么读到整份、要么读不到，不撞见半截 JSON。
-        $tmp = "$script:MarkerPath.tmp-$PID"
-        [System.IO.File]::WriteAllText(
-            $tmp,
-            ($record | ConvertTo-Json -Depth 5),
-            (New-Object System.Text.UTF8Encoding($false)))
-        Move-Item -Path $tmp -Destination $script:MarkerPath -Force
-        Write-Warning "conduct 派发失败，已写下降级标记：$script:MarkerPath"
-    }
-    catch {
-        Write-Warning "写降级标记失败（$script:MarkerPath）：$($_.Exception.Message)"
-    }
-}
-$script:MarkerWritten = $false
+# —— 工作目录与降级标记：在任何调用之前先定下来，失败时才写得了盘 ——
+# ZCode 的库路径只进标记的 extra，给人看的；真正的库路径由 zcode-dispatch.py 算（它认同一个
+# 环境变量，沙箱靠 `ZCODE_DATA_BASE_DIR` 指到临时库）。
+$dataBase = if ($env:ZCODE_DATA_BASE_DIR) { $env:ZCODE_DATA_BASE_DIR } else { $env:USERPROFILE }
+$dbPath = Join-Path $dataBase '.zcode\v2\tasks-index.sqlite'
+Initialize-Spawner -CycleId $CycleId -PromptFile $PromptFile -WorkspacePath $WorkspacePath `
+                   -MarkerPath $MarkerPath -PythonExe $PythonExe -Extra "db=$dbPath"
 
 # —— prompt 是这次调用的全部内容：没有 prompt 就没有会话可排，不给就报错退出 ——
-if (-not (Test-Path $PromptFile)) {
-    Write-CallbackFailureMarker -Phase 'read-prompt' -Reason "找不到 prompt 文件 $PromptFile"
-    throw "prompt file not found: $PromptFile (-PromptFile is required)"
-}
+Assert-PromptFile
 
-$python = (Get-Command python -ErrorAction SilentlyContinue).Source
+$python = $script:SpawnPython
 if (-not $python) {
-    Write-CallbackFailureMarker -Phase 'find-python' -Reason 'PATH 上没有 python：zcode-dispatch.py 跑不起来'
-    throw "python not found on PATH (zcode-dispatch.py needs it)"
+    # 这一拍链就断在这里：按契约②写下降级标记再退出 —— 标记由外壳自己写，不需要 python。
+    Write-CallbackFailureMarker -Phase 'find-python' `
+        -Reason "找不到 python：zcode-dispatch.py 跑不起来；把它放上 PATH，或用 -PythonExe 指名。"
+    Write-Warning "zcode-dispatch.py 需要 python：把它放上 PATH，或用 -PythonExe 指名。"
+    throw "python not found (zcode-dispatch.py needs it)"
 }
 
 $dispatcher = Join-Path $PSScriptRoot 'zcode-dispatch.py'
@@ -125,7 +103,8 @@ if (-not (Test-Path $dispatcher)) {
 $when = if ($At) { $At } else { $env:DSH_CONDUCT_SPAWN_AT }
 $permissionMode = if ($Mode) { $Mode } else { $env:DSH_CONDUCT_SPAWN_MODE }
 $whichModel = if ($Model) { $Model } else { $env:DSH_CONDUCT_SPAWN_MODEL }
-$spawnArgs = @('-X', 'utf8', $dispatcher, '--prompt-file', $PromptFile, '--workspace', $target)
+$spawnArgs = @('-X', 'utf8', $dispatcher, '--prompt-file', $script:SpawnPromptFile,
+               '--workspace', $script:SpawnTarget)
 if ($when) { $spawnArgs += @('--at', $when) }
 if ($permissionMode) { $spawnArgs += @('--mode', $permissionMode) }
 if ($whichModel) { $spawnArgs += @('--model', $whichModel) }
@@ -152,19 +131,11 @@ $sessionId = ''
 $sessionLine = ($lines | Where-Object { "$_" -match '^session:\s*sess_' } | Select-Object -Last 1)
 if ($sessionLine) { $sessionId = ("$sessionLine" -replace '^session:\s*', '').Trim() }
 
-# 派发成功：清掉上一次留下的降级标记（标记存在 = 链现在是断的；链一旦续上它就没有意义了）。
-if (Test-Path $script:MarkerPath) {
-    # 清也先改名再删：标记从「在」到「不在」是一步同卷改名，并发读者撞不见中间态；改名失败
-    # （正被别的进程读着）就退回原地删——清不掉不许挡派发成功。
-    $stale = "$script:MarkerPath.clearing-$PID"
-    Move-Item -Path $script:MarkerPath -Destination $stale -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path $stale -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path $script:MarkerPath -Force -ErrorAction SilentlyContinue
-    Write-Output "cleared a stale callback failure marker: $script:MarkerPath"
-}
+# 派发成功：清掉上一次留下的降级标记（标记存在 = 链现在是断的）。
+Clear-CallbackFailureMarker
 
 if ($sessionId) {
-    Write-Output "spawned: automation $automationId (session $sessionId, node session, prompt=$PromptFile)"
+    Write-Output "spawned: automation $automationId (session $sessionId, node session, prompt=$($script:SpawnPromptFile))"
 } else {
-    Write-Output "spawned: automation $automationId (node session, prompt=$PromptFile)"
+    Write-Output "spawned: automation $automationId (node session, prompt=$($script:SpawnPromptFile))"
 }

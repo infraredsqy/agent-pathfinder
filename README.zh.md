@@ -24,7 +24,7 @@ cd agent-pathfinder
 pwsh -File install.ps1
 ```
 
-该脚本将 `pf-*` 技能链接至 `~/.agents/skills`，将 `tools/bin` 加入 `PATH`，并将 `PF_HOME` 指向本仓库。仓库位置变更后重新执行即可，脚本具备幂等性。
+该脚本将 `pf-*` 技能链接至 `~/.agents/skills`，把 `tools/bin` 加入 `PATH`（同时摘掉其它 checkout 的那一条，`pf` 只解析到本仓库）。仓库位置变更后重新执行即可，脚本具备幂等性，收尾自检里包含一次 `pf doctor`。
 
 ```pwsh
 pf version     # 当前 checkout 的位置

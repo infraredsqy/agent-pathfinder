@@ -15,9 +15,10 @@ Everything else under `.pf/` is plumbing, and the ledger's own `.gitignore` igno
 None of those is the account: a launch prompt is a message that has already been delivered, the
 marker is a "this chain broke" flag, and `temp/` is throwaway by definition.
 
-Holds the path bindings (`bind_paths` re-points them all at once), the atomic write and tolerant
-read they go through, the cross-process ledger lock every mutating command holds across its
-read-modify-write, and the state/signal accessors built on them.
+Holds the path bindings (`bind_paths` re-points them all at once), the door to the cross-process
+ledger lock every mutating command holds across its read-modify-write, and the state/signal
+accessors built on the shared primitives -- the JSON reader and atomic writer, and the lock itself,
+both in `tools/shared/`.
 
 `require_initialized` is the gate: a `.pf/` this tool created by itself -- never init'ed -- is the
 one state that must not be reachable, because the lock's own `mkdir` would otherwise leave an
@@ -29,21 +30,38 @@ it has finished.
 
 
 import contextlib
-import json
-import os
+import importlib.util
 import sys
-import tempfile
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-try:
-    import fcntl
-except ImportError:   # Windows; the POSIX branch of the ledger lock degrades to no-op
-    fcntl = None
-import msvcrt
-
 HERE = Path(__file__).resolve().parent.parent   # the conduct tool directory
+
+# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
+# loaded by path through `loader.py`. These two functions are that bootstrap, identical in every file
+# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+SHARED = HERE.parent / 'shared'
+
+_LOADER = None
+
+
+def _loader():
+    """`tools/shared/loader.py`: the one loader, for the modules this tree keeps outside `shared/`."""
+    global _LOADER
+    if _LOADER is None:
+        spec = importlib.util.spec_from_file_location('pf_shared_loader', SHARED / 'loader.py')
+        _LOADER = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_LOADER)
+    return _LOADER
+
+
+def _shared(name, filename):
+    """One file out of `tools/shared/`, the same module for every caller in this process.
+
+    Loaded for use, not copied: the ledger lock's reentrancy record is one per process, and a second
+    copy of that module would give two of them.
+    """
+    return _loader().load_by_path(name, SHARED / filename, register=True, reuse=True)
 
 #: `.pf/` 这个名字。点开头，和 `.work/` 同款：一眼看得出是工具自己的家当。
 LEDGER_NAME = '.pf'
@@ -60,7 +78,7 @@ def _resolve_project_root(cwd: Path) -> Path:
     落在陈旧快照上，两条线互相看不见对方的认领。worktree 根的 `.git` 是一个**文件**
     （`gitdir: <主树>/.git/worktrees/<名字>`），主树里是目录：顺着指针走，`worktrees` 的
     上三级就是主树根。submodule 的 `.git` 文件指向 `.git/modules/...`，不是 worktree，
-    照旧留在 cwd。主树没有 `.pf/` 时（不是管线项目）不挪，让后面的错误照老样子响。
+    留在 cwd 不动。主树没有 `.pf/` 时（不是管线项目）不挪，让后面的错误当场响。
 
     dag-manage.py 与 issue/storage.py 各有一份同样的函数：三个工具没有共同的包可以放，
     这是一份摆在三处的约定。
@@ -92,7 +110,6 @@ def _resolve_project_root(cwd: Path) -> Path:
 #: 的命令绕开它，见 `ledger_dir_for()`。
 PROJECT_ROOT = _resolve_project_root(Path.cwd())
 LEDGER_DIR = PROJECT_ROOT / LEDGER_NAME
-META_DIR = LEDGER_DIR / 'meta'
 
 
 def ledger_dir_for(project: str | None = None) -> Path:
@@ -143,96 +160,32 @@ def require_initialized(project: str | None = None) -> None:
 # two processes walking that sequence at once means the later write silently erases the earlier
 # one. With parallel=2 (two cycles settling at the same time) that window stops being theoretical,
 # so every MUTATING command body holds this lock across its read → write. One path per project
-# root -- `.pf/meta/ledger.lock` -- shared by conduct, dag-manage and the issue tool, so their
-# writes exclude each other too. The lock file sits in `meta/`, which `.pf/.gitignore` keeps out
-# of both the project's history and the ledger's own: losing it only loses the mutual exclusion,
-# it never wedges anybody. Reentrant per process (cycle start's shell wraps cycle create).
+# root -- `.pf/meta/ledger.lock` -- shared by conduct, dag-manage, the issue tool and a session
+# note's own writer, so their writes exclude each other too.
 #
-# This is also the gate: every mutating command passes through here, and the `mkdir` below would
+# This is also the gate: every mutating command passes through here, and the lock's `mkdir` would
 # otherwise be the one thing that conjures a `.pf/` nobody init'ed.
-_LEDGER_LOCK_TIMEOUT = 10.0   # give-up ceiling, not the norm: a writer holds it for milliseconds
-_LEDGER_LOCK_DEPTH = 0
-
-
-def _ledger_lock_path(project: str | None = None) -> Path:
-    return ledger_dir_for(project) / 'meta' / 'ledger.lock'
 
 
 @contextlib.contextmanager
-def _ledger_lock(project: str | None = None, timeout: float = _LEDGER_LOCK_TIMEOUT):
+def _ledger_lock(project: str | None = None, timeout: float | None = None):
     """Hold the project's ledger lock for the duration of one read-modify-write.
 
-    A caller that cannot get it within `timeout` is told loudly and exits 1 -- wedging silently
-    is the one failure this must not have. On a platform with neither `msvcrt` nor `fcntl` the
-    exclusion degrades to nothing rather than failing every command.
+    The lock itself is `tools/shared/ledgerlock.py` -- one implementation for every writer of a
+    record here. A caller that cannot get it within `timeout` is told loudly and exits 1: wedging
+    silently is the one failure this must not have.
     """
-    global _LEDGER_LOCK_DEPTH
-    if _LEDGER_LOCK_DEPTH:
-        _LEDGER_LOCK_DEPTH += 1
-        try:
-            yield
-        finally:
-            _LEDGER_LOCK_DEPTH -= 1
-        return
-    require_initialized(project)
-    path = _ledger_lock_path(project)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle = open(path, 'a+')
-    deadline = time.monotonic() + timeout
+    lock = _shared('pf_shared_ledgerlock', 'ledgerlock.py')
+    kwargs = {} if timeout is None else {'timeout': timeout}
     try:
-        while True:
-            try:
-                if os.name == 'nt' and msvcrt is not None:
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                elif fcntl is not None:
-                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except OSError:
-                if time.monotonic() >= deadline:
-                    print(f'Error: the ledger lock {path} stayed busy for {timeout:g}s; '
-                          f'another process is mid-write. Nothing was changed.', file=sys.stderr)
-                    sys.exit(1)
-                time.sleep(0.05)
-        _LEDGER_LOCK_DEPTH = 1
-        try:
+        with lock.ledger_lock(ledger_dir_for(project), gate=lambda: require_initialized(project),
+                              **kwargs):
             yield
-        finally:
-            _LEDGER_LOCK_DEPTH = 0
-            try:
-                if os.name == 'nt' and msvcrt is not None:
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-                elif fcntl is not None:
-                    fcntl.flock(handle, fcntl.LOCK_UN)
-            except OSError:
-                pass
-    finally:
-        handle.close()
+    except TimeoutError as e:
+        print(f'Error: {e}', file=sys.stderr)
+        sys.exit(1)
 
 
-def _replace_with_retry(tmp: str, path: Path, attempts: int = 4) -> None:
-    """`os.replace`, tolerating a reader that holds the target open this instant.
-
-    On Windows a plain `open()` for reading does not carry FILE_SHARE_DELETE, so a concurrent
-    reader mid-`json.load` makes the replace fail with PermissionError. The window is tiny and
-    the retry is bounded well under a second.
-    """
-    for attempt in range(attempts):
-        try:
-            os.replace(tmp, path)
-            return
-        except PermissionError:
-            if attempt == attempts - 1:
-                raise
-            time.sleep(0.05 * (attempt + 1))
-
-
-STATE_JSON = LEDGER_DIR / 'state.json'
-SIGNALS_DIR = LEDGER_DIR / 'signals'
-# The standing-instruction account: one writer (this CLI), and the owner is the only one who takes an
-# entry off it (archive or removal).
-INSTRUCTIONS_JSON = LEDGER_DIR / 'instructions.json'
 #: How a path step may end. A node's own work is not tracked here, only the outcome it reported.
 VALID_NODE_RESULTS = {'completed', 'failed', 'stopped'}
 #: 一条 cycle 只有两个状态：`active` 这条线该往前推、`inactive` 不要推。停下来的原因不留在状态里
@@ -248,45 +201,113 @@ def _now() -> str:
 
 
 def _atomic_write(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix='.tmp')
+    """One record written whole, or the command ends.
+
+    The write itself (temp file in the target's directory, fsync, a replace that tolerates a live
+    reader) is `tools/shared/jsonio.py`; this layer is the CLI, so a failure is a message and exit 1.
+    """
     try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-            f.flush()
-            os.fsync(f.fileno())
-        _replace_with_retry(tmp, path)
+        _shared('pf_shared_jsonio', 'jsonio.py').atomic_write_json(path, data)
     except Exception as e:
         print(f'Error: write failed: {e}', file=sys.stderr)
-        if os.path.exists(tmp):
-            os.unlink(tmp)
         sys.exit(1)
+
+
+def record_bytes(data: dict) -> bytes:
+    """这四份记录落盘时的那串字节：格式由写方给出，合并驱动照它比对。
+
+    `state.json` / `instructions.json` / 条子都经 `_atomic_write` 落盘，格式在
+    `tools/shared/jsonio.py`（缩进 2、中文原样、`sort_keys` 留缺省）。合并驱动拿这串字节与盘上
+    那份比对：两串一模一样，那枚文件就原样留着，一个字节都不碰。判据只有写方给得出 —— 驱动若自己
+    `json.dumps` 一遍，这边哪天改了格式，往后每一次合并都会看起来像有改动。
+    """
+    return _shared('pf_shared_jsonio', 'jsonio.py').json_bytes(data)
+
+
+def write_record_bytes(path, payload: bytes) -> None:
+    """把这串字节落到这个路径：判据与落盘出自同一棵树。
+
+    `record_bytes` 给出「这个项目该写成什么样」，这里把它写下去，两件都用本树的
+    `tools/shared/jsonio.py`。合并驱动经这两道门问同一个写方：草稿 / 演练副本用
+    `DSH_CONDUCT_STATE_DIR` 指向真工具时，不会拿一棵树的判据去对另一棵树的落盘。谁持锁、写完之后
+    怎么收场是调用方的事，这里只有这次落盘。
+    """
+    _shared('pf_shared_jsonio', 'jsonio.py').atomic_write_bytes(path, payload)
 
 
 def _read_json(path: Path, label: str) -> dict | None:
-    if not path.exists():
-        return None
-    # JSON is UTF-8 by spec, and everything here reads/writes Chinese summaries.
+    """One record read strict, or the command ends with the reader's own words.
+
+    The reader and the wording of each failure are `tools/shared/jsonio.py`: a file that is not
+    there reads as None, bytes that are not UTF-8 and text that is not JSON both raise
+    `JsonReadError`. **CLI 入口负责退，包内只抛**：这里就是那道门 —— 打印读者自己的那句话并
+    exit 1；进程内直接调 `read_json_strict` 的调用方拿到的是异常，由它自己决定怎么办。
+    """
+    jsonio = _shared('pf_shared_jsonio', 'jsonio.py')
     try:
-        with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except UnicodeDecodeError as e:
-        print(f'Error: {label} is not valid UTF-8: {e}', file=sys.stderr)
+        return jsonio.read_json_strict(path, label)
+    except jsonio.JsonReadError as e:
+        print(f'Error: {e}', file=sys.stderr)
         sys.exit(1)
-    except json.JSONDecodeError as e:
-        print(f'Error: {label} parse failure: {e}', file=sys.stderr)
-        sys.exit(1)
+
+
+# ── 四类记录：一道门 ──────────────────────────────────────────────────────────
+# `.pf/` 底下四样东西是这个工具的全部记录 —— cycle 簿（state.json）、条子（signals/）、常备
+# 指令清单（instructions.json）、图（ideas.json）。这一节是它们**唯一**的落点算法：每一道门都收
+# 一个 `project`，读别人项目的记录用不着自己拼路径，也就不会拼出第二种出错口径。同一份记录有
+# 两处读法时，一处读坏了大喊一声，另一处静默当空集 —— 而那句空集落在 `clean-temp --yes` 上，
+# 就是照删不误。
+
+def _record_path(project: str | None, *parts: str) -> Path:
+    """`<project>/.pf/<parts...>`：记录的落点只在这里与 ledger 根相接。
+
+    `project` 为 None 时用本拷贝导入时绑定（`bind_paths` 挪过）的那个根。
+    """
+    return ledger_dir_for(project).joinpath(*parts)
 
 
 # ── State.json ───────────────────────────────────────────────────────────────
 
-def _read_state() -> dict:
-    data = _read_json(STATE_JSON, 'state.json')
+def _read_state(project: str | None = None) -> dict:
+    """这个项目的 cycle 簿，或一本空簿（`state.json` 不在是正常态）。"""
+    data = _read_json(_record_path(project, 'state.json'), 'state.json')
     if data is None:
         return {'cycles': []}
     if 'cycles' not in data:
         data['cycles'] = []
     return data
+
+
+def _read_dag(project: str | None = None) -> dict:
+    """这个项目的图：`ideas.json` 的节点表，或空表。
+
+    读的是盘上那个词，一个字段都不补（`conduct_pipeline_impl/store.py` 的 `load_dag` 是给判据
+    用的那份，它会把节点 mode 填上）。
+    """
+    data = _read_json(_record_path(project, 'ideas.json'), 'ideas.json') or {}
+    return data.get('nodes') or {}
+
+
+def _instructions_path(project: str | None = None) -> Path:
+    """常备指令清单的落点：清单是 ledger 的一部分，所以是 `<project>/.pf/instructions.json`。"""
+    return _record_path(project, 'instructions.json')
+
+
+def _read_instructions(project: str | None = None) -> dict:
+    """这份清单，盘上什么样读出来就什么样。
+
+    读不解析也不落笔：条目的 scope 由 `entry_scope`（`conduct_pipeline`，那一条判定的唯一处）
+    在真正要用到的地方读。
+    """
+    data = _read_json(_instructions_path(project), 'instructions.json')
+    if not data:
+        return {'instructions': []}
+    data.setdefault('instructions', [])
+    return data
+
+
+def _write_instructions(data: dict, project: str | None = None) -> None:
+    _atomic_write(_instructions_path(project), data)
 
 
 def _holding_of(cycle: dict) -> list:
@@ -317,7 +338,7 @@ def _set_holding(cycle: dict, items: list) -> None:
 
 
 def _write_state(data: dict) -> None:
-    _atomic_write(STATE_JSON, data)
+    _atomic_write(_record_path(None, 'state.json'), data)
 
 
 def _find_cycle(state: dict, cycle_id: str) -> dict:
@@ -330,35 +351,47 @@ def _find_cycle(state: dict, cycle_id: str) -> dict:
 
 # ── Signals ──────────────────────────────────────────────────────────────────
 
-def _signal_path(cycle_id: str, node_id: str) -> Path:
-    return SIGNALS_DIR / cycle_id / f'{node_id}.json'
+def _signal_path(cycle_id: str, node_id: str, project: str | None = None) -> Path:
+    """条子的落点：`<project>/.pf/signals/<cycle>/<node>.json`（`project` 缺省用本拷贝绑定的根）。"""
+    return _signal_path_in(_record_path(project, 'signals'), cycle_id, node_id)
 
 
-def _read_signal(cycle_id: str, node_id: str):
-    return _read_json(_signal_path(cycle_id, node_id), f'signals/{cycle_id}/{node_id}.json')
+def _signal_path_in(signals_dir, cycle_id: str, node_id: str) -> Path:
+    """同一个落点，那一格的根由调用方直接给出 —— 显式路径的写方走这条（见 `_write_signal`）。
+
+    落点的形状只有这一处：`<signals_dir>/<cycle>/<node>.json`。
+    """
+    return Path(signals_dir) / cycle_id / f'{node_id}.json'
 
 
-def _write_signal(cycle_id: str, node_id: str, status: str, summary: str, outputs: dict) -> Path:
+def _read_signal(cycle_id: str, node_id: str, project: str | None = None):
+    return _read_json(_signal_path(cycle_id, node_id, project),
+                      f'signals/{cycle_id}/{node_id}.json')
+
+
+def _write_signal(cycle_id: str, node_id: str, status: str, summary: str, outputs: dict,
+                  signals_dir=None) -> Path:
+    """One node's signal: the record's one writer, and the six keys a reader gets.
+
+    The path is `_signal_path`'s and the moment is `_now`'s, so a signal written by a worker, by
+    `handoff.py` or by `cycle retry` is the same record at the same place.
+
+    `signals_dir` 是**这一笔写入**的落点（`<project>/.pf/signals`），用完即弃：给了它这一笔就落
+    在那儿，本拷贝的绑定一个字都不动 —— 挪绑定是 `bind_paths` 那一件事，而一个进程里共用这份
+    store 的调用方不止一个，写条子顺手改掉全进程的落点会把它写到上一个项目里去。不给就用本拷贝
+    此刻的绑定（cwd 在本拷贝导入时定的那个根）。
+    """
+    sig_path = (_signal_path_in(signals_dir, cycle_id, node_id) if signals_dir is not None
+                else _signal_path(cycle_id, node_id))
     sig = {
         'cycle': cycle_id, 'node': node_id,
         'status': status, 'summary': summary,
         'outputs': outputs, 'timestamp': _now(),
     }
-    sig_dir = SIGNALS_DIR / cycle_id
-    sig_dir.mkdir(parents=True, exist_ok=True)
-    sig_path = sig_dir / f'{node_id}.json'
-
-    fd, tmp = tempfile.mkstemp(dir=str(sig_dir), suffix='.tmp')
     try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            json.dump(sig, f, indent=2, ensure_ascii=False)
-            f.flush()
-            os.fsync(f.fileno())
-        _replace_with_retry(tmp, sig_path)
+        _shared('pf_shared_jsonio', 'jsonio.py').atomic_write_json(sig_path, sig)
     except Exception as e:
         print(f'Error: write signal failed: {e}', file=sys.stderr)
-        if os.path.exists(tmp):
-            os.unlink(tmp)
         sys.exit(1)
     return sig_path
 
@@ -400,12 +433,8 @@ def bind_paths(ledger_dir) -> None:
     project. A caller that loads this module in process instead has to say which project it means:
     everything else reads these bindings at call time, so this one call moves the whole module.
 
-    `ledger_dir` is `<project>/.pf`; `meta/` and `nodes/` come off it, so a caller that names the
-    ledger has named all of it.
+    `ledger_dir` is `<project>/.pf`; every record's path and every `*_dir_for()` come off that one
+    root at call time, so a caller that names the ledger has named all of it.
     """
-    global LEDGER_DIR, META_DIR, STATE_JSON, SIGNALS_DIR, INSTRUCTIONS_JSON
+    global LEDGER_DIR
     LEDGER_DIR = Path(ledger_dir)
-    META_DIR = LEDGER_DIR / 'meta'
-    STATE_JSON = LEDGER_DIR / 'state.json'
-    SIGNALS_DIR = LEDGER_DIR / 'signals'
-    INSTRUCTIONS_JSON = LEDGER_DIR / 'instructions.json'

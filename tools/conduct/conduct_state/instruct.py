@@ -2,13 +2,13 @@
 
 Owns the account's vocabulary and read/write helpers, the position rules that decide which
 entries a reader sees from where the pipeline stands, and the `instruction` subcommands
-(add / list / resolve / rm / revive) with their CLI dispatcher.
+(add / list / resolve / rm / revive).
 """
 import json
 import sys
-from pathlib import Path
 
-from .store import (_atomic_write, _ledger_lock, _now, _read_json, _read_state, ledger_dir_for)
+from .store import (_holding_ids, _ledger_lock, _now, _read_dag, _read_instructions, _read_state,
+                    _write_instructions, ledger_dir_for)
 from .pipeline_loader import _load_pipeline
 
 
@@ -19,20 +19,19 @@ from .pipeline_loader import _load_pipeline
 # the owner's alone. Three scopes; the defaults lean the "noisy" way on purpose (see the module notes
 # below).
 
-#: The vocabulary `scope` is written in. `entry_scope()` over in conduct_pipeline.py is the one reader
-#: of an entry's scope, and this module loads it lazily (`_scope_rules`): two copies of that
-#: judgement is how one entry ends up read two ways.
-VALID_SCOPES = ('global', 'cycle', 'node')
 VALID_TARGETS = ('stage', 'boundary')
 
+#: `state` 缺省读作的那个词：一个没有 `state` 字段的条目按这个词算数。读侧（`conduct_pipeline_impl/instruct.py`）
+#: 经装载器借这个名字，不抄第二遍。
+LIVE_STATE = 'live'
 #: The account has two states, and one of them is written by the owner alone: `live` (in force) and
 #: `withdrawn` (archived -- still on the account, no longer read). Nothing else ends an entry: where
-#: it can be seen from is derived on every read from its scope and the bound node/cycle, so a scoped
-#: entry goes out of sight on its own (`_visible_from_here`). A record an older tool left carrying
-#: another word in `state` is not one of these; it is read as archived, and nothing writes it back
+#: it can be seen from is derived on every read from its scope and the bound node/cycle (impl 的
+#: `instruction_in_scope`), so a scoped entry goes out of sight on its own. A record carrying any
+#: other word in `state` is not one of these; it is read as archived, and nothing writes it back
 #: (`_retired`). Taking an entry off the account is NOT a third state: the entry is not in the list
 #: at all, and the trace it leaves carries no `state` (`cmd_instruction_rm`).
-VALID_INSTRUCTION_STATES = ('live', 'withdrawn')
+VALID_INSTRUCTION_STATES = (LIVE_STATE, 'withdrawn')
 
 #: Where the account keeps the traces a removal leaves: one `id` and the moment, no text. They are
 #: what holds a removal against a pull from a machine that still has the entry (`tools/conduct/
@@ -56,37 +55,20 @@ def _scope_rules():
     return _SCOPE_RULES
 
 
+def valid_scopes() -> tuple:
+    """`scope` 的词表：`conduct_pipeline` 的那一份，不是这里的第二个副本。
+
+    `SCOPES` 在 `conduct_pipeline_impl/instruct.py`（判定的正本）里；这个工具只借不抄 —— 抄一份
+    的下场是给判定加第四个 scope 之后，`--scope` 先在 argparse 那一步把它拒了。
+    """
+    return _scope_rules().SCOPES
+
+
 def _scope_from_flag(raw: str | None) -> str | None:
     """A `--scope` value as a scope, or None when it is not one of the three."""
     if raw is None:
         return None
     return raw if raw in _scope_rules().SCOPES else None
-
-
-def _instructions_path(project: str | None = None) -> Path:
-    """The one call site that decides where the account is read from and written to.
-
-    The account is part of the ledger, so it is `<project>/.pf/instructions.json`.
-    """
-    return ledger_dir_for(project) / 'instructions.json'
-
-
-def _read_instructions(project: str | None = None) -> dict:
-    """The account, exactly as it is on disk.
-
-    Reading resolves nothing and writes nothing: an entry's scope is read through `entry_scope`
-    (`conduct_pipeline`, the one place that judgement lives) wherever it is actually needed. A read must
-    never rewrite the workspace it read.
-    """
-    data = _read_json(_instructions_path(project), 'instructions.json')
-    if not data:
-        return {'instructions': []}
-    data.setdefault('instructions', [])
-    return data
-
-
-def _write_instructions(data: dict, project: str | None = None) -> None:
-    _atomic_write(_instructions_path(project), data)
 
 
 def _retired(entry: dict) -> bool:
@@ -99,7 +81,7 @@ def _retired(entry: dict) -> bool:
 
 
 def _is_live(entry: dict) -> bool:
-    return entry.get('state', 'live') == 'live'
+    return entry.get('state', LIVE_STATE) == LIVE_STATE
 
 
 def _removed(data: dict) -> list:
@@ -155,14 +137,6 @@ def _next_instruction_id(data: dict) -> str:
 
 # ── where the pipeline stands, and what is visible from there ──
 
-def _holding_ids(cycle: dict) -> list:
-    """这条线此刻握着的那组节点（`holding` 的唯一读法）。"""
-    holding = cycle.get('holding')
-    if isinstance(holding, list):
-        return [item['id'] if isinstance(item, dict) else item for item in holding if item]
-    return []
-
-
 def _cycle_of_node(active: list, node: str) -> str | None:
     """节点反查 cycle：这个节点正拿在哪一条 active cycle 手里？
 
@@ -177,18 +151,20 @@ def _cycle_of_node(active: list, node: str) -> str | None:
 def _position(project: str | None = None, node: str | None = None) -> tuple:
     """`(current cycle id, current node id)` -- what `cycle current` reads, or `(None, None)`.
 
-    Read straight off `state.json` rather than through the module-level `LEDGER_DIR`, so `--project`
-    decides which workspace answers. When the answer is unclear -- no active cycle, two of them --
-    both halves come back None, and the caller falls back to judging each entry by the status of what
-    it is bound to.
+    Read through the store's own door (`_read_state`) rather than the module-level `LEDGER_DIR`, so
+    `--project` decides which workspace answers.
 
-    `node` is the reader saying where it stands (`instruction list --node <id>`). It is the one fact
-    that survives two active cycles side by side: the pointer in state.json cannot say which of the
-    two lines is asking, but a node id can be traced back to the cycle holding it, so the position is
-    determinate again. When that lookup lands on nothing, both halves stay None exactly as before.
+    `node` is the reader saying where it stands (`instruction list --node <id>`), and it stands as
+    named: the node in the line's hand is not substituted for it. That is what the flag is for -- the
+    hand says where the LINE is, and the reader is saying which node it is the reader of. With one
+    active cycle the cycle half comes from state.json; with two or more side by side the named node
+    is what pins the line down as well (the active cycle holding it, when exactly one does).
+
+    When nothing says where the reader stands -- no active cycle, two of them and no node named, or a
+    named node no active line holds -- both halves come back None, and the reader judges each entry
+    by the status of what it is bound to instead (the wide reading, see `instruction_in_scope`).
     """
-    ledger = ledger_dir_for(project)
-    state = _read_json(ledger / 'state.json', 'state.json') or {}
+    state = _read_state(project)
     active = [c for c in state.get('cycles', []) if c.get('status') == 'active']
     if len(active) == 1:
         cycle = active[0]
@@ -199,104 +175,10 @@ def _position(project: str | None = None, node: str | None = None) -> tuple:
         cycle = next(c for c in active if c['id'] == cycle_id)
     else:
         return (None, None)
-    holding = _holding_ids(cycle)
-    if node and node in holding:
+    if node:
         return (cycle['id'], node)
+    holding = _holding_ids(cycle)
     return (cycle['id'], holding[0] if holding else None)
-
-
-def _cycle_statuses(project: str | None = None) -> dict:
-    """{cycle id: status}, for the entries whose cycle is no longer the current one.
-
-    This reader goes straight to the file (it takes a project root rather than the process cwd), so
-    it reads the word as written: every comparison here is against `active`.
-    """
-    state = _read_json(ledger_dir_for(project) / 'state.json', 'state.json') or {}
-    return {c.get('id'): c.get('status')
-            for c in state.get('cycles', []) if c.get('id')}
-
-
-def _dag_nodes(project: str | None = None) -> dict:
-    """The DAG's nodes: the one fact a `node` entry is measured against (is that node completed?).
-
-    The graph is part of the ledger, so it is `<project>/.pf/ideas.json`.
-    """
-    return (_read_json(ledger_dir_for(project) / 'ideas.json', 'ideas.json') or {}).get('nodes') or {}
-
-
-def _visible_from_here(project: str | None, entries: list, node: str | None = None) -> list:
-    """The entries a reader standing where the pipeline stands now should see.
-
-    This is the whole of the instruction channel: no session is handed its constraints, every
-    session reads them, so the rule has to be the one the reader can act on. `global` is always
-    visible; a `cycle` entry only while its cycle is the current one; a `node` entry only while its
-    node is the current one. An entry with nothing to compare -- no binding, or no pointer to
-    compare it against -- is visible, and when the pointer is missing each entry is judged by the
-    status of what it is bound to instead. Every unanswerable case leans visible: a constraint a
-    reader cannot see is a constraint that does not exist for it.
-
-    One case overrides that lean, and only one: two or more active cycles at once. Then "its cycle
-    is still active" is true of every line the project is running, so a `cycle` entry is visible
-    only where the reader's own line is pinned down -- by the pointer when there is a single active
-    cycle, or by the node the reader reports (`--node`). With neither, the entry is read out to
-    nobody: showing it to both lines is how one line's requirement lands on the other, which is the
-    failure this rule exists for. The reader is told, rather than left with silence
-    (`_ambiguous_cycle_view`). `node` entries keep their own rule (their node unfinished), because
-    that is the life of a node entry and not a question about where the reader stands.
-    """
-    rules = _scope_rules()
-    cur_cycle, cur_node = _position(project, node=node)
-    statuses, nodes = _cycle_statuses(project), _dag_nodes(project)
-    ambiguous = cur_cycle is None and sum(1 for s in statuses.values() if s == 'active') > 1
-    out = []
-    for entry in entries:
-        if not _is_live(entry):
-            continue
-        scope = rules.entry_scope(entry)
-        if scope == 'global':
-            out.append(entry)
-            continue
-        if scope == 'cycle' and entry.get('cycle'):
-            if cur_cycle is not None:
-                if entry['cycle'] == cur_cycle:
-                    out.append(entry)
-                continue
-            if ambiguous:
-                continue
-            bound_status = statuses.get(entry['cycle'])
-            if bound_status in (None, 'active'):
-                out.append(entry)
-            continue
-        if scope == 'node' and entry.get('node'):
-            if cur_node is not None:
-                if entry['node'] == cur_node:
-                    out.append(entry)
-                continue
-            if (nodes.get(entry['node']) or {}).get('status') != 'completed':
-                out.append(entry)
-            continue
-        # Nothing to measure against, or a scope this reader does not know: show it.
-        out.append(entry)
-    return out
-
-
-def _ambiguous_cycle_view(project: str | None, entries: list,
-                          node: str | None = None) -> int:
-    """几条 active cycle 并排、位置又钉不下来时，`cycle` 作用域的条目两边都不念。
-
-    返回 active cycle 的条数（0 = 这件事跟这次读无关），只用来在默认视图「看不见指令」的时候
-    补一句解套的话：沉默必须能被读成「说一句你站在哪条线上」，而不是「这里没有约束」。
-    """
-    if _position(project, node=node)[0] is not None:
-        return 0
-    active = [cid for cid, st in _cycle_statuses(project).items() if st == 'active']
-    if len(active) < 2:
-        return 0
-    rules = _scope_rules()
-    if not any(_is_live(e) and rules.entry_scope(e) == 'cycle'
-               for e in entries):
-        return 0
-    return len(active)
 
 
 def _fold(entry: dict) -> dict:
@@ -342,7 +224,7 @@ def _nothing_visible_lines(total: int) -> list:
     """
     return ['当前这一步没有看得见的指令。',
             f'（指令记录里有 {total} 条记录：它们要么绑在别的 cycle 或别的节点上，要么已经不在生效'
-            f'状态。刚开一轮、指针还没写下来时，换个时候再读一次。）']
+            f'状态。位置钉不下来时这些条目照念 —— 读成空，是它们真的到不了这一步。）']
 
 
 #: How a scope is spelled for the reader. The vocabulary is English in the account and in the flag
@@ -379,10 +261,10 @@ def _new_entry_binding(scope: str, cycle: str | None, node: str | None,
 
     Two sources, in this order: what the caller named (`--cycle` / `--node`), then the pipeline's own
     position (which exists only while exactly one cycle is active). `scope` decides what "neither"
-    means. A `cycle` / `node` entry with no binding is read as "nothing to compare against" --
-    visible everywhere and never out of sight (`_visible_from_here`'s last line) -- so those two
-    scopes are refused here rather than written that way. `global` needs no binding; it still records
-    where it was said, for the account's own sake.
+    means. A `cycle` / `node` entry with no binding has nothing to measure against, so it is read as
+    visible everywhere and never goes out of sight -- those two scopes are refused here rather than
+    written that way. `global` needs no binding; it still records where it was said, for the
+    account's own sake.
 
     The two names are checked against the state before they are written: a mistyped `--cycle` would
     otherwise make an entry nobody can ever read, which is the same silence in the other direction.
@@ -396,7 +278,7 @@ def _new_entry_binding(scope: str, cycle: str | None, node: str | None,
     cycle_id = cycle if cycle is not None else (active[0]['id'] if len(active) == 1 else None)
 
     if node is not None:
-        nodes = _dag_nodes()
+        nodes = _read_dag()
         if nodes and node not in nodes:
             print(f'Error: --node {node!r} is not in the DAG', file=sys.stderr)
             sys.exit(1)
@@ -445,7 +327,7 @@ def cmd_instruction_add(text: str, scope: str, target: str, said_by: str,
         sys.exit(1)
     scope = _scope_from_flag(scope)
     if scope is None:
-        print(f'Error: --scope must be one of {list(VALID_SCOPES)}', file=sys.stderr)
+        print(f'Error: --scope must be one of {list(valid_scopes())}', file=sys.stderr)
         sys.exit(1)
     if target not in VALID_TARGETS:
         print(f'Error: --target must be one of {list(VALID_TARGETS)}', file=sys.stderr)
@@ -464,7 +346,7 @@ def cmd_instruction_add(text: str, scope: str, target: str, said_by: str,
             'text': text,
             'scope': scope,
             'target': target,
-            'state': 'live',
+            'state': LIVE_STATE,
             'cycle': cycle_id,
             'node': node_id,
             'said_by': said_by,
@@ -492,13 +374,13 @@ def cmd_instruction_list(as_json: bool, live_only: bool, project: str | None = N
 
     Nothing is injected into a dispatch prompt any more, so this command is how a session learns
     what the user asked for: it runs it among its first commands and reads the answer. The default
-    view is therefore computed from WHERE the pipeline stands -- the current cycle and the current
-    node -- and not from the whole account: a view that is narrower than the truth is a constraint
-    that does not exist for the session reading it.
+    view is therefore computed from WHERE the pipeline stands -- the line this session works on and
+    the node in its hand -- and not from the whole account: a view that is narrower than the truth is
+    a constraint that does not exist for the session reading it.
 
-    `--node <id>` is how a session says where it stands when the pointer cannot: with two active
-    cycles side by side, `cycle` entries go to the line whose round holds that node and to nobody
-    else (`_visible_from_here`).
+    `--node <id>` is how a session says where it stands when the pointer cannot: that node stands as
+    named, and with two active cycles side by side it is also what pins the line down -- a `cycle`
+    entry goes to the line whose round holds that node and to nobody else.
 
     `--json` is the machine view of the same answer (a parseable array, `[]` when there is nothing).
     `--all`, `--live` and `--scope` are the account views: a caller asking for the raw rows gets the
@@ -506,14 +388,18 @@ def cmd_instruction_list(as_json: bool, live_only: bool, project: str | None = N
     """
     all_items = _read_instructions(project)['instructions']
     rules = _scope_rules()
-    if scope is not None:
-        # argparse restricts this flag to the vocabulary above (the older names included), so all
-        # that is left here is spelling the value the way the account is read.
-        scope = _scope_from_flag(scope)
     global_total = len([i for i in all_items if rules.entry_scope(i) == 'global'])
 
     if not all_entries and scope is None and not live_only:
-        visible = [_fold(i) for i in _visible_from_here(project, all_items, node=node)]
+        # 默认视图：位置由 `_position` 读出来，读不读由管道的那一个判定说了算
+        # （`instruction_in_scope`）—— 收尾结算一个节点时站的是同一个位置，用的是同一个判定。
+        cur_cycle, cur_node = _position(project, node=node)
+        # scope 判定要的两件事（图里的节点表、此刻在服务的线）由判定那一侧读：这一侧不拼第二份。
+        nodes, active = rules._scope_facts(ledger_dir_for(project).parent)
+        visible = [_fold(i) for i in all_items
+                   if _is_live(i)
+                   and rules.instruction_in_scope(i, nodes, active,
+                                                  cycle=cur_cycle, node=cur_node)]
         if as_json:
             print(json.dumps(visible, ensure_ascii=False, indent=2))
             return
@@ -522,12 +408,6 @@ def cmd_instruction_list(as_json: bool, live_only: bool, project: str | None = N
             # parseable array on purpose, so a caller can branch on `[]` without string matching.
             lines = (_instruct_empty_lines(len(all_items), None, global_total) if not all_items
                      else _nothing_visible_lines(len(all_items)))
-            blind = _ambiguous_cycle_view(project, all_items, node=node)
-            if blind:
-                lines = lines + [
-                    f'（本项目有 {blind} 条 active cycle 并排，我分不出你站在哪一条线上，'
-                    f'所以 cycle 作用域的指令两边都没念。用 `--node <你手上的节点 id>` 说一句你'
-                    f'在哪条线上，它们就会回来。）']
             for line in lines:
                 print(line)
             return
@@ -550,10 +430,10 @@ def cmd_instruction_list(as_json: bool, live_only: bool, project: str | None = N
         for line in _instruct_empty_lines(len(all_items), scope, global_total):
             print(line)
         return
-    marks = {'live': '●', 'withdrawn': '✗'}
+    marks = {LIVE_STATE: '●', 'withdrawn': '✗'}
     for i in items:
         # Any word other than `live` -- including one an older tool wrote -- reads as archived.
-        mark = marks.get(i.get('state', 'live'), '✗')
+        mark = marks.get(i.get('state', LIVE_STATE), '✗')
         scoped = rules.entry_scope(i)
         deliver = {'stage': '干活可见', 'boundary': '仅收尾时读'}.get(i.get('target'), '?')
         print(f'{mark} {i["id"]}  [{scoped}/{deliver}]  {i.get("text","")}')
@@ -657,24 +537,3 @@ def cmd_instruction_revive(ins_id: str, project: str | None = None) -> None:
     print(f'INSTRUCTION {ins_id} → live')
 
 
-def _dispatch_instruction(args) -> None:
-    sub = getattr(args, 'instruction_command', None)
-    project = getattr(args, 'project', None)
-    if sub == 'add':
-        cmd_instruction_add(args.text, args.scope, args.target, args.said_by, args.note,
-                            args.stop_after_nodes, getattr(args, 'cycle', None),
-                            getattr(args, 'node', None))
-    elif sub == 'list':
-        cmd_instruction_list(args.json, args.live, project,
-                             getattr(args, 'scope', None),
-                             getattr(args, 'all_entries', False),
-                             getattr(args, 'node', None))
-    elif sub == 'resolve':
-        cmd_instruction_resolve(args.ins_id, args.state, args.note, project)
-    elif sub == 'rm':
-        cmd_instruction_rm(args.ins_id, project)
-    elif sub == 'revive':
-        cmd_instruction_revive(args.ins_id, project)
-    else:
-        print('Usage: pf instruction {add|list|resolve|rm|revive} ...', file=sys.stderr)
-        sys.exit(1)

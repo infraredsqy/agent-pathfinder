@@ -1,8 +1,8 @@
 """The whole walk, through the shipped processes.
 
-`TestEndToEnd` drives `state-manage.py next --after <node> --spawn` end to end with the dry-run
-spawn switch: no session is ever started and the network is never touched, but every command is the
-real one.
+`TestEndToEnd` drives the closing call through the harness's one spawn entry
+(`Sandbox.spawn_next`), whose drill switch the harness holds: no session is ever started and the
+network is never touched, but every command is the real one.
 """
 
 from __future__ import annotations
@@ -53,8 +53,8 @@ class TestEndToEnd(Base):
         finished = None
         for _ in range(8):
             action = sb.next_cli()[0]
-            # The walk is over when the line's last close takes it out of service: the next bare
-            # `next` no longer drives it, it names the command that puts it back in.
+            # The walk is over when the line's last close takes it out of service: a bare `next`
+            # leaves it alone and names the command that puts it back in.
             if action['action'] in ('stop_pipeline', 'ask_user', 'no_cycle'):
                 finished = action['action']
                 break
@@ -66,7 +66,7 @@ class TestEndToEnd(Base):
             self.assertEqual(action['action'], 'wait', action)
             node = action['node_id']
             seen.append(node)
-            settled, proc = sb.next_cli('--after', node, '--spawn')
+            settled, proc = sb.spawn_next('--after', node)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             if settled['action'] == 'dispatch':
                 self.assertEqual(settled['node_id'], ids[len(seen)])
@@ -89,7 +89,7 @@ class TestEndToEnd(Base):
             if action['action'] == 'dispatch':
                 self.deliver(sb, action['node_id'])
                 continue
-            settled, _ = sb.next_cli('--after', action['node_id'], '--spawn')
+            settled, _ = sb.spawn_next('--after', action['node_id'])
             if settled.get('spawned'):
                 seen.append(settled['spawned'])
 

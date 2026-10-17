@@ -28,8 +28,9 @@ cd agent-pathfinder
 pwsh -File install.ps1
 ```
 
-It links the `pf-*` skills into `~/.agents/skills`, puts `tools/bin` on your `PATH`, and points
-`PF_HOME` at the checkout. Re-run it after moving the checkout; it is idempotent.
+It links the `pf-*` skills into `~/.agents/skills` and puts `tools/bin` on your `PATH` — dropping
+any other checkout's entry, so `pf` resolves here. Re-run it after moving the checkout; it is
+idempotent, and its closing self-check includes `pf doctor`.
 
 ```pwsh
 pf version     # where this checkout lives
