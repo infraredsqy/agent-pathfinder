@@ -56,10 +56,6 @@ AUTO-MERGE  (no question asked)
   * state cycle `status`                              -> the two words are `active` / `inactive`;
                                                          two sides naming different ones is a fight
   * instructions resolution (state + its stamp)       -> the side whose `resolved_at` is newer
-  * instructions `applied`/`applied_rounds`
-    (append-only)                                     -> the longer list when one is a prefix of the
-                                                         other; else the two logs merged, ordered by
-                                                         `at`
   * signals                                           -> a terminal status beats a non-terminal one;
                                                          otherwise the newer %A/%B file mtime (tie: ours)
 
@@ -76,8 +72,9 @@ FLAG  (nothing is written, exit 1, a human decides)
   * state cycle: `title` / `tags` / `policies` both changed to different values (`status` is
     reachable only as a real disagreement: two sides naming two different words)
   * instructions: the same `id` added by BOTH sides with different content (an add/add collision)
-  * instructions: any field both sides changed, except the resolution group and the applied log
-  * instructions: the same `applied` mark (same `at` + `cycle` + `round`) with different contents
+  * instructions: any field both sides changed, except the resolution group. The fields an older
+    tool wrote (`applied` / `applied_rounds` / `superseded_by`) are ordinary fields with no rule of
+    their own, so changing one on both sides lands here too
 
 NOTES  (deliberate consequences, worth knowing before trusting a clean merge)
 ------------------------------------------------------------------------------
@@ -91,10 +88,14 @@ NOTES  (deliberate consequences, worth knowing before trusting a clean merge)
   * A node deleted while another node still depends on it is checked (`_flag_broken_dependency`), but
     only for edges THIS merge breaks: an edge already dangling on one side stays that side's problem,
     and `dag-manage validate` is the place for the graph as a whole.
-  * instructions: `state`/`resolved_at`/`resolved_by`/`superseded_by` are written by ONE code path
+  * instructions: `state`/`resolved_at`/`resolved_by` are written by ONE code path
     (`cmd_instruction_resolve`), so they are one act and the newer `resolved_at` wins for all of them.
     `note` deliberately does NOT travel with them: a hand-written note is never silently
     overwritten, so a `note` both sides changed is a conflict.
+  * instructions: an older tool's bookkeeping (`applied` / `applied_rounds` / `superseded_by`) is not
+    claimed by anything any more, so the driver gives it no rule. A record still carrying those
+    fields merges as it stands and needs no repair: a reader treats any `state` other than `live` as
+    archived, and these fields are ordinary data nobody reads.
   * Key order in the merged file: ours', with keys only theirs has appended (`ideas.json` is sorted
     by its own writer). An existing record is never reordered, so a merge that decides nothing new
     leaves the bytes alone -- and `main` skips the write entirely when they are unchanged.
@@ -136,11 +137,7 @@ EXIT_USAGE = 2
 #: The rungs, low to high: what the graph's three words say about how far along a node is.
 NODE_STATUS_ORDER = ('todo', 'shelved', 'completed')
 #: One `instruct resolve` writes these together; they are one act and move as one.
-RESOLUTION_GROUP = ('state', 'resolved_at', 'resolved_by', 'superseded_by')
-#: Append-only logs on an instruction entry: one mark per node that honoured the constraint (a
-#: `scope: global` one is honoured once per node it applies to). `applied` is the name the CLI
-#: appends to today; `applied_rounds` is the name the same log carries in files written before it.
-APPLIED_LOGS = ('applied', 'applied_rounds')
+RESOLUTION_GROUP = ('state', 'resolved_at', 'resolved_by')
 #: 终态：这一格的活有结论了 —— `completed` 交付了，`failed` / `stopped` 没交付。
 #: `pending` 是还没结论的记号（重试留下的），永远进不了这张表。
 TERMINAL_SIGNAL_STATUSES = ('completed', 'failed', 'stopped')
@@ -733,56 +730,8 @@ def _merge_instruction(label, base, ours, theirs, rep):
     def resolve(key, b, o, t):
         if key in RESOLUTION_GROUP:
             return _resolution(label, key, b, o, t, ours, theirs, rep)
-        if key in APPLIED_LOGS:
-            return _applied_log(label, key, b, o, t, rep)
         return _plain_field(label, key, b, o, t, rep)
     return _merge_mapping(_as_dict(base), _as_dict(ours), _as_dict(theirs), rep, label, resolve)
-
-
-def _mark_identity(mark):
-    """What makes two marks THE SAME honouring: when, on which line, in which round.
-
-    `applied` marks carry no `round`, so it is `None` there -- still a sound identity: two marks of
-    one constraint on one cycle taken at the same moment are the same act.
-    """
-    return (mark.get('at'), mark.get('cycle'), mark.get('round'))
-
-
-def _applied_log(label, key, base_value, ours_value, theirs_value, rep):
-    """An append-only log of "this constraint was honoured here": prefix extends, tails union.
-
-    Two machines that each honoured the same global constraint appended different marks, and blocking
-    the pull for that would be the driver inventing work for a human. The SAME mark (same `at` +
-    `cycle` + `round`) with different contents is a real disagreement, and that one is flagged.
-    """
-    got = _three_way(base_value, ours_value, theirs_value)
-    if got is not _UNDECIDED:
-        return got
-    if not isinstance(ours_value, list) or not isinstance(theirs_value, list):
-        rep.conflict(label, key, ours_value, theirs_value, '不是列表，裁不了')
-        return _MISSING
-    ours, theirs = list(ours_value), list(theirs_value)
-    i = 0
-    while i < len(ours) and i < len(theirs) and ours[i] == theirs[i]:
-        i += 1
-    if i == len(ours) or i == len(theirs):
-        longer = ours if len(ours) >= len(theirs) else theirs
-        rep.decide(f'{label}: {key} 一侧是另一侧的前缀 → 取长的那侧（{len(longer)} 项）')
-        return longer
-    marks: dict = {}
-    for mark in ours[i:] + theirs[i:]:
-        if not isinstance(mark, dict):
-            rep.conflict(label, key, ours_value, theirs_value, f'{key} 里有一项不是对象，裁不了')
-            return _MISSING
-        tag = _mark_identity(mark)
-        if tag in marks and marks[tag] != mark:
-            rep.conflict(label, key, marks[tag], mark,
-                         f'同一项（at={tag[0]} cycle={tag[1]} round={tag[2]}）两侧内容不同')
-            return _MISSING
-        marks.setdefault(tag, mark)
-    tail = sorted(marks.values(), key=lambda m: (m.get('at') or ''))
-    rep.decide(f'{label}: {key} 共同前缀之后两侧各自追加 → 按 at 排序取并集（{len(tail)} 项）')
-    return ours[:i] + tail
 
 
 def _resolution(label, key, base_value, ours_value, theirs_value, ours, theirs, rep):

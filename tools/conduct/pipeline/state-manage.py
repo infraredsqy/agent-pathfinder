@@ -252,9 +252,9 @@ def main() -> None:
                     'refused, because an unbound entry is read as visible everywhere and never goes '
                     'out of sight. Nothing is injected into a dispatch prompt: `list` is how a '
                     'session reads the account, and running it among its first commands is what '
-                    'makes an instruction reach it. What `resolve` is still for: a human taking an '
-                    'instruction off (withdrawn), and recording that a global entry was honoured '
-                    '(applied).')
+                    'makes an instruction reach it. The account has two states -- in force and '
+                    'archived -- and `resolve` is the owner archiving one; an entry whose scope '
+                    'has run out goes out of sight on its own, with nothing to write.')
     ins_sub = p_ins.add_subparsers(dest='instruction_command')
     p_ia = ins_sub.add_parser('add', help='Append one instruction, verbatim')
     p_ia.add_argument('--text', required=True, help='The sentence, EXACTLY as the user said it')
@@ -308,17 +308,14 @@ def main() -> None:
                       help='The DAG node you are working on: with two active cycles side by side it '
                            'is how this read knows which line you stand on (`cycle` entries go to '
                            'their own line only). Default: not asked')
-    p_ir = ins_sub.add_parser('resolve', help='Record what became of one instruction')
+    p_ir = ins_sub.add_parser('resolve', help='Archive one instruction (the owner takes it off)')
     p_ir.add_argument('ins_id')
-    p_ir.add_argument('--state', required=True,
-                      choices=['done', 'superseded', 'withdrawn', 'applied', 'n/a'],
-                      help='withdrawn = the owner takes an instruction off; applied|n/a = this '
-                           'global entry was honoured here / nothing here falls under it, and it '
-                           'stays in force. A cycle/node entry needs no resolve at all: it goes out '
-                           'of sight on its own, so done|superseded are only for tidying an account '
-                           'by hand')
+    p_ir.add_argument('--state', required=True, choices=['withdrawn'],
+                      help='withdrawn = the entry is archived: it stays on the account and stops '
+                           'being read. It is the only move, and the only one the owner makes -- a '
+                           'live entry is not marked with an outcome, and a cycle/node entry goes '
+                           'out of sight on its own when its node is completed or its cycle ends')
     p_ir.add_argument('--note', default=None)
-    p_ir.add_argument('--superseded-by', dest='superseded_by', default=None)
     p_ir.add_argument('--project', default=None, help='Project root (default: current directory)')
 
     p_cfg = sub.add_parser(

@@ -79,10 +79,10 @@ __all__ = [
 
     # instruct: the instruction account, the scope vocabulary, and what is visible from where
     'VALID_SCOPES', 'VALID_TARGETS', 'VALID_INSTRUCTION_STATES',
-    'APPLIED_STATES', 'CONSTRAINT_MARKS', 'CONSTRAINT_MARK_LABELS', '_scope_rules',
+    '_scope_rules',
     '_scope_from_flag', '_instructions_path', '_read_instructions', '_write_instructions',
     '_retired', '_is_live', '_cycle_of_node', '_position', '_cycle_statuses', '_dag_nodes',
-    '_visible_from_here', '_ambiguous_cycle_view', '_fold', '_last_applied',
+    '_visible_from_here', '_ambiguous_cycle_view', '_fold',
     '_instruct_empty_lines', '_nothing_visible_lines', 'SCOPE_WORDS', '_render_constraints',
     'cmd_instruction_add', 'cmd_instruction_list', 'cmd_instruction_resolve',
     '_dispatch_instruction',

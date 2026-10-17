@@ -23,17 +23,13 @@ from .pipeline_loader import _load_pipeline
 VALID_SCOPES = ('global', 'cycle', 'node')
 VALID_TARGETS = ('stage', 'boundary')
 
-VALID_INSTRUCTION_STATES = ('live', 'done', 'superseded', 'withdrawn')
-#: `applied` is the only mark a `global` entry may carry after it has been honoured: it says "this
-#: constraint was met" and leaves the entry in force. `done` retires an entry, which is why
-#: it is refused on global -- that is the move that once let a cost constraint vanish out of a
-#: downstream worker's view.
-APPLIED_STATES = ('done', 'applied')
-#: On a global entry these mean something different from "the constraint is over":
-#: `applied` = honoured somewhere, still in force; `n/a` = nothing in this project falls under it.
-#: Only a human writes `withdrawn`.
-CONSTRAINT_MARKS = ('applied', 'n/a')
-CONSTRAINT_MARK_LABELS = {'applied': '已兑现（仍然生效）', 'n/a': '本项目用不到（仍然生效）'}
+#: The account has two states, and one of them is written by the owner alone: `live` (in force) and
+#: `withdrawn` (archived -- still on the account, no longer read). Nothing else ends an entry: where
+#: it can be seen from is derived on every read from its scope and the bound node/cycle, so a scoped
+#: entry goes out of sight on its own (`_visible_from_here`). A record an older tool left carrying
+#: another word in `state` is not one of these; it is read as archived, and nothing writes it back
+#: (`_retired`).
+VALID_INSTRUCTION_STATES = ('live', 'withdrawn')
 
 _SCOPE_RULES = None
 
@@ -85,8 +81,12 @@ def _write_instructions(data: dict, project: str | None = None) -> None:
 
 
 def _retired(entry: dict) -> bool:
-    """True once a human has taken this entry out of force."""
-    return entry.get('state') in ('withdrawn', 'superseded')
+    """True unless the entry is in force: `live` is the only state that is read.
+
+    `withdrawn` is the archive, and a record an older tool wrote with any other word in `state` is
+    archived the same way -- out of force, still on the account, never rewritten.
+    """
+    return not _is_live(entry)
 
 
 def _is_live(entry: dict) -> bool:
@@ -190,7 +190,7 @@ def _visible_from_here(project: str | None, entries: list, node: str | None = No
     ambiguous = cur_cycle is None and sum(1 for s in statuses.values() if s == 'active') > 1
     out = []
     for entry in entries:
-        if not _is_live(entry) or _retired(entry):
+        if not _is_live(entry):
             continue
         scope = rules.entry_scope(entry)
         if scope == 'global':
@@ -233,7 +233,7 @@ def _ambiguous_cycle_view(project: str | None, entries: list,
     if len(active) < 2:
         return 0
     rules = _scope_rules()
-    if not any(_is_live(e) and not _retired(e) and rules.entry_scope(e) == 'cycle'
+    if not any(_is_live(e) and rules.entry_scope(e) == 'cycle'
                for e in entries):
         return 0
     return len(active)
@@ -248,11 +248,6 @@ def _fold(entry: dict) -> dict:
         'scope': _scope_rules().entry_scope(entry),
         'target': entry.get('target'),
     }
-
-
-def _last_applied(entry: dict) -> dict | None:
-    applied = entry.get('applied') or []
-    return applied[-1] if applied else None
 
 
 def _instruct_empty_lines(total: int, scope: str | None, global_total: int) -> list:
@@ -275,7 +270,7 @@ def _instruct_empty_lines(total: int, scope: str | None, global_total: int) -> l
         return ['本项目没有任何全局指令。',
                 f'（指令记录里有 {total} 条记录，但都不是全局的。）']
     return ['当前没有任何仍在生效的指令记录。',
-            f'（指令记录里有 {total} 条记录，都已被兑现或撤销。）']
+            f'（指令记录里有 {total} 条记录，都不在生效。把一条指令归档只有机主能做。）']
 
 
 def _nothing_visible_lines(total: int) -> list:
@@ -301,10 +296,10 @@ SCOPE_WORDS = {'global': '全局（任何位置都算数）',
 def _render_constraints(items: list) -> None:
     """The reader-facing rendering: what a session reads off `instruction list`.
 
-    Text, where it is visible from, and how it is delivered. The bookkeeping (`applied`,
-    ids, which cycle and node it was bound to) stays in the account and in `--json`: a reader has no
-    use for it, and showing it invites treating a past application as a reason the instruction might
-    not apply now.
+    Text, where it is visible from, and how it is delivered. The bookkeeping (ids, and which cycle
+    and node the entry was bound to) stays in the account and in `--json`: a reader has no use for
+    it, and showing it invites treating a past reading as a reason the instruction might not apply
+    now.
     """
     print(f'本项目有 {len(items)} 条在当前这一步看得见的指令：')
     print()
@@ -416,7 +411,6 @@ def cmd_instruction_add(text: str, scope: str, target: str, said_by: str,
             'at': _now(),
             'resolved_at': None,
             'resolved_by': None,
-            'superseded_by': None,
             'note': note,
         }
         if stop_after_nodes is not None:
@@ -497,32 +491,33 @@ def cmd_instruction_list(as_json: bool, live_only: bool, project: str | None = N
         for line in _instruct_empty_lines(len(all_items), scope, global_total):
             print(line)
         return
-    marks = {'live': '●', 'done': '✓', 'superseded': '↳', 'withdrawn': '✗', 'applied': '·', 'n/a': '·'}
+    marks = {'live': '●', 'withdrawn': '✗'}
     for i in items:
-        mark = marks.get(i.get('state', 'live'), '?')
+        # Any word other than `live` -- including one an older tool wrote -- reads as archived.
+        mark = marks.get(i.get('state', 'live'), '✗')
         scoped = rules.entry_scope(i)
         deliver = {'stage': '干活可见', 'boundary': '仅收尾时读'}.get(i.get('target'), '?')
-        extra = f'  ← {i["superseded_by"]}' if i.get('superseded_by') else ''
-        print(f'{mark} {i["id"]}  [{scoped}/{deliver}]  {i.get("text","")}{extra}')
+        print(f'{mark} {i["id"]}  [{scoped}/{deliver}]  {i.get("text","")}')
         if i.get('note'):
             print(f'      note: {i["note"]}')
 
 
 def cmd_instruction_resolve(ins_id: str, state: str, note: str | None,
-                         superseded_by: str | None, project: str | None = None) -> None:
-    """Record what became of one instruction.
+                         project: str | None = None) -> None:
+    """Take one instruction off the account: the owner's one lever, `withdrawn`.
 
     Visibility is not this command's business, and neither is the ending of a `cycle` / `node`
     entry's life: `scope` decides where an entry can be seen from, and that is derived on every read
     from the bound node/cycle and the DAG as it stands. A scoped entry therefore needs no resolve at
-    all -- it goes out of sight on its own. What is left here is the account's own record-keeping:
-    `global` entries, which stay in force and take `applied` (honoured here) or `n/a` (nothing here
-    falls under it), plus `withdrawn`, the owner's lever for taking any constraint off. `done` /
-    `superseded` remain accepted for tidying an account by hand.
+    all -- it goes out of sight on its own. The account has two states, and the only move here is
+    archiving a live entry; a record an older tool left with another word in `state` is read as
+    archived already (`_retired`) and nothing writes those words back.
     """
-    allowed = ('done', 'superseded', 'withdrawn', 'applied', 'n/a')
+    allowed = ('withdrawn',)
     if state not in allowed:
-        print(f'Error: resolve --state must be one of {allowed} (not {state!r})', file=sys.stderr)
+        print(f'Error: resolve --state must be one of {list(allowed)} (not {state!r}): withdrawing '
+              f'is the only move left, and only the owner makes it. A scoped entry goes out of '
+              f'sight on its own when its node is completed or its cycle ends.', file=sys.stderr)
         sys.exit(1)
     with _ledger_lock(project):
         data = _read_instructions(project)
@@ -535,41 +530,11 @@ def cmd_instruction_resolve(ins_id: str, state: str, note: str | None,
             print(f'Error: no instruction {ins_id!r}', file=sys.stderr)
             sys.exit(1)
 
-        global_entry = hit.get('scope') == 'global'
-        if global_entry and state in ('done', 'superseded'):
-            print(f'Error: {ins_id} is a global constraint (scope=global) and cannot be marked '
-                  f'{state!r}.\n'
-                  f'       A constraint stays in force until a human withdraws it. Record what happened\n'
-                  f'       to it instead: --state applied (honoured this round) or --state n/a (nothing\n'
-                  f'       in this project falls under it). Taking the constraint off is `--state\n'
-                  f'       withdrawn`, which is the owner\'s call.',
-                  file=sys.stderr)
-            sys.exit(1)
-        if not global_entry and state in ('applied', 'n/a'):
-            print(f'Error: {ins_id} is scoped to one {hit.get("scope")} (scope={hit.get("scope")}); a '
-                  f'scoped entry needs no resolve -- it goes out of sight on its own when its node is '
-                  f'completed or its cycle ends. {state!r} is a mark for a global entry.',
-                  file=sys.stderr)
-            sys.exit(1)
-
-        if state in CONSTRAINT_MARKS:
-            mark = {'state': state, 'at': _now(), 'note': note or ''}
-            cycle = hit.get('cycle')
-            if cycle:
-                mark['cycle'] = cycle
-            hit.setdefault('applied', []).append(mark)
-            # `state` stays `live`: the constraint is still in force, which is the whole point.
-            _write_instructions(data, project)
-            print(f'INSTRUCTION {ins_id} → {state}（约束仍然生效）')
-            return
-
         hit['state'] = state
         hit['resolved_at'] = _now()
         hit['resolved_by'] = 'boundary'
         if note:
             hit['note'] = note
-        if superseded_by:
-            hit['superseded_by'] = superseded_by
         _write_instructions(data, project)
     print(f'INSTRUCTION {ins_id} → {state}')
 
@@ -587,7 +552,7 @@ def _dispatch_instruction(args) -> None:
                              getattr(args, 'all_entries', False),
                              getattr(args, 'node', None))
     elif sub == 'resolve':
-        cmd_instruction_resolve(args.ins_id, args.state, args.note, args.superseded_by, project)
+        cmd_instruction_resolve(args.ins_id, args.state, args.note, project)
     else:
         print('Usage: pf instruction {add|list|resolve} ...', file=sys.stderr)
         sys.exit(1)

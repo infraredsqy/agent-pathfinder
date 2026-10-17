@@ -113,6 +113,8 @@ def cycle(path=(), status='active', updated='2026-10-01T01:00:00Z', **extra):
 
 
 def instruction(**changes):
+    # The last three fields are an older tool's bookkeeping. Records in the wild still carry them,
+    # so the fixture does too; nothing claims them any more (see `TestInstructionsMerge`).
     entry = {'id': 'i-0001', 'text': 't', 'scope': 'global', 'target': 'stage', 'state': 'live',
              'cycle': None, 'node': None, 'said_by': 'user', 'at': '2026-09-01T00:00:00Z',
              'resolved_at': None, 'resolved_by': None, 'superseded_by': None, 'note': None}
@@ -486,18 +488,18 @@ class TestInstructionsMerge(LedgerCase):
 
     def test_the_resolution_moves_as_one_act(self):
         base = instruction()
-        ours = instruction(state='done', resolved_at='2026-10-02T00:00:00Z',
+        ours = instruction(state='withdrawn', resolved_at='2026-10-02T00:00:00Z',
                            resolved_by='boundary', note='ours')
         theirs = instruction(state='withdrawn', resolved_at='2026-10-03T00:00:00Z',
-                             resolved_by='human')
+                             resolved_by='owner')
 
         proc, ours_path = self.merge(base, ours, theirs)
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         entry = self.merged(ours_path)['instructions'][0]
-        self.assertEqual('withdrawn', entry['state'])              # theirs is the newer act
-        self.assertEqual('2026-10-03T00:00:00Z', entry['resolved_at'])
-        self.assertEqual('human', entry['resolved_by'])
+        self.assertEqual('withdrawn', entry['state'])
+        self.assertEqual('2026-10-03T00:00:00Z', entry['resolved_at'])  # theirs is the newer act
+        self.assertEqual('owner', entry['resolved_by'])             # the act travels whole
         self.assertEqual('ours', entry['note'])                    # a hand-written note is kept
 
     def test_the_same_id_added_by_both_sides_is_a_conflict(self):
@@ -519,77 +521,39 @@ class TestInstructionsMerge(LedgerCase):
     def test_a_note_is_never_silently_overwritten(self):
         base = instruction()
         ours = instruction(note='ours note')
-        proc, ours_path = self.merge(base, ours, instruction(state='done',
+        proc, ours_path = self.merge(base, ours, instruction(state='withdrawn',
                                                             resolved_at='2026-10-01T00:00:00Z'))
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual('ours note', self.merged(ours_path)['instructions'][0]['note'])
 
+    def test_the_old_bookkeeping_fields_are_ordinary_data(self):
+        """`applied` / `applied_rounds` / `superseded_by`: an older tool's fields, nothing more.
 
-def mark(at, cycle='cyc', round_=1, note='', state='applied'):
-    entry = {'state': state, 'at': at, 'note': note, 'cycle': cycle, 'round': round_}
-    return entry
-
-
-def applied(*marks, key='applied_rounds'):
-    return instruction(**{key: list(marks)})
-
-
-class TestAppliedLogMerge(LedgerCase):
-    """`applied` / `applied_rounds`: one mark per node that honoured a global constraint.
-
-    Two machines each honouring the same constraint append DIFFERENT marks; asking a human to hand
-    merge an append-only log would be the driver inventing work.
-    """
-
-    LEDGER = '.pf/instructions.json'
-    SORT_KEYS = False
-
-    def test_marks_appended_on_both_sides_are_unioned_in_time_order(self):
-        base = applied(mark('2026-10-01T00:00:00Z', note='first'))
-        ours = applied(mark('2026-10-01T00:00:00Z', note='first'),
-                       mark('2026-10-03T00:00:00Z', note='ours'))
-        theirs = applied(mark('2026-10-01T00:00:00Z', note='first'),
-                         mark('2026-10-02T00:00:00Z', note='theirs'))
+        A record still carrying them merges without a word -- they travel as plain fields, and one
+        side's edit is taken exactly like any other field's. Two sides that changed the same one to
+        different values is an ordinary conflict: the driver keeps no rule of its own for them, so
+        there is no silently unioned log to hand back.
+        """
+        log = [{'state': 'applied', 'at': '2026-10-01T00:00:00Z', 'note': 'old', 'cycle': 'cyc'}]
+        base = instruction(applied=[], applied_rounds=[], superseded_by=None)
+        ours = instruction(applied=log, applied_rounds=log, superseded_by='i-0002')
+        # The other side edits an unrelated field and leaves the old ones exactly as they were.
+        theirs = instruction(applied=[], applied_rounds=[], note='theirs note')
 
         proc, ours_path = self.merge(base, ours, theirs)
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        log = self.merged(ours_path)['instructions'][0]['applied_rounds']
-        self.assertEqual(['first', 'theirs', 'ours'], [m['note'] for m in log])
+        entry = self.merged(ours_path)['instructions'][0]
+        self.assertEqual(log, entry['applied'])
+        self.assertEqual(log, entry['applied_rounds'])
+        self.assertEqual('i-0002', entry['superseded_by'])
+        self.assertEqual('theirs note', entry['note'])
 
-    def test_one_side_is_a_prefix_of_the_other(self):
-        base = applied(mark('2026-10-01T00:00:00Z', note='first'))
-        theirs = applied(mark('2026-10-01T00:00:00Z', note='first'),
-                         mark('2026-10-02T00:00:00Z', note='theirs'))
+        both = instruction(applied=log + [{'at': '2026-10-02T00:00:00Z'}], applied_rounds=log)
+        rival = instruction(applied=log + [{'at': '2026-10-03T00:00:00Z'}], applied_rounds=log)
+        proc, ours_path = self.merge(base, both, rival)
 
-        proc, ours_path = self.merge(base, base, theirs)
-
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        log = self.merged(ours_path)['instructions'][0]['applied_rounds']
-        self.assertEqual(['first', 'theirs'], [m['note'] for m in log])
-
-    def test_the_current_field_name_is_merged_the_same_way(self):
-        base = applied(mark('2026-10-01T00:00:00Z', note='first'), key='applied')
-        ours = applied(mark('2026-10-01T00:00:00Z', note='first'),
-                       mark('2026-10-04T00:00:00Z', note='ours'), key='applied')
-        theirs = applied(mark('2026-10-01T00:00:00Z', note='first'),
-                         mark('2026-10-02T00:00:00Z', note='theirs'), key='applied')
-
-        proc, ours_path = self.merge(base, ours, theirs)
-
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        log = self.merged(ours_path)['instructions'][0]['applied']
-        self.assertEqual(['first', 'theirs', 'ours'], [m['note'] for m in log])
-
-    def test_a_mark_that_matches_the_other_side_is_not_duplicated(self):
-        """Both machines honoured it in the same round at the same moment: one mark, not two."""
-        base = applied()
-        same = applied(mark('2026-10-02T00:00:00Z', note='both'))
-
-        proc, ours_path = self.merge(base, same, same)
-
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(1, len(self.merged(ours_path)['instructions'][0]['applied_rounds']))
+        self.assertRefused(proc, ours_path, '字段 applied', ours_data=both)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
