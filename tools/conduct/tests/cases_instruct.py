@@ -185,11 +185,11 @@ class TestInstructionTargets(Base):
 class TestInstructionAuthority(Base):
     """Who may retire an entry, and what a retired one leaves behind."""
 
-    def seeded(self, scope='global'):
+    def seeded(self, scope='global', text='全局的约束'):
         sb = self.make()
         sb.add_node(NODE, '界面设计', mode='auto')
         sb.start_cycle()
-        sb.instruct('全局的约束', scope=scope)
+        sb.instruct(text, scope=scope)
         return sb, sb.instruct_list()[0]['id']
 
     def test_resolving_retires_an_entry_without_deleting_it(self):
@@ -201,39 +201,31 @@ class TestInstructionAuthority(Base):
         self.assertEqual(rows[0]['state'], 'withdrawn')
         self.assertEqual(rows[0]['text'], '全局的约束')
 
-    def test_a_superseded_entry_points_at_the_one_that_replaced_it(self):
-        """Superseding is how a line replaces one of its own entries: the old row stays on the
-        account, out of the reader's way, pointing at what took its place."""
-        sb, ins_id = self.seeded(scope='cycle')
+    def test_a_withdrawn_entry_is_still_readable_and_out_of_force(self):
+        """Archiving is not deleting: the row stays on the account and stops being read.
+
+        Withdrawing is the owner's move; a scoped entry goes out of sight on its own once its line
+        is gone, so the archive keeps the sentence and no verdict about the work is written.
+        """
+        sb, ins_id = self.seeded(scope='cycle', text='这条线里的约束')
         sb.instruct('新的约束', scope='cycle', cycle='cyc')
-        second = sb.instruct_list()[1]['id']
-        sb.instruct_resolve(ins_id, 'superseded', superseded_by=second)
+        sb.instruct_resolve(ins_id, 'withdrawn')
 
         rows = {r['id']: r for r in sb.instruct_list_cli()}
-        self.assertEqual(rows[ins_id]['superseded_by'], second)
+        self.assertEqual(rows[ins_id]['state'], 'withdrawn')
+        self.assertEqual(rows[ins_id]['text'], '这条线里的约束')
         self.assertEqual([i['text'] for i in sb.instruct_visible_cli()], ['新的约束'])
 
-    def test_only_a_global_entry_may_be_marked_applied(self):
-        """A cycle/node entry goes out of sight on its own, so there is nothing to mark; the
-        account refuses rather than recording a meaningless verdict."""
-        sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.start_cycle()
-        sb.instruct('这个节点的', scope='node')
-        ins_id = sb.instruct_list()[0]['id']
+    def test_the_account_has_only_one_move_left(self):
+        """Two states, one of them written by the owner: anything else `resolve` is asked for is
+        refused, and the refusal names the word that is left."""
+        sb, ins_id = self.seeded()
 
-        proc = sb._tool('instruction', 'resolve', ins_id, '--state', 'applied', check=False,
-                        cli=True)
+        proc = sb._tool('instruction', 'resolve', ins_id, '--state', 'done', check=False, cli=True)
 
         self.assertNotEqual(proc.returncode, 0)
-        self.assertIn('global', proc.stderr)
+        self.assertIn('withdrawn', proc.stderr)
         self.assertEqual(sb.instruct_list()[0]['state'], 'live')
-
-    def test_an_applied_global_entry_stays_in_force(self):
-        sb, ins_id = self.seeded()
-        sb.instruct_resolve(ins_id, 'applied')
-
-        self.assertEqual([i['text'] for i in sb.instruct_visible_cli()], ['全局的约束'])
 
     def test_a_resolved_instruction_leaves_the_next_read(self):
         sb, ins_id = self.seeded()
