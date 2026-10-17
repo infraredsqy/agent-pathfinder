@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import ast
 import contextlib
-import importlib.util
 import io
 import json
 import os
@@ -23,9 +22,12 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 
-from cases_base import Base, NODE
-from harness import _run_proc, run_dag, run_signal
-from harness_env import HANDOFF_PY, SIGNAL_PY, TOOLS_DIR, _child_env, _fresh_module, load_pipeline
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from cases_base import Base, NODE  # noqa: E402
+from harness import _run_proc, run_dag, run_signal  # noqa: E402
+from harness_env import (HANDOFF_PY, SIGNAL_PY, TOOLS_DIR, _child_env, _fresh_module, init_markers,
+                         load_pipeline, shared_loader)  # noqa: E402
 
 __all__ = ['TestTheOneLoader', 'TestOneSharedDoor', 'TestOneReaderOneWording',
            'TestTheLockSerialisesANote', 'TestTheMarkerWaitsOutAReader', 'TestTheMarkerContract',
@@ -44,24 +46,12 @@ def _spawn_sources():
 
 def _marker_module():
     """`spawn/marker.py`, loaded the way its callers load it -- one copy per process."""
-    return _shared_loader().load_by_path('conduct_spawn_marker', SPAWN_DIR / 'marker.py',
+    return shared_loader().load_by_path('conduct_spawn_marker', SPAWN_DIR / 'marker.py',
                                          register=True, reuse=True)
 
 
-def _shared_loader():
-    """`tools/shared/loader.py`, loaded by path -- the bootstrap every shipped file carries.
-
-    A case reaches the shared layer the way the tools do, under the same registered name: the ledger
-    lock's reentrancy record is one per process only when both sides come through this loader.
-    """
-    spec = importlib.util.spec_from_file_location('pf_shared_loader', SHARED_DIR / 'loader.py')
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def _shared(name, filename):
-    return _shared_loader().load_by_path(name, SHARED_DIR / filename, register=True, reuse=True)
+    return shared_loader().load_by_path(name, SHARED_DIR / filename, register=True, reuse=True)
 
 
 def _shipped_sources():
@@ -99,11 +89,9 @@ def _relative(path: Path) -> str:
 
 
 def _init_ledger(root: Path) -> Path:
-    """A `.pf/` carrying the two files `init` writes: every record command refuses one without them."""
-    ledger = root / '.pf'
+    """A `.pf/` carrying the two files `init` writes, plus the issue tool's own directory."""
+    ledger = init_markers(root)
     (ledger / 'issues').mkdir(parents=True, exist_ok=True)
-    (ledger / '.gitignore').write_text('meta/\nworktrees/\ntemp/\n', encoding='utf-8')
-    (ledger / '.gitattributes').write_text('** -text\n', encoding='utf-8')
     return ledger
 
 
@@ -130,7 +118,7 @@ class TestTheOneLoader(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory(prefix='pf-loader-case-')
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
-        self.loader = _shared_loader()
+        self.loader = shared_loader()
 
     def _source(self, filename='pf_case_module.py', body='VALUE = 1\n'):
         path = self.root / filename
@@ -490,7 +478,7 @@ class TestTheMarkerContract(Base):
     def test_the_marker_path_follows_the_ledger_name(self):
         """`.pf` 一改名，标记跟着记录走 —— 派发侧不再有一份自己的拼法。"""
         sb = self.make()
-        store = _shared_loader().load_by_path('pf_conduct_state_store',
+        store = shared_loader().load_by_path('pf_conduct_state_store',
                                               CONDUCT_DIR / 'conduct_state' / 'store.py',
                                               register=True, reuse=True)
         marker = _marker_module()

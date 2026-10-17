@@ -12,36 +12,26 @@ Four things are worth a case here, because each of them fails silently otherwise
     ledger in the tree for the next `git add -A` to sweep up
 """
 
-import json
-import shutil
-import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from harness_env import _child_env
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from harness_env import GIT, STATE_MANAGE, git, run_argv  # noqa: E402
 
 __all__ = ['TestInit']
-
-GIT = shutil.which('git')
-STATE_MANAGE = Path(__file__).resolve().parent.parent / 'pipeline' / 'state-manage.py'
-PYTHON = sys.executable
 
 MARK = '# pf 工作系统'
 
 
 def run_init(root: Path, *args):
-    return subprocess.run([PYTHON, '-X', 'utf8', str(STATE_MANAGE), 'init',
-                           '--project', str(root), *args],
-                          capture_output=True, text=True, encoding='utf-8', errors='replace',
-                          env=_child_env())
+    return run_argv([STATE_MANAGE, 'init', '--project', str(root), *args], check=False)
 
 
 def run_state(root: Path, *args):
-    return subprocess.run([PYTHON, '-X', 'utf8', str(STATE_MANAGE), *args],
-                          cwd=str(root), capture_output=True, text=True,
-                          encoding='utf-8', errors='replace', env=_child_env())
+    return run_argv([STATE_MANAGE, *args], cwd=root, check=False)
 
 
 @unittest.skipUnless(GIT, 'git is not on PATH')
@@ -52,20 +42,13 @@ class TestInit(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name) / 'proj'
         self.root.mkdir(parents=True)
-        self.git('init', '-b', 'main')
-
-    def git(self, *args, check=True):
-        proc = subprocess.run([GIT, *args], cwd=str(self.root), capture_output=True, text=True,
-                              encoding='utf-8', errors='replace')
-        if check and proc.returncode != 0:
-            raise AssertionError(f'git {" ".join(args)} failed:\n{proc.stdout}\n{proc.stderr}')
-        return proc
+        git(self.root, 'init', '-b', 'main')
 
     def excluded(self) -> bool:
-        return self.git('check-ignore', '-q', '.pf', check=False).returncode == 0
+        return git(self.root, 'check-ignore', '-q', '.pf', check=False).returncode == 0
 
     def exclude_path(self) -> Path:
-        common = self.git('rev-parse', '--git-common-dir').stdout.strip()
+        common = git(self.root, 'rev-parse', '--git-common-dir').stdout.strip()
         return (self.root / common).resolve() / 'info' / 'exclude'
 
     def test_local_is_the_default_and_keeps_the_directory_out_of_the_repo(self):
@@ -78,7 +61,7 @@ class TestInit(unittest.TestCase):
         self.assertTrue((ledger / '.git').is_dir(), 'local mode gives the ledger its own history')
         self.assertTrue(self.excluded(), 'the clone must ignore it')
         self.assertIn(MARK, self.exclude_path().read_text(encoding='utf-8'))
-        self.assertEqual('', self.git('status', '--porcelain').stdout,
+        self.assertEqual('', git(self.root, 'status', '--porcelain').stdout,
                          'an ignored `.pf/` must leave the project repository status clean')
 
     def test_commit_takes_the_exclude_line_back_out(self):
@@ -95,15 +78,15 @@ class TestInit(unittest.TestCase):
         """忽略行管不了已经 track 的文件：本地档必须把它从 index 里退出来，否则档位在撒谎。"""
         run_init(self.root, '--commit')
         (self.root / '.pf' / 'ideas.json').write_text('{}', encoding='utf-8')
-        self.git('add', '-A')
-        self.git('commit', '-m', 'seed', '--no-gpg-sign')
-        self.assertTrue(self.git('ls-files', '--', '.pf').stdout.strip(),
+        git(self.root, 'add', '-A')
+        git(self.root, 'commit', '-m', 'seed', '--no-gpg-sign')
+        self.assertTrue(git(self.root, 'ls-files', '--', '.pf').stdout.strip(),
                         'the fixture must start out tracked')
 
         proc = run_init(self.root, '--local', '--no-own-repo')
         self.assertEqual(0, proc.returncode, proc.stderr)
 
-        self.assertEqual('', self.git('ls-files', '--', '.pf').stdout.strip(),
+        self.assertEqual('', git(self.root, 'ls-files', '--', '.pf').stdout.strip(),
                          'local mode means the project repository lets it go')
         self.assertTrue((self.root / '.pf' / 'ideas.json').is_file(),
                         'untracking is not deleting: the files stay on disk')

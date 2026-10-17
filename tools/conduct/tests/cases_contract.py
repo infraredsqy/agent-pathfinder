@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cases_base import ACTION_VOCABULARY, Base, NODE, NODE2, NODE3, pipeline, normalise  # noqa: E402
 from harness import Driver, Sandbox, WorkerSession, finish_node  # noqa: E402
 from harness import CONDUCT_DIR, _dag_hook as harness_dag_hook  # noqa: E402
+from harness_env import DAG_MANAGE, patched  # noqa: E402
 
 __all__ = [
     'TestWorkerClosesItsOwnNode',
@@ -55,7 +56,7 @@ class TestWorkerClosesItsOwnNode(Base):
         first = sb.next()
         WorkerSession(sb).work(first)
 
-        settled, proc = sb.next_cli('--after', first['node_id'], '--spawn')
+        settled, proc = sb.spawn_next('--after', first['node_id'])
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(settled['action'], 'dispatch')
@@ -272,7 +273,7 @@ class TestNodeOwnershipAcrossCycles(Base):
         self.deliver(sb, 'one', a)
         sb.set_cycle_status('one', 'inactive')
 
-        settled, proc = sb.next_cli('--after', a, '--continue', '--spawn')
+        settled, proc = sb.spawn_next('--after', a, '--continue')
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(settled['action'], 'stop_pipeline')
@@ -368,42 +369,52 @@ class TestContract(Base):
             caught['parser'] = parser
             return argparse.Namespace(command=None)     # no verb: `main()` only prints the help
 
-        real_parse, real_argv = argparse.ArgumentParser.parse_args, sys.argv
-        argparse.ArgumentParser.parse_args = grab
-        sys.argv = [str(harness_env.STATE_MANAGE)]
-        try:
-            with contextlib.redirect_stdout(io.StringIO()), \
-                    contextlib.redirect_stderr(io.StringIO()):
-                with self.assertRaises(SystemExit):
-                    mod.main()
-        finally:
-            argparse.ArgumentParser.parse_args = real_parse
-            sys.argv = real_argv
+        with patched(argparse.ArgumentParser, 'parse_args', grab), \
+                patched(sys, 'argv', [str(harness_env.STATE_MANAGE)]), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                mod.main()
         return caught['parser']
+
+    def dag_parser(self):
+        """`dag-manage.py`'s own argparse tree, built by the module's own `_build_parser()`.
+
+        Nothing is patched and nothing is run: the builder is a module-level function, and this is
+        the parser the shipped process parses its own argv with.
+        """
+        import harness_env
+
+        mod = harness_env._fresh_module('dag_manage_parser_probe', harness_env.DAG_MANAGE)
+        return mod._build_parser()
 
     @staticmethod
     def read_parser(parser):
-        """One parser as `(positionals, flags, sub-verbs, int-typed destinations)`.
+        """One parser as `(positionals, flags, sub-verbs, int-typed destinations, nargs='*' ones)`.
 
         `flags` is the harness's own `{flag: (namespace attribute, takes a value, default)}`, and
-        `sub-verbs` is the same reading of a group's sub-parsers (`{}` for a leaf verb).
+        `sub-verbs` is the same reading of a group's sub-parsers (`{}` for a leaf verb). The last two
+        are what a stand-in has to cast or fill differently from the shape alone: a destination the
+        CLI declares `type=int`, and a positional declared `nargs='*'`.
         """
         import argparse
-        positionals, flags, subs, ints = [], {}, {}, set()
+        positionals, flags, subs, ints, star = [], {}, {}, set(), set()
         for action in parser._actions:
             if isinstance(action, argparse._SubParsersAction):
                 subs = {name: TestContract.read_parser(sp) for name, sp in action.choices.items()}
                 continue
+            if action.type is int:
+                ints.add(action.dest)
             if not action.option_strings:                 # `-h` is an option; a positional is not
                 positionals.append(action.dest)
+                if action.nargs == '*':
+                    star.add(action.dest)
                 continue
             if action.dest == 'help':
                 continue
-            if action.type is int:
-                ints.add(action.dest)
             for flag in action.option_strings:
                 flags[flag] = (action.dest, action.nargs != 0, action.default)
-        return tuple(positionals), flags, subs, ints
+        return tuple(positionals), flags, subs, ints, star
 
     def test_the_harness_restates_the_real_parser(self):
         """The fast path's one restatement of the CLI is pinned against the CLI, item by item.
@@ -441,6 +452,55 @@ class TestContract(Base):
         # this harness compares as the wrong type instead of failing visibly.
         self.assertTrue(ints <= set(harness_fast._INT_FLAGS),
                         f'declared type=int but not cast: {ints - set(harness_fast._INT_FLAGS)}')
+
+    def test_the_harness_restates_the_dag_parser(self):
+        """The in-process dag-manage stand-in is pinned against dag-manage's own parser, item by item.
+
+        `InProcessDagManage` answers the argv the pipeline builds for dag-manage by running
+        dag-manage's own `cmd_*`; only the process start is gone. What it restates is the argv shape:
+        which positional is called what, which flag lands in which namespace attribute, what its
+        default is, which positional swallows the rest, which destinations are cast to `int`, and
+        which command a verb reaches.
+
+        The maintenance channel writes the graph through this stand-in (`add` / `depend` /
+        `undepend`), minting a real uuid and writing real edges, so a drift in the restatement --
+        `--mode`'s default becoming `auto`, say -- writes different nodes than the shipped process
+        would while every fast-path case stays green. The one case that drives the real processes
+        for that channel reads the new edges and statuses back, never the new node's own attributes.
+        """
+        import argparse
+
+        import harness_fast
+        dag = harness_fast.InProcessDagManage
+
+        parser = self.dag_parser()
+        choices = next(action for action in parser._actions
+                       if isinstance(action, argparse._SubParsersAction)).choices
+        verbs = self.read_parser(parser)[2]         # the same reading the state-manage pin uses
+
+        self.assertTrue(set(dag._SPEC) <= set(verbs),
+                        f'the harness drives verbs dag-manage has not: {set(dag._SPEC) - set(verbs)}')
+        self.assertEqual(set(dag._SPEC), set(dag._CALLS), 'a served verb has no command behind it')
+
+        int_flags, int_positionals = set(), set()
+        for verb, (positionals, flags) in dag._SPEC.items():
+            real_positionals, real_flags, _subs, ints, star = verbs[verb]
+            self.assertEqual((positionals, flags), (real_positionals, real_flags), verb)
+            # A `nargs='*'` positional defaults to the empty list and swallows the run where it
+            # stands: a stand-in that reads one token would cut the description short.
+            self.assertEqual(set(dag._VARIADIC.get(verb, ())), star, verb)
+            int_positionals |= set(positionals) & ints
+            int_flags |= ints - set(positionals)
+            # The verb reaches the command dag-manage's own parser binds to it (`_CALLS` names it,
+            # and `handle` reaches it by that name on its own copy of the module).
+            bound = choices[verb]._defaults.get('func')
+            self.assertIsNotNone(bound, f'{verb} has no command bound to it')
+            self.assertEqual(dag._CALLS[verb], bound.__name__, verb)
+
+        self.assertEqual(set(dag._INT_POSITIONALS), int_positionals,
+                         f'declared type=int but not cast: {int_positionals}')
+        self.assertEqual(set(dag._INT_FLAGS), int_flags,
+                         f'declared type=int but not cast: {int_flags}')
 
     def test_the_cli_scope_vocabulary_is_the_pipelines_own(self):
         """`--scope` 的词表来自判定的正本，CLI 没有自己的第二份。

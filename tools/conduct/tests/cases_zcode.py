@@ -30,12 +30,22 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import pipeline
+from harness_env import _child_env, run_argv  # noqa: E402
 
 __all__ = ['TestSpawnerChoice', 'TestQueueDedup']
 
 CONDUCT_DIR = Path(pipeline.__file__).resolve().parent.parent
 DISPATCHER = CONDUCT_DIR / 'spawn' / 'zcode-dispatch.py'
 SPAWNER = CONDUCT_DIR / 'spawn' / 'zcode-spawn.ps1'
+
+
+def run_dispatcher(args, env):
+    """The ZCode dispatcher as a real process, against the sandbox database `env` names.
+
+    Through the suite's one child runner, so the decoding and the non-zero exit read like every
+    other tool call; the return code is the caller's to check (this one refuses in several places).
+    """
+    return run_argv([DISPATCHER, *map(str, args)], env=env, check=False)
 
 
 def _host():
@@ -259,14 +269,9 @@ class TestSpawnerChoice(unittest.TestCase):
         (ws / '.pf').mkdir(parents=True)
         prompt = root / 'prompt.txt'
         prompt.write_text('# /pf-conduct drill\n', encoding='utf-8')
-        env = {**os.environ, 'ZCODE_DATA_BASE_DIR': str(root / 'sandbox'),
-               'DSH_CONDUCT_SPAWN_AT': ''}
+        env = dict(_child_env(), ZCODE_DATA_BASE_DIR=str(root / 'sandbox'),
+                   DSH_CONDUCT_SPAWN_AT='')
         return db, ws, prompt, env
-
-    def run_dispatcher(self, args, env):
-        return subprocess.run([sys.executable, '-X', 'utf8', str(DISPATCHER), *map(str, args)],
-                              capture_output=True, text=True, encoding='utf-8', errors='replace',
-                              env=env)
 
     def dispatcher(self):
         """The dispatcher, imported -- for the constants a test should *follow*, not pin.
@@ -281,7 +286,7 @@ class TestSpawnerChoice(unittest.TestCase):
 
     def test_it_writes_one_row_that_means_one_session(self):
         db, ws, prompt, env = self.sandbox()
-        proc = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         automation_id = proc.stdout.strip().splitlines()[0]
         self.assertTrue(automation_id.startswith('automation-'), proc.stdout)
@@ -317,8 +322,8 @@ class TestSpawnerChoice(unittest.TestCase):
     def test_the_model_can_be_pinned(self):
         """Naming the model is how a caller decides whose quota a background node spends."""
         db, ws, prompt, env = self.sandbox()
-        proc = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
-                                    '--model', 'deepseek/deepseek-flash$max', '--no-verify'], env)
+        proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
+                               '--model', 'deepseek/deepseek-flash$max', '--no-verify'], env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         con = sqlite3.connect(str(db))
         stored = con.execute('select model_selection from automations').fetchone()[0]
@@ -330,8 +335,8 @@ class TestSpawnerChoice(unittest.TestCase):
     def test_following_the_workspace_pick_is_still_available(self):
         """`workspace` is the one encoding that means "follow whatever model this workspace uses"."""
         db, ws, prompt, env = self.sandbox()
-        proc = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
-                                    '--model', 'workspace', '--no-verify'], env)
+        proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
+                               '--model', 'workspace', '--no-verify'], env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         con = sqlite3.connect(str(db))
         stored = con.execute('select model_selection from automations').fetchone()[0]
@@ -343,15 +348,15 @@ class TestSpawnerChoice(unittest.TestCase):
         db, ws, prompt, env = self.sandbox()
         for bad in ('deepseek', 'deepseek/', '/flash', '{"providerId":"x"}',
                     '{"providerId":"a","modelId":"b","extra":1}'):
-            proc = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
-                                        '--model', bad, '--no-verify'], env)
+            proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
+                                   '--model', bad, '--no-verify'], env)
             self.assertNotEqual(proc.returncode, 0, f'{bad!r} should have been refused')
             self.assertIn('--model', proc.stderr)
 
     def test_the_permission_mode_can_be_turned_down(self):
         db, ws, prompt, env = self.sandbox()
-        proc = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
-                                    '--mode', 'plan', '--no-verify'], env)
+        proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
+                               '--mode', 'plan', '--no-verify'], env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         con = sqlite3.connect(str(db))
         self.assertEqual(con.execute('select mode from automations').fetchone()[0], 'plan')
@@ -359,7 +364,7 @@ class TestSpawnerChoice(unittest.TestCase):
 
     def test_a_prompt_that_is_not_there_is_refused(self):
         db, ws, prompt, env = self.sandbox()
-        proc = self.run_dispatcher(['--prompt-file', prompt.parent / 'nope.txt',
+        proc = run_dispatcher(['--prompt-file', prompt.parent / 'nope.txt',
                                     '--workspace', ws, '--no-verify'], env)
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn('prompt file not found', proc.stderr)
@@ -370,15 +375,15 @@ class TestSpawnerChoice(unittest.TestCase):
     def test_a_time_too_far_past_is_refused(self):
         """The desktop drops a row more than five minutes overdue as a misfire, so refuse it here."""
         db, ws, prompt, env = self.sandbox()
-        proc = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
-                                    '--at', '2020-01-01T00:00', '--no-verify'], env)
+        proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
+                               '--at', '2020-01-01T00:00', '--no-verify'], env)
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn('misfire', proc.stderr)
 
     def test_a_time_in_the_future_is_not_waited_for(self):
         db, ws, prompt, env = self.sandbox()
         started = time.monotonic()
-        proc = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--at', '+30m'], env)
+        proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--at', '+30m'], env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertLess(time.monotonic() - started, 10,
                         'a row scheduled for later must not be waited on now')
@@ -478,20 +483,15 @@ class TestQueueDedup(unittest.TestCase):
         prompt = root / 'launch' / node_id / 'prompt.txt'
         prompt.parent.mkdir(parents=True)
         prompt.write_text('# /pf-conduct drill\n', encoding='utf-8')
-        env = {**os.environ, 'ZCODE_DATA_BASE_DIR': str(root / 'sandbox'),
-               'DSH_CONDUCT_SPAWN_AT': ''}
+        env = dict(_child_env(), ZCODE_DATA_BASE_DIR=str(root / 'sandbox'),
+                   DSH_CONDUCT_SPAWN_AT='')
         return db, ws, prompt, env
-
-    def run_dispatcher(self, args, env):
-        return subprocess.run([sys.executable, '-X', 'utf8', str(DISPATCHER), *map(str, args)],
-                              capture_output=True, text=True, encoding='utf-8', errors='replace',
-                              env=env)
 
     def test_a_second_row_for_the_same_node_is_refused(self):
         db, ws, prompt, env = self.sandbox()
-        first = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        first = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(first.returncode, 0, first.stderr)
-        second = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        second = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertNotEqual(second.returncode, 0)
         self.assertIn('already queued', second.stderr)
         con = sqlite3.connect(str(db))
@@ -501,36 +501,36 @@ class TestQueueDedup(unittest.TestCase):
 
     def test_an_explicit_override_queues_anyway(self):
         db, ws, prompt, env = self.sandbox()
-        first = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        first = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(first.returncode, 0, first.stderr)
-        second = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify',
-                                      '--allow-existing'], env)
+        second = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify',
+                                 '--allow-existing'], env)
         self.assertEqual(second.returncode, 0, second.stderr)
 
     def test_a_claimed_row_is_no_longer_pending(self):
         """行被桌面认领、且认领已过新鲜窗口（会话也没写出来）之后，文档规定的抢救重排是合法的。"""
         db, ws, prompt, env = self.sandbox()
-        first = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        first = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(first.returncode, 0, first.stderr)
         con = sqlite3.connect(str(db))
         con.execute('update automations set claimed_at=?, run_count=1, dispatch_status=?',
                     (int(time.time() * 1000) - 11 * 60 * 1000, 'dispatched'))
         con.commit()
         con.close()
-        again = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        again = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(again.returncode, 0, again.stderr)
 
     def test_a_claim_just_made_with_no_session_blocks(self):
         """认领到落库之间的窄缝：行刚被认领、会话还没写出来，第二个 queue 两个旧检查都落空。"""
         db, ws, prompt, env = self.sandbox()
-        first = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        first = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(first.returncode, 0, first.stderr)
         con = sqlite3.connect(str(db))
         con.execute('update automations set claimed_at=?, run_count=1, dispatch_status=?',
                     (int(time.time() * 1000), 'dispatched'))
         con.commit()
         con.close()
-        second = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        second = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertNotEqual(second.returncode, 0)
         self.assertIn('was just claimed', second.stderr)
         con = sqlite3.connect(str(db))
@@ -541,7 +541,7 @@ class TestQueueDedup(unittest.TestCase):
     def test_a_fresh_session_blocks_and_an_old_one_does_not(self):
         """验证超时的竞态：会话其实建出来了——十 分钟内的会话挡住重排，再老的算死会话放行。"""
         db, ws, prompt, env = self.sandbox()
-        first = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        first = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(first.returncode, 0, first.stderr)
         automation_id = first.stdout.strip().splitlines()[0]
         now = int(time.time() * 1000)
@@ -554,7 +554,7 @@ class TestQueueDedup(unittest.TestCase):
         con.commit()
         con.close()
 
-        blocked = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        blocked = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertNotEqual(blocked.returncode, 0)
         self.assertIn('already exists', blocked.stderr)
 
@@ -563,7 +563,7 @@ class TestQueueDedup(unittest.TestCase):
                     (now - 11 * 60 * 1000, 'sess_fresh'))
         con.commit()
         con.close()
-        allowed = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        allowed = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(allowed.returncode, 0, allowed.stderr)
 
 

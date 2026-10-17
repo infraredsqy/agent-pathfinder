@@ -19,18 +19,18 @@ that would leak into the next case, and a shared fixture would have to reset the
 
 from __future__ import annotations
 
-import shutil
-import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from cases_ledger_merge import (EDGE_X, EDGE_Y, MERGE_PY, NODE1, NODE2, NODE3, child_env, cycle,
-                                ideas, instruction, node, read, step, tool_bytes)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from cases_ledger_merge import (EDGE_X, EDGE_Y, MERGE_PY, NODE1, NODE2, NODE3, cycle,  # noqa: E402
+                                ideas, instruction, node, step, tool_bytes)
+from harness_env import GIT, _decode, git, init_markers  # noqa: E402
 
 __all__ = ['TestGitEndToEnd']
-
-GIT = shutil.which('git')
 
 #: What the driver is wired to in `.gitattributes` -- the block the report hands over verbatim.
 GITATTRIBUTES = (
@@ -42,12 +42,6 @@ GITATTRIBUTES = (
 )
 
 
-def git_env():
-    """The identity git needs to commit, as env vars: two `git config` starts saved per case."""
-    return dict(child_env(), GIT_AUTHOR_NAME='ledger test', GIT_AUTHOR_EMAIL='ledger@example.invalid',
-                GIT_COMMITTER_NAME='ledger test', GIT_COMMITTER_EMAIL='ledger@example.invalid')
-
-
 @unittest.skipUnless(GIT, 'git is not on PATH')
 class TestGitEndToEnd(unittest.TestCase):
 
@@ -55,24 +49,13 @@ class TestGitEndToEnd(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory(prefix='ledger-merge-git-')
         self.addCleanup(self._tmp.cleanup)
         self.repo = Path(self._tmp.name)
-        self.git('init', '-b', 'main')
-        self.git('config', 'merge.pf.driver',
-                 f'python "{MERGE_PY.as_posix()}" %O %A %B %P')
+        git(self.repo, 'init', '-b', 'main')
+        git(self.repo, 'config', 'merge.pf.driver',
+            f'python "{MERGE_PY.as_posix()}" %O %A %B %P')
         (self.repo / '.gitattributes').write_text(GITATTRIBUTES, encoding='utf-8')
         # init 的两枚文件，加 `.pf/.gitignore`：驱动写回时要拿项目那把锁，锁住在 `.pf/meta/`
         # 里，而它正是这份 ignore 挡住的东西 —— 于是下面那些"合并没留下痕迹"的断言还成立。
-        ledger = self.repo / '.pf'
-        ledger.mkdir(parents=True, exist_ok=True)
-        (ledger / '.gitignore').write_text('meta/\nworktrees/\ntemp/\n', encoding='utf-8')
-        (ledger / '.gitattributes').write_text('** -text\n', encoding='utf-8')
-
-    def git(self, *args, check=True):
-        proc = subprocess.run([GIT, *args], cwd=str(self.repo), capture_output=True, text=True,
-                              encoding='utf-8', errors='replace', env=git_env())
-        if check and proc.returncode != 0:
-            raise AssertionError(f'git {" ".join(args)} failed ({proc.returncode}):\n'
-                                 f'{proc.stdout}\n{proc.stderr}')
-        return proc
+        init_markers(self.repo)
 
     def write(self, ledger: str, data, sort_keys=False):
         path = self.repo / ledger
@@ -82,15 +65,15 @@ class TestGitEndToEnd(unittest.TestCase):
     def commit(self, message, first=False):
         """One commit. Later ones are edits of tracked files, so `-a` saves an `add` start."""
         if first:
-            self.git('add', '-A')
-            self.git('commit', '-m', message, '--no-gpg-sign')
+            git(self.repo, 'add', '-A')
+            git(self.repo, 'commit', '-m', message, '--no-gpg-sign')
         else:
-            self.git('commit', '-a', '-m', message, '--no-gpg-sign')
+            git(self.repo, 'commit', '-a', '-m', message, '--no-gpg-sign')
 
     def test_the_attributes_point_every_ledger_at_this_driver(self):
         ledgers = ('.pf/ideas.json', '.pf/state.json', '.pf/instructions.json',
                    '.pf/signals/cyc/aaaa1111.json')
-        out = self.git('check-attr', 'merge', *ledgers).stdout
+        out = git(self.repo, 'check-attr', 'merge', *ledgers).stdout
         for ledger in ledgers:
             with self.subTest(ledger=ledger):
                 self.assertIn(f'{ledger}: merge: pf', out)
@@ -102,32 +85,32 @@ class TestGitEndToEnd(unittest.TestCase):
         self.write('.pf/instructions.json', instruction())
         self.commit('ledger base', first=True)
 
-        self.git('checkout', '-b', 'feature')
+        git(self.repo, 'checkout', '-b', 'feature')
         self.write('.pf/ideas.json', ideas(aaaa=node('one'), bbbb=node('two')), sort_keys=True)
         self.write('.pf/state.json',
                    cycle([shared, step(NODE2, '2026-10-01T01:00:00Z', '2026-10-01T02:00:00Z')]))
         self.write('.pf/instructions.json', instruction(text='theirs text'))
         self.commit('feature: a node and a step')
 
-        self.git('checkout', 'main')
+        git(self.repo, 'checkout', 'main')
         self.write('.pf/ideas.json', ideas(aaaa=node('one'), cccc=node('three')), sort_keys=True)
         self.write('.pf/state.json',
                    cycle([shared, step(NODE3, '2026-10-01T03:00:00Z', '2026-10-01T04:00:00Z')]))
         self.write('.pf/instructions.json', instruction(note='ours note'))
         self.commit('main: another node and step')
 
-        proc = self.git('merge', 'feature', '--no-edit', check=False)
+        proc = git(self.repo, 'merge', 'feature', '--no-edit', check=False)
 
         self.assertEqual(0, proc.returncode, f'{proc.stdout}\n{proc.stderr}')
         self.assertNotIn('CONFLICT', proc.stdout + proc.stderr)
-        self.assertEqual('', self.git('status', '--porcelain').stdout.strip())
+        self.assertEqual('', git(self.repo, 'status', '--porcelain').stdout.strip())
 
-        merged_ideas = read(self.repo / '.pf/ideas.json')
+        merged_ideas = _decode(self.repo / '.pf/ideas.json')
         self.assertEqual({NODE1, NODE2, NODE3}, set(merged_ideas['nodes']))
-        merged_state = read(self.repo / '.pf/state.json')
+        merged_state = _decode(self.repo / '.pf/state.json')
         self.assertEqual([NODE1, NODE2, NODE3],
                          [s['node'] for s in merged_state['cycles'][0]['path']])
-        merged_ins = read(self.repo / '.pf/instructions.json')['instructions'][0]
+        merged_ins = _decode(self.repo / '.pf/instructions.json')['instructions'][0]
         self.assertEqual('theirs text', merged_ins['text'])
         self.assertEqual('ours note', merged_ins['note'])
         # and the driver's own bytes survived git: CRLF, and no trailing newline
@@ -138,20 +121,20 @@ class TestGitEndToEnd(unittest.TestCase):
         self.write('.pf/state.json', cycle([]))
         self.commit('ledger base', first=True)
 
-        self.git('checkout', '-b', 'feature')
+        git(self.repo, 'checkout', '-b', 'feature')
         self.write('.pf/ideas.json', ideas(aaaa=node('one', deps=[EDGE_X, EDGE_Y])), sort_keys=True)
         self.commit('feature: adds an edge')
 
-        self.git('checkout', 'main')
+        git(self.repo, 'checkout', 'main')
         self.write('.pf/ideas.json', ideas(aaaa=node('one', deps=[])), sort_keys=True)
         self.commit('main: drops the edge')
         ours_bytes = (self.repo / '.pf/ideas.json').read_bytes()
 
-        proc = self.git('merge', 'feature', '--no-edit', check=False)
+        proc = git(self.repo, 'merge', 'feature', '--no-edit', check=False)
 
         self.assertNotEqual(0, proc.returncode, 'a real conflict must stop the merge')
         self.assertIn('dependencies', proc.stdout + proc.stderr)
-        status = self.git('status', '--porcelain').stdout
+        status = git(self.repo, 'status', '--porcelain').stdout
         self.assertTrue(status.startswith('UU .pf/ideas.json'), status)
         self.assertEqual(ours_bytes, (self.repo / '.pf/ideas.json').read_bytes(),
                          'git must leave <ours> exactly as it was')
@@ -164,21 +147,21 @@ class TestGitEndToEnd(unittest.TestCase):
         self.write('.pf/state.json', cycle([]))
         self.commit('ledger base', first=True)
 
-        self.git('checkout', '-b', 'feature')
+        git(self.repo, 'checkout', '-b', 'feature')
         self.write('.pf/ideas.json', ideas(aaaa=node('one'), cccc=node('three')), sort_keys=True)
         self.commit('feature: adds a node')
 
-        self.git('checkout', 'main')
+        git(self.repo, 'checkout', 'main')
         self.write('.pf/ideas.json', ideas(aaaa=node('one', status='completed')), sort_keys=True)
         self.commit('main: marks the first node completed')
 
-        proc = self.git('rebase', 'feature', check=False)
+        proc = git(self.repo, 'rebase', 'feature', check=False)
 
         self.assertEqual(0, proc.returncode, f'{proc.stdout}\n{proc.stderr}')
         self.assertNotIn('CONFLICT', proc.stdout + proc.stderr)
-        self.assertEqual('', self.git('status', '--porcelain').stdout.strip())
+        self.assertEqual('', git(self.repo, 'status', '--porcelain').stdout.strip())
         self.assertFalse((self.repo / '.git' / 'rebase-merge').exists(), 'the rebase is still open')
-        merged = read(self.repo / '.pf/ideas.json')
+        merged = _decode(self.repo / '.pf/ideas.json')
         self.assertEqual({NODE1, NODE3}, set(merged['nodes']))           # feature's node survived
         self.assertEqual('completed', merged['nodes'][NODE1]['status'])   # main's edit survived
 
@@ -188,15 +171,15 @@ class TestGitEndToEnd(unittest.TestCase):
         self.write('.pf/ideas.json', ideas(aaaa=node('one', deps=[EDGE_X])), sort_keys=True)
         self.commit('ledger base', first=True)
 
-        self.git('checkout', '-b', 'feature')
+        git(self.repo, 'checkout', '-b', 'feature')
         self.write('.pf/ideas.json', ideas(aaaa=node('one', deps=[EDGE_X, EDGE_Y])), sort_keys=True)
         self.commit('feature: adds an edge')
 
-        self.git('checkout', 'main')
+        git(self.repo, 'checkout', 'main')
         self.write('.pf/ideas.json', ideas(aaaa=node('one', deps=[])), sort_keys=True)
         self.commit('main: drops the edge')
 
-        proc = self.git('rebase', 'feature', check=False)
+        proc = git(self.repo, 'rebase', 'feature', check=False)
 
         self.assertNotEqual(0, proc.returncode)
         for hint in ('git rebase --continue', 'git rebase --abort', 'pf 冲突'):

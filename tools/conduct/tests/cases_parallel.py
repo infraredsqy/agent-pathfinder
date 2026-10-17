@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -38,22 +37,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import NODE, NODE2, NODE3, Base, pipeline
-from harness_env import DAG_MANAGE, SIGNAL_PY, STATE_MANAGE, _child_env
+from harness_env import (DAG_MANAGE, GIT, SIGNAL_PY, STATE_MANAGE, _child_env, git, init_markers,
+                         run_argv)
 from harness_sandbox import Sandbox
 
 __all__ = ['TestLedgerLock', 'TestWorktreeRedirect', 'TestSpawnClaim', 'TestOneNodeOneCycle',
            'TestParallelSlots']
 
 PYTHON = sys.executable
-GIT = shutil.which('git')
 CONDUCT_DIR = Path(pipeline.__file__).resolve().parent.parent
-
-
-def _child(cwd):
-    return dict(_child_env(), **{
-        'GIT_AUTHOR_NAME': 'parallel test', 'GIT_AUTHOR_EMAIL': 'parallel@example.invalid',
-        'GIT_COMMITTER_NAME': 'parallel test', 'GIT_COMMITTER_EMAIL': 'parallel@example.invalid',
-    })
 
 
 class TestLedgerLock(unittest.TestCase):
@@ -64,10 +56,8 @@ class TestLedgerLock(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
         # init 的两枚文件：锁只肯落在 init 过的 `.pf/` 里，这四发并发写都要拿它。
-        (root / '.pf').mkdir(parents=True, exist_ok=True)
-        (root / '.pf' / '.gitignore').write_text('meta/\nworktrees/\ntemp/\n', encoding='utf-8')
-        (root / '.pf' / '.gitattributes').write_text('** -text\n', encoding='utf-8')
-        env = _child(root)
+        init_markers(root)
+        env = _child_env()
         # 四个进程同时起跑：读-改-写的窗口彼此重叠，锁把它们排成队。
         procs = [subprocess.Popen(
             [PYTHON, '-X', 'utf8', str(STATE_MANAGE), 'instruction', 'add',
@@ -96,36 +86,23 @@ class TestWorktreeRedirect(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.repo = Path(tmp.name) / 'main'
         self.repo.mkdir(parents=True)
-        self.git('init', '-b', 'main')
-        pf = self.repo / '.pf'
-        pf.mkdir()
+        git(self.repo, 'init', '-b', 'main')
         # init 的两枚文件。这个仓库是"提交档"：`.pf/` 跟着一起进库，靠 `.pf/.gitignore`
         # 把 meta/ 与 worktrees/ 挡在外面。
-        (pf / '.gitignore').write_text('meta/\nworktrees/\ntemp/\n', encoding='utf-8')
-        (pf / '.gitattributes').write_text('** -text\n', encoding='utf-8')
+        pf = init_markers(self.repo)
         (pf / 'state.json').write_text(json.dumps(
             {'cycles': [{'id': 'cyc', 'title': 't', 'status': 'active', 'holding': [],
                          'path': []}]}, indent=2), encoding='utf-8')
         (pf / 'ideas.json').write_text(json.dumps(
             {'nodes': {NODE: {'title': '节点', 'status': 'todo', 'mode': 'auto',
                               'dependencies': []}}}, indent=2), encoding='utf-8')
-        self.git('add', '-A')
-        self.git('commit', '-m', 'seed', '--no-gpg-sign')
-        self.git('worktree', 'add', '.pf/worktrees/w1', '-b', 'pf/w1')
+        git(self.repo, 'add', '-A')
+        git(self.repo, 'commit', '-m', 'seed', '--no-gpg-sign')
+        git(self.repo, 'worktree', 'add', '.pf/worktrees/w1', '-b', 'pf/w1')
         self.wt = self.repo / '.pf' / 'worktrees' / 'w1'
 
-    def git(self, *args, check=True):
-        proc = subprocess.run([GIT, *args], cwd=str(self.repo), capture_output=True, text=True,
-                              encoding='utf-8', errors='replace', env=_child(self.repo))
-        if check and proc.returncode != 0:
-            raise AssertionError(f'git {" ".join(args)} failed ({proc.returncode}):\n'
-                                 f'{proc.stdout}\n{proc.stderr}')
-        return proc
-
     def _run(self, tool, *args):
-        return subprocess.run([PYTHON, '-X', 'utf8', str(tool), *args],
-                              cwd=str(self.wt), capture_output=True, text=True,
-                              encoding='utf-8', errors='replace', env=_child(self.wt))
+        return run_argv([tool, *args], cwd=self.wt, check=False)
 
     def test_a_ledger_write_from_the_worktree_lands_in_the_main_tree(self):
         proc = self._run(STATE_MANAGE, 'cycle', 'hold', 'cyc', NODE)
@@ -153,11 +130,8 @@ class TestWorktreeRedirect(unittest.TestCase):
         handoff.py 自己先解主树再传 base_dir；signal.py 单飞时没人替它解，只能靠它自己对
         worktree 的认知——这里是那份认知的证明。
         """
-        proc = subprocess.run(
-            [PYTHON, '-X', 'utf8', str(SIGNAL_PY), 'cyc', NODE, 'completed',
-             '-s', 'worktree 收尾', '-o', '{}'],
-            cwd=str(self.wt), capture_output=True, text=True,
-            encoding='utf-8', errors='replace', env=_child(self.wt))
+        proc = run_argv([SIGNAL_PY, 'cyc', NODE, 'completed', '-s', 'worktree 收尾', '-o', '{}'],
+                        cwd=self.wt, check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
         sig = json.loads((self.repo / '.pf' / 'signals' / 'cyc' / f'{NODE}.json')
@@ -180,11 +154,18 @@ class TestSpawnClaim(unittest.TestCase):
         self.prompt.write_text('/pf-conduct test\n', encoding='utf-8')
         self.claim = self.prompt.parent / 'SPAWN.claim'
 
-    def _dispatch(self, *extra):
-        return subprocess.run(
-            [PYTHON, '-X', 'utf8', str(STATE_MANAGE), 'dispatch', 'cyc', *extra],
-            cwd=str(self.sb.root), capture_output=True, text=True,
-            encoding='utf-8', errors='replace', env=_child(self.sb.root))
+    def stub(self, name='ok-spawner.ps1', body=None):
+        """A stand-in spawner, never a host one."""
+        return self.sb.fake_spawner(name, body=body)
+
+    def _dispatch(self, spawner=None, dry_run=False):
+        """One `dispatch cyc`, through the harness's spawn entry, aimed at a stand-in spawner.
+
+        The claim is only taken (and therefore only checked) where a spawn is really attempted:
+        `spawn_session` skips it on the drill rail, so every case here runs on the other one -- and
+        the only thing that rail can reach is this stub.
+        """
+        return self.sb.dispatch(spawner=spawner or self.stub(), dry_run=dry_run, check=False)
 
     def test_an_in_flight_spawn_refuses_a_second_dispatch(self):
         self.claim.write_text('99999 started just-now', encoding='utf-8')
@@ -209,9 +190,7 @@ class TestSpawnClaim(unittest.TestCase):
         self.claim.write_text(f'{finished.pid} started long-ago', encoding='utf-8')
         old = time.time() - 31 * 60
         os.utime(self.claim, (old, old))
-        stub = self.sb.root / 'ok-spawner.ps1'
-        stub.write_text('Write-Output "spawned: session stub"\n', encoding='utf-8')
-        proc = self._dispatch('--spawner', str(stub))
+        proc = self._dispatch()
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertFalse(self.claim.exists(),
                          'the successful spawn cleans the launch dir, claim included')
@@ -227,9 +206,7 @@ class TestSpawnClaim(unittest.TestCase):
         self.assertTrue(self.claim.exists(), 'a refused dispatch must leave the claim alone')
 
     def test_a_failed_spawn_releases_the_claim(self):
-        stub = self.sb.root / 'failing-spawner.ps1'
-        stub.write_text('exit 1\n', encoding='utf-8')
-        proc = self._dispatch('--spawner', str(stub))
+        proc = self._dispatch(spawner=self.stub('failing-spawner.ps1', body='exit 1\n'))
         self.assertNotEqual(proc.returncode, 0)
         self.assertFalse(self.claim.exists(),
                          'a failed spawn must leave the prompt free for the manual retry')
@@ -432,18 +409,9 @@ class TestParallelSlots(Base):
         self.assertEqual(second['action'], 'dispatch')
         self.assertEqual(sb.holding_ids(), [NODE3], '那一格的收尾把丙补上并派发')
 
-    def _with_stub_spawner(self, sb, *argv):
-        """跑一条真派发命令，spawner 是替身（**不是** dry run）：开出去的格子会留下 `started`。
-
-        dry run 保留 prompt、不留记号 —— 这里要的正好是「会话开出去了」那一拍。
-        """
-        stub = sb.root / 'ok-spawner.ps1'
-        stub.write_text('Write-Output "spawned: session stub"\n', encoding='utf-8')
-        env = _child_env()
-        env.pop('DSH_CONDUCT_SPAWN_DRY_RUN', None)
-        return subprocess.run([sys.executable, str(STATE_MANAGE), *argv, '--spawner', str(stub)],
-                              cwd=str(sb.root), capture_output=True, text=True,
-                              encoding='utf-8', errors='replace', env=env)
+    def stub(self, sb):
+        """The stand-in spawner these cases aim the real spawn call at (never a host one)."""
+        return sb.fake_spawner('ok-spawner.ps1')
 
     def test_a_started_node_is_never_handed_to_the_spawner_twice(self):
         """已经开出去的那一格不再交给 spawner：收尾重规划出来的整份名单里带着它，跳过它。
@@ -461,7 +429,7 @@ class TestParallelSlots(Base):
         sb.next()
         launch = sb.root / '.pf' / 'meta' / 'launch' / 'cyc'
 
-        opened = self._with_stub_spawner(sb, 'next', '--json', '--cycle', 'cyc', '--spawn')
+        _opened, opened = sb.spawn_next('--cycle', 'cyc', spawner=self.stub(sb), dry_run=False)
         self.assertEqual(opened.returncode, 0, opened.stderr)
         for node in (NODE, NODE2):
             self.assertTrue((launch / node / 'started').is_file(), f'{node[:8]}: 记号没落下')
@@ -476,7 +444,7 @@ class TestParallelSlots(Base):
         self.assertFalse((launch / NODE2 / 'prompt.txt').exists(),
                          '在跑的乙，prompt 不该被补回来 —— 补回来就等于说它还没开')
 
-        action, _ = sb.next_cli('--cycle', 'cyc', spawn=True)
+        action, _ = sb.spawn_next('--cycle', 'cyc', spawner=self.stub(sb), dry_run=False)
         self.assertEqual([n['node_id'] for n in action['nodes']], [NODE3], '在跑的乙不进名单')
 
     def test_with_every_session_in_hand_running_the_answer_is_a_wait(self):
@@ -486,14 +454,14 @@ class TestParallelSlots(Base):
         sb.start_cycle(tags=['coding'])
         sb.next()
         self.assertEqual(
-            self._with_stub_spawner(sb, 'next', '--json', '--cycle', 'cyc', '--spawn').returncode, 0)
+            sb.spawn_next('--cycle', 'cyc', spawner=self.stub(sb), dry_run=False)[1].returncode, 0)
 
         action = sb.plan()
 
         self.assertEqual(action['action'], 'wait', '会话都在跑，没有可派的动作')
         self.assertIn('条子', action['note'])
 
-        proc = self._with_stub_spawner(sb, 'dispatch', 'cyc')
+        proc = sb.dispatch(spawner=self.stub(sb), dry_run=False, check=False)
 
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn('cycle retry', proc.stderr, '拒绝里要给重开那一格的路')
@@ -511,7 +479,8 @@ class TestParallelSlots(Base):
         sb = self.two_ready(parallel=2)
         sb.set_current_node(NODE2)
         sb.next()
-        sb.next_cli('--spawn')
+        _action, opened = sb.spawn_next(spawner=self.stub(sb), dry_run=False)
+        self.assertEqual(opened.returncode, 0, opened.stderr)
         for node in (NODE, NODE2):
             self.assertFalse((sb.root / '.pf' / 'meta' / 'launch' / 'cyc' / node
                               / 'SPAWN.claim').exists(),

@@ -13,20 +13,24 @@ push:
 The cases here pin the whole contract of that verb: it dispatches, it refuses (five shapes, each with
 a line on stderr), it resolves `--project`, and it touches nothing but the session it starts.
 
-`DSH_CONDUCT_SPAWN_DRY_RUN=1` is set around every call: the spawn call is made and reported, and no
-session (and no network) is involved. The drill switch is honoured inside `spawn_session`, which is
-the seam `next --spawn` already used.
+`DSH_CONDUCT_SPAWN_DRY_RUN=1` is held by the harness around every dispatch (`Sandbox.dispatch`): the
+spawn call is made and reported, and no session (and no network) is involved. The drill switch is
+honoured inside `spawn_session`, which is the seam the closing call's spawn uses too.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import sys
 import unittest
+from pathlib import Path
 from unittest import mock
 
-from cases_base import NODE, Base
-from harness import run_state_manage
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from cases_base import NODE, Base  # noqa: E402
+from harness import run_state_manage  # noqa: E402
 
 __all__ = ['TestDispatchVerb']
 
@@ -43,15 +47,6 @@ def same_path(left: str, right: str) -> bool:
 class TestDispatchVerb(Base):
     """`dispatch <cycle>` -- one call, and the only thing it does is start that session."""
 
-    def dispatch(self, sb, *args, **kwargs):
-        """Dispatch with the drill switch on, whichever path (in-process or CLI) the call takes.
-
-        The switch is in the environment, so it reaches both: `cmd_dispatch` reads it directly, and a
-        CLI child inherits it through `_child_env()`. No test may ever start a real session.
-        """
-        with mock.patch.dict(os.environ, {'DSH_CONDUCT_SPAWN_DRY_RUN': '1'}):
-            return sb.dispatch(*args, **kwargs)
-
     def pinned(self, cli=False):
         """A cycle holding NODE, with the prompt file already on disk (what `next` writes)."""
         sb = self.ready_sandbox(cli=cli)
@@ -65,7 +60,7 @@ class TestDispatchVerb(Base):
             with self.subTest(cli=cli):
                 sb, action = self.pinned(cli=cli)
 
-                proc = self.dispatch(sb, cli=cli)
+                proc = sb.dispatch(cli=cli)
 
                 self.assertEqual(0, proc.returncode, proc.stderr)
                 self.assertTrue(same_path(action['prompt'], proc.stdout),
@@ -76,7 +71,7 @@ class TestDispatchVerb(Base):
     def test_json_reports_the_cycle_the_node_and_the_spawn_line(self):
         sb, action = self.pinned()
 
-        proc = self.dispatch(sb, as_json=True)
+        proc = sb.dispatch(as_json=True)
 
         self.assertEqual(0, proc.returncode, proc.stderr)
         payload = json.loads(proc.stdout)
@@ -95,7 +90,7 @@ class TestDispatchVerb(Base):
         sb, _action = self.pinned()
         before = sb.tree_hashes()
 
-        proc = self.dispatch(sb)
+        proc = sb.dispatch()
 
         self.assertEqual(0, proc.returncode, proc.stderr)
         self.assertEqual(before, sb.tree_hashes(), 'dispatch changed the project')
@@ -108,7 +103,7 @@ class TestDispatchVerb(Base):
         sb.add_node(NODE, '界面设计', mode='auto')
         sb.create_cycle()                                  # created, but nothing is pinned
 
-        proc = self.dispatch(sb, check=False)
+        proc = sb.dispatch(check=False)
 
         self.assertNotEqual(0, proc.returncode)
         self.assertIn('holding no node', proc.stderr)
@@ -116,7 +111,7 @@ class TestDispatchVerb(Base):
 
     def test_a_missing_prompt_names_the_path_and_the_call_that_writes_it(self):
         sb = self.ready_sandbox()                          # pinned, but `next` never ran
-        proc = self.dispatch(sb, check=False)
+        proc = sb.dispatch(check=False)
 
         self.assertNotEqual(0, proc.returncode)
         self.assertIn('prompt.txt', proc.stderr)
@@ -127,7 +122,7 @@ class TestDispatchVerb(Base):
         sb, action = self.pinned()
         sb.set_cycle_status('cyc', 'inactive')
 
-        proc = self.dispatch(sb, check=False)
+        proc = sb.dispatch(check=False)
 
         self.assertNotEqual(0, proc.returncode)
         self.assertIn('not active', proc.stderr)
@@ -139,7 +134,7 @@ class TestDispatchVerb(Base):
         sb, action = self.pinned()
         sb.rewrite_cycle(status='paused')
 
-        proc = self.dispatch(sb, check=False)
+        proc = sb.dispatch(check=False)
 
         self.assertNotEqual(0, proc.returncode)
         self.assertIn('not active', proc.stderr)
@@ -148,7 +143,7 @@ class TestDispatchVerb(Base):
     def test_an_unknown_cycle_refuses_and_names_the_project(self):
         sb = self.ready_sandbox()
 
-        proc = self.dispatch(sb, cycle_id='nope', check=False)
+        proc = sb.dispatch(cycle_id='nope', check=False)
 
         self.assertNotEqual(0, proc.returncode)
         self.assertIn("no cycle named 'nope'", proc.stderr)
@@ -160,8 +155,7 @@ class TestDispatchVerb(Base):
         sb, action = self.pinned()
         elsewhere = self.make()
 
-        with mock.patch.dict(os.environ, {'DSH_CONDUCT_SPAWN_DRY_RUN': '1'}):
-            proc = run_state_manage(elsewhere.root, 'dispatch', 'cyc', '--project', str(sb.root))
+        proc = run_state_manage(elsewhere.root, 'dispatch', 'cyc', '--project', str(sb.root))
 
         self.assertEqual(0, proc.returncode, proc.stderr)
         self.assertTrue(same_path(action['prompt'], proc.stdout))
@@ -173,10 +167,9 @@ class TestDispatchVerb(Base):
         sb, _action = self.pinned()
         elsewhere = self.make()
 
-        with mock.patch.dict(os.environ, {'DSH_CONDUCT_SPAWN_DRY_RUN': '1'}):
-            proc = run_state_manage(elsewhere.root, 'dispatch', 'cyc', '--project', str(sb.root),
-                                    check=False)
-            other = run_state_manage(elsewhere.root, 'dispatch', 'cyc', check=False)
+        proc = run_state_manage(elsewhere.root, 'dispatch', 'cyc', '--project', str(sb.root),
+                                check=False)
+        other = run_state_manage(elsewhere.root, 'dispatch', 'cyc', check=False)
 
         self.assertEqual(0, proc.returncode, proc.stderr)      # `--project` finds sb's cycle
         self.assertNotEqual(0, other.returncode)               # the cwd project has no such cycle
@@ -193,8 +186,7 @@ class TestDispatchVerb(Base):
                 sb, _action = self.pinned(cli=cli)
                 sb.set_policy('cyc', 'spawner', 'dsh', cli=cli)
 
-                with mock.patch.dict(os.environ, {'DSH_CONDUCT_SPAWN_DRY_RUN': '1',
-                                                  'DSH_CONDUCT_SPAWNER': 'zcode'}):
+                with mock.patch.dict(os.environ, {'DSH_CONDUCT_SPAWNER': 'zcode'}):
                     proc = sb.dispatch(cli=cli)
 
                 self.assertEqual(0, proc.returncode, proc.stderr)
@@ -206,8 +198,7 @@ class TestDispatchVerb(Base):
             with self.subTest(cli=cli):
                 sb, _action = self.pinned(cli=cli)
 
-                with mock.patch.dict(os.environ, {'DSH_CONDUCT_SPAWN_DRY_RUN': '1',
-                                                  'DSH_CONDUCT_SPAWNER': 'zcode'}):
+                with mock.patch.dict(os.environ, {'DSH_CONDUCT_SPAWNER': 'zcode'}):
                     proc = sb.dispatch(cli=cli)
 
                 self.assertEqual(0, proc.returncode, proc.stderr)
@@ -219,8 +210,7 @@ class TestDispatchVerb(Base):
         sb.set_policy('cyc', 'spawner', 'dsh')
         sb.set_policy('cyc', 'spawner', 'off')
 
-        with mock.patch.dict(os.environ, {'DSH_CONDUCT_SPAWN_DRY_RUN': '1',
-                                          'DSH_CONDUCT_SPAWNER': 'zcode'}):
+        with mock.patch.dict(os.environ, {'DSH_CONDUCT_SPAWNER': 'zcode'}):
             proc = sb.dispatch()
 
         self.assertEqual(0, proc.returncode, proc.stderr)
@@ -232,8 +222,7 @@ class TestDispatchVerb(Base):
         sb.set_policy('cyc', 'spawner', 'dsh')
         flag_spawner = sb.root / 'fake-spawner.ps1'
 
-        with mock.patch.dict(os.environ, {'DSH_CONDUCT_SPAWN_DRY_RUN': '1',
-                                          'DSH_CONDUCT_SPAWNER': 'zcode'}):
+        with mock.patch.dict(os.environ, {'DSH_CONDUCT_SPAWNER': 'zcode'}):
             proc = run_state_manage(sb.root, 'dispatch', 'cyc', '--spawner', str(flag_spawner))
 
         self.assertEqual(0, proc.returncode, proc.stderr)
@@ -250,13 +239,14 @@ class TestDispatchVerb(Base):
                       'the refusal names the words the policy takes')
 
     def test_the_closing_call_names_the_line_policy_spawner_too(self):
-        """`next --spawn` is the same spawn call as `dispatch`: the line policy reaches it too."""
+        """The closing call's own spawn is the same spawn call as `dispatch`: the line policy
+        reaches it too."""
         sb = self.ready_sandbox()
         sb.set_policy('cyc', 'spawner', 'dsh')
         sb.next()                                # pin the node and write its prompt
 
         with mock.patch.dict(os.environ, {'DSH_CONDUCT_SPAWNER': 'zcode'}):
-            _action, proc = sb.next_cli('--spawn')
+            _action, proc = sb.spawn_next()
 
         self.assertEqual(0, proc.returncode, proc.stderr)
         self.assertIn('dsh-spawn.ps1', proc.stdout,

@@ -7,6 +7,7 @@ starting a process; `InProcessDagManage` / `_dag_hook` answer dag-manage in-proc
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import io
 import os
@@ -15,7 +16,8 @@ import sys
 import threading
 from pathlib import Path
 
-from harness_env import DAG_MANAGE, SIGNAL_PY, STATE_MANAGE, _fresh_module, chdir, load_pipeline
+from harness_env import (DAG_MANAGE, SIGNAL_PY, STATE_MANAGE, _fresh_module, chdir, load_pipeline,
+                         patched)
 
 
 __all__ = [
@@ -28,9 +30,9 @@ __all__ = [
 #  In-process equivalences of the two helper programs
 # ═══════════════════════════════════════════════════════════════════════════════
 # Neither of these is a reimplementation: the first calls state-manage.py's own command
-# functions, the second calls dag-manage.py's own list command. What is saved is the process
-# start, not the logic. `test_the_fast_path_and_the_cli_agree` pins the equivalence, and
-# `test_the_harness_restates_the_real_parser` pins the argv shape each command is parsed with.
+# functions, the second calls dag-manage.py's own commands. What is saved is the process
+# start, not the logic. `test_the_fast_path_and_the_cli_agree` pins the equivalence, and the two
+# `test_the_harness_restates_the_*_parser` cases pin the argv shape each stand-in is parsed with.
 
 _FAST_SM_CACHE = {}
 _PIPELINE_CALL_LOCK = threading.RLock()
@@ -39,6 +41,49 @@ _PIPELINE_CALL_LOCK = threading.RLock()
 #: and the maintenance thresholds are compared as numbers, so a string through here would be a
 #: comparison of the wrong type rather than a visible failure.
 _INT_FLAGS = ('stop_after_nodes',)
+
+
+def _namespace(argv, positional_names, flag_spec, *, variadic=(), int_positionals=(), int_flags=()):
+    """One verb's argv (already past the verb) -> the namespace the real parser would hand a command.
+
+    The suite's ONE argv reader: `FastStateManage` (`state-manage.py`'s whole surface) and
+    `InProcessDagManage` (the five dag-manage verbs the pipeline needs) both come through here, and
+    each restates its parser in the same `_SPEC` shape -- which `TestContract` pins against the real
+    argparse tree, item by item. `variadic` names the positionals declared `nargs='*'`: such a
+    positional swallows the contiguous run of non-flag tokens where it stands and defaults to the
+    empty list, which is what the command functions read.
+    """
+    ns = argparse.Namespace()
+    for name in positional_names:
+        setattr(ns, name, [] if name in variadic else None)
+    for _, (name, takes_value, default) in flag_spec.items():
+        setattr(ns, name, default)
+    rest = [str(a) for a in argv]
+    idx = 0
+    for name in positional_names:                 # positionals first, in declaration order
+        if name in variadic:
+            collected = []
+            while idx < len(rest) and not rest[idx].startswith('--'):
+                collected.append(rest[idx])
+                idx += 1
+            setattr(ns, name, collected)
+            continue
+        if idx < len(rest) and not rest[idx].startswith('--'):
+            raw = rest[idx]
+            setattr(ns, name, int(raw) if name in int_positionals else raw)
+            idx += 1
+    while idx < len(rest):
+        token = rest[idx]
+        assert token in flag_spec, f'unknown flag {token!r} for this harness'
+        name, takes_value, _ = flag_spec[token]
+        if takes_value:
+            idx += 1
+            raw = rest[idx]
+            setattr(ns, name, int(raw) if name in int_flags else raw)
+        else:
+            setattr(ns, name, True)
+        idx += 1
+    return ns
 
 
 class FastStateManage:
@@ -171,13 +216,9 @@ class FastStateManage:
         verb = argv[0]
         assert verb in self._VERBS, f'unknown verb {verb!r}'
         out, err = io.StringIO(), io.StringIO()
-        real_out, real_err, real_argv = sys.stdout, sys.stderr, sys.argv
-        sys.stdout, sys.stderr, sys.argv = out, err, [str(STATE_MANAGE), *argv]
-        try:
-            with chdir(self.project):
-                rc = self._dispatch(argv)
-        finally:
-            sys.stdout, sys.stderr, sys.argv = real_out, real_err, real_argv
+        with patched(sys, 'stdout', out), patched(sys, 'stderr', err), \
+                patched(sys, 'argv', [str(STATE_MANAGE), *argv]), chdir(self.project):
+            rc = self._dispatch(argv)
         self.stdout, self.stderr = out.getvalue(), err.getvalue()
         if rc:
             raise RuntimeError(f'state-manage {" ".join(argv)} failed (rc={rc}):\n'
@@ -223,45 +264,24 @@ class FastStateManage:
         return 0
 
     def _namespace(self, argv, positional_names, flag_spec):
-        import argparse
-        ns = argparse.Namespace()
-        for name in positional_names:
-            setattr(ns, name, None)
-        for _, (name, takes_value, default) in flag_spec.items():
-            setattr(ns, name, default)
-        rest = list(argv)
-        idx = 0
-        for name in positional_names:                 # positionals first, in declaration order
-            if idx < len(rest) and not rest[idx].startswith('--'):
-                raw = rest[idx]
-                setattr(ns, name, int(raw) if name in self._INT_POSITIONALS else raw)
-                idx += 1
-        while idx < len(rest):
-            token = rest[idx]
-            assert token in flag_spec, f'unknown flag {token!r} for this harness'
-            name, takes_value, _ = flag_spec[token]
-            if takes_value:
-                idx += 1
-                raw = rest[idx]
-                default = flag_spec[token][2]
-                if name == 'stop_after_nodes' or name in _INT_FLAGS or \
-                        isinstance(default, int) and default is None:
-                    raw = int(raw)
-                setattr(ns, name, raw)
-            else:
-                setattr(ns, name, True)
-            idx += 1
-        return ns
+        return _namespace(argv, positional_names, flag_spec,
+                          int_positionals=self._INT_POSITIONALS, int_flags=_INT_FLAGS)
 
 
 class InProcessDagManage:
-    """dag-manage.py's `list` and `status` in-process: a process start per plan is the biggest
-    single cost in the suite.
+    """dag-manage.py's own commands, in-process: a process start per plan is the biggest single cost
+    in the suite.
 
     conduct_pipeline.py asks dag-manage for the ready set *through a subprocess* (`ranked_ready_nodes`
     shells out on purpose: the ranking must have exactly one implementation). This keeps that call
     shape -- argv in, stdout JSON out, non-zero exit -> fallback -- while running dag-manage's own
-    `cmd_list` / `cmd_status` here.
+    `cmd_list` / `cmd_status` / `cmd_add` / `cmd_depend` / `cmd_undepend` here.
+
+    `_SPEC` and `_CALLS` are the one thing restated from that CLI, and they are the whole of what
+    `handle` reads an argv with: which positional is called what, which flag lands in which namespace
+    attribute, what its default is, and which `cmd_*` runs the verb.
+    `TestContract.test_the_harness_restates_the_dag_parser` pins that restatement against dag-manage's
+    own parser, item by item.
     """
 
     _mod = None
@@ -269,6 +289,37 @@ class InProcessDagManage:
     #: know which node the graph just grew. `add` prints it and the pipeline parses it, so this is
     #: the same fact, kept where a test does not have to parse.
     last_added = None
+
+    #: The verbs the pipeline reaches dag-manage with, in the same shape as `FastStateManage._SPEC`:
+    #: positional names, then per-flag (namespace attribute, takes a value, default). The keys are
+    #: the whole of what `handle` serves: a verb not in here is answered with a non-zero exit.
+    _SPEC = {
+        'add': (('title', 'description'),
+                {'--desc': ('desc', True, None),
+                 '--depends-on': ('depends_on', True, None),
+                 '--mode': ('mode', True, None),
+                 '--weight': ('weight', True, None),
+                 '--tags': ('tags', True, None)}),
+        'list': ((), {'--ready': ('ready', False, False),
+                      '--status': ('status', True, None),
+                      '--verbose': ('verbose', False, False),
+                      '-v': ('verbose', False, False),
+                      '--limit': ('limit', True, 0),
+                      '-n': ('limit', True, 0),
+                      '--tags': ('tags', True, None)}),
+        'status': (('uuid', 'status'), {}),
+        'depend': (('uuid',), {'--on': ('on', True, None)}),
+        'undepend': (('uuid', 'dep'), {'--from': ('from_', True, None)}),
+    }
+    #: Verb -> the module's own command function, by name (`getattr(mod, ...)`).
+    _CALLS = {'add': 'cmd_add', 'list': 'cmd_list', 'status': 'cmd_status',
+              'depend': 'cmd_depend', 'undepend': 'cmd_undepend'}
+    #: Verb -> the positionals its parser declares `nargs='*'`.
+    _VARIADIC = {'add': ('description',)}
+    #: Destinations dag-manage's parser declares `type=int` (`list --limit/-n`); there are no
+    #: int-typed positionals on the five verbs.
+    _INT_FLAGS = ('limit',)
+    _INT_POSITIONALS = ()
 
     @classmethod
     def module_for(cls, project: Path):
@@ -286,7 +337,7 @@ class InProcessDagManage:
     def handle(cls, project: Path, argv):
         """Answer one `dag-manage ...` argv the way the real process would.
 
-        The pipeline needs five commands: `list [-n N]` (the tool's own node ranking), `status <node>
+        The five verbs the pipeline needs: `list [-n N]` (the tool's own node ranking), `status <node>
         completed|shelved` (the close marks the node), and -- for the maintenance channel's graph edit
         (`conduct_pipeline_impl.maintenance`) -- `add`, `depend` and `undepend`. Each one calls the
         project's own `cmd_*`, so a uuid is really minted and an edge is really written; only the
@@ -295,76 +346,23 @@ class InProcessDagManage:
         """
         mod = cls.module_for(project)
         verb = argv[2] if len(argv) > 2 else None
+        if verb not in cls._SPEC:
+            return _FakeProc(1, '', f'this hook does not serve: {argv}')
         out, err = io.StringIO(), io.StringIO()
-        real_out, real_err = sys.stdout, sys.stderr
-        sys.stdout, sys.stderr = out, err
         try:
-            with chdir(project):
-                if verb == 'list':
-                    limit = int(argv[argv.index('-n') + 1]) if '-n' in argv else 0
-                    tags = argv[argv.index('--tags') + 1] if '--tags' in argv else None
-                    ns = mod.argparse.Namespace(status=None, ready='--ready' in argv,
-                                                verbose=False, limit=limit, tags=tags)
-                    mod.cmd_list(ns)
-                elif verb == 'status' and len(argv) > 4:
-                    ns = mod.argparse.Namespace(uuid=argv[3], status=argv[4])
-                    mod.cmd_status(ns)
-                elif verb == 'add':
-                    ns = cls._add_namespace(mod, argv[3:])
-                    mod.cmd_add(ns)
+            with patched(sys, 'stdout', out), patched(sys, 'stderr', err), chdir(project):
+                ns = _namespace(argv[3:], *cls._SPEC[verb], variadic=cls._VARIADIC.get(verb, ()),
+                                int_positionals=cls._INT_POSITIONALS, int_flags=cls._INT_FLAGS)
+                getattr(mod, cls._CALLS[verb])(ns)
+                if verb == 'add':
                     # `apply` reads the new node's uuid off this command's stdout, so the answer
                     # here IS what the real process prints (`Node created: <uuid>`); the line below
                     # keeps the last one on the class, for a test that wants to know which node the
                     # graph just grew without parsing anything.
                     cls.last_added = out.getvalue().split(':', 1)[1].split()[0]
-                elif verb == 'depend' and len(argv) > 4:
-                    ns = mod.argparse.Namespace(uuid=argv[3], on=argv[argv.index('--on') + 1])
-                    mod.cmd_depend(ns)
-                elif verb == 'undepend' and len(argv) > 3:
-                    # `undepend <uuid> <dep>` (positional) is what the pipeline emits; `--from` is
-                    # the flag spelling the real parser also accepts.
-                    if argv[3].startswith('--'):
-                        ns = mod.argparse.Namespace(uuid=argv[4], dep=None,
-                                                    from_=argv[argv.index('--from') + 1])
-                    else:
-                        ns = mod.argparse.Namespace(uuid=argv[3], dep=argv[4], from_=None)
-                    mod.cmd_undepend(ns)
-                else:
-                    return _FakeProc(1, '', f'this hook does not serve: {argv}')
         except SystemExit as e:                  # the real CLI's way of reporting a refusal
             return _FakeProc(e.code or 1, out.getvalue(), err.getvalue())
-        finally:
-            sys.stdout, sys.stderr = real_out, real_err
         return _FakeProc(0, out.getvalue(), err.getvalue())
-
-    @staticmethod
-    def _add_namespace(mod, rest):
-        """`dag-manage add` as the project's own parser declares it: title, then the description.
-
-        `title` is the first positional and `description` swallows the rest (nargs='*'), so a flag
-        has to cut the positional run short -- `cmd_add` joins whatever lands in `description`.
-        """
-        title, description, flags = None, [], {}
-        i = 0
-        while i < len(rest):
-            token = rest[i]
-            if token.startswith('--'):
-                key = token[2:].replace('-', '_')
-                if key in ('depends_on', 'mode', 'tags', 'desc', 'weight'):
-                    flags[key] = rest[i + 1]
-                    i += 2
-                    continue
-                i += 1
-                continue
-            if title is None:
-                title = token
-            else:
-                description.append(token)
-            i += 1
-        return mod.argparse.Namespace(
-            title=title, description=description, desc=flags.get('desc'),
-            depends_on=flags.get('depends_on'), mode=flags.get('mode'), tags=flags.get('tags'),
-            weight=flags.get('weight'))
 
 
 class _FakeProc:
@@ -390,8 +388,6 @@ def _dag_hook(project: Path):
     reach dag-manage -- the loaded conduct_pipeline module, and `state-manage.py`'s own copies -- and
     only a patch on the shared module covers both.
     """
-    real_run = subprocess.run
-
     def hooked(argv, *a, **kw):
         # argv is [sys.executable, dag-manage.py, 'list', ...] -- the script is argv[1].
         try:
@@ -403,11 +399,8 @@ def _dag_hook(project: Path):
         return real_run(argv, *a, **kw)
 
     with _PIPELINE_CALL_LOCK:
-        subprocess.run = hooked
-        try:
+        with patched(subprocess, 'run', hooked) as real_run:
             yield load_pipeline()
-        finally:
-            subprocess.run = real_run
 
 
 _SIGNAL_MODULE = None
