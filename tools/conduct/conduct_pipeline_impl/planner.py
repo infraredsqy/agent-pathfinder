@@ -12,7 +12,7 @@ from . import maintenance, seam
 from .store import (_holding_ids, active_cycles, cycle_policy, find_cycle,
                     load_dag, load_signal, load_state, normalize_mode)
 from .instruct import live_instructions
-from .nodes import (blocked_reason, holding_ready_nodes, mode_for, node_in_tag_scope,
+from .nodes import (blocked_reason, holding_ready_nodes, mode_for, node_in_tag_scope, node_row,
                     pick_node, ranked_ready_nodes, tag_blocked_ready_nodes)
 from .prompts import started_marker
 from .actions import (_ask, _close_commands, _dispatch_many, _maintenance_due,
@@ -271,7 +271,7 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
         # Nothing is being filled this round: either the close says stop, or the ready set has
         # nothing. Only then does the stop rule decide -- a line with nodes still in hand and a slot
         # to fill carries on regardless.
-        must_stop, why = stop_criterion(project, cycle, _node_row(dag, node_id), dag=dag)
+        must_stop, why = stop_criterion(project, cycle, node_row(dag, node_id), dag=dag)
         if must_stop:
             decision, stop_why = 'stop', why
 
@@ -406,7 +406,7 @@ def _close_last_node(project: Path, cycle: dict, node_id: str, sig: dict,
 
     stop_why = ''
     if carry_on:
-        must_stop, why = stop_criterion(project, cycle, _node_row(dag, node_id), dag=dag)
+        must_stop, why = stop_criterion(project, cycle, node_row(dag, node_id), dag=dag)
         if must_stop:
             decision, stop_why = 'stop', why
     next_node = None
@@ -522,10 +522,3 @@ def _named_node_outside_scope(dag: dict, node_id: str, tags) -> list | None:
     if not node_tags or node_in_tag_scope(node, tags):
         return None
     return node_tags
-
-
-def _node_row(dag: dict, node_id: str) -> dict:
-    """图里那一格，并把 id 交进去 —— id 是记录的键，行里没有它。停手判据读的就是这一份。"""
-    row = dict((dag.get('nodes') or {}).get(node_id) or {})
-    row['id'] = node_id
-    return row

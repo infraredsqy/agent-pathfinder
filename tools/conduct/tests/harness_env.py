@@ -62,7 +62,7 @@ GIT = shutil.which('git')
 
 #: The pipeline, kept as a literal on purpose: a test comparing the tools' own tables has to state
 #: the expectation itself, not ask the tool what it thinks the answer is.
-TERMINAL_ACTIONS = ('stop_pipeline', 'ask_user', 'no_cycle', 'fail_hard')
+TERMINAL_ACTIONS = ('stop_pipeline', 'ask_user', 'no_cycle')
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

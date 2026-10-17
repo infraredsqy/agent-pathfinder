@@ -224,6 +224,17 @@ def record_bytes(data: dict) -> bytes:
     return _shared('pf_shared_jsonio', 'jsonio.py').json_bytes(data)
 
 
+def write_record_bytes(path, payload: bytes) -> None:
+    """把这串字节落到这个路径：判据与落盘出自同一棵树。
+
+    `record_bytes` 给出「这个项目该写成什么样」，这里把它写下去，两件都用本树的
+    `tools/shared/jsonio.py`。合并驱动经这两道门问同一个写方：草稿 / 演练副本用
+    `DSH_CONDUCT_STATE_DIR` 指向真工具时，不会拿一棵树的判据去对另一棵树的落盘。谁持锁、写完之后
+    怎么收场是调用方的事，这里只有这次落盘。
+    """
+    _shared('pf_shared_jsonio', 'jsonio.py').atomic_write_bytes(path, payload)
+
+
 def _read_json(path: Path, label: str) -> dict | None:
     """One record read strict, or the command ends with the reader's own words.
 

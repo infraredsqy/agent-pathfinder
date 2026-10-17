@@ -7,7 +7,7 @@ import json
 import sys
 
 from .store import (_holding_ids, _ledger_lock, _now, _read_dag, _read_instructions, _read_state,
-                    _write_instructions)
+                    _write_instructions, ledger_dir_for)
 from .pipeline_loader import _load_pipeline
 
 
@@ -120,20 +120,6 @@ def _position(project: str | None = None, node: str | None = None) -> tuple:
     return (cycle['id'], holding[0] if holding else None)
 
 
-def _dag_nodes(project: str | None = None) -> dict:
-    """The DAG's nodes: the one fact a `node` entry is measured against (is that node completed?).
-
-    Read through the store's door for the fourth record, `<project>/.pf/ideas.json`.
-    """
-    return _read_dag(project)
-
-
-def _active_cycles(project: str | None = None) -> set:
-    """这个项目此刻在服务的线：scope 判定要的那一半事实（另一半是 DAG 的节点表）。"""
-    return {c.get('id') for c in _read_state(project).get('cycles', [])
-            if c.get('status') == 'active' and c.get('id')}
-
-
 def _fold(entry: dict) -> dict:
     """One entry as the reader-facing view carries it: the sentence, where it is visible, how it is
     delivered. Ids and bookkeeping stay in the account."""
@@ -231,7 +217,7 @@ def _new_entry_binding(scope: str, cycle: str | None, node: str | None,
     cycle_id = cycle if cycle is not None else (active[0]['id'] if len(active) == 1 else None)
 
     if node is not None:
-        nodes = _dag_nodes()
+        nodes = _read_dag()
         if nodes and node not in nodes:
             print(f'Error: --node {node!r} is not in the DAG', file=sys.stderr)
             sys.exit(1)
@@ -348,7 +334,8 @@ def cmd_instruction_list(as_json: bool, live_only: bool, project: str | None = N
         # 默认视图：位置由 `_position` 读出来，读不读由管道的那一个判定说了算
         # （`instruction_in_scope`）—— 收尾结算一个节点时站的是同一个位置，用的是同一个判定。
         cur_cycle, cur_node = _position(project, node=node)
-        nodes, active = _dag_nodes(project), _active_cycles(project)
+        # scope 判定要的两件事（图里的节点表、此刻在服务的线）由判定那一侧读：这一侧不拼第二份。
+        nodes, active = rules._scope_facts(ledger_dir_for(project).parent)
         visible = [_fold(i) for i in all_items
                    if _is_live(i)
                    and rules.instruction_in_scope(i, nodes, active,

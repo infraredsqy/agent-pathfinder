@@ -21,7 +21,8 @@ from harness import (  # noqa: E402
     _dag_hook as harness_dag_hook,
 )
 
-__all__ = ['TestCLIEntryPoints', 'TestRobustness', 'TestOneSpawner', 'TestTheSpawnerShell']
+__all__ = ['TestCLIEntryPoints', 'TestRobustness', 'TestOneSpawner', 'TestTheSpawnerShell',
+           'TestDSHSpawnFailures']
 
 SPAWN_DIR = CONDUCT_DIR / 'spawn'
 SPAWN_COMMON = SPAWN_DIR / 'spawn-common.ps1'
@@ -275,6 +276,30 @@ class TestCLIEntryPoints(Base):
         self.assertEqual([step['result'] for step in sb.path()], ['completed'])
         self.assertEqual(sb.dag_status(NODE), 'completed')
         self.assertEqual(sb.cycle()['status'], 'inactive')
+
+    def test_apply_names_the_node_it_settles(self):
+        """手里握着两格时，`apply --after <node>` 说出这次结算的是哪一格。
+
+        不给 `--after` 时这条入口读不出该结算谁 —— 手里不止一格，所以那一趟只报 `wait`，一个字节
+        都不写；点名之后与 `pf next --after` 是同一件事：path 记一步、DAG 标 completed。
+        """
+        sb = self.make()
+        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE2, '另一条支线', mode='auto')
+        sb.start_cycle(parallel=2)
+        sb.write_signal('cyc', NODE2, 'completed', 'pf-conduct 做完了')
+
+        blind = self.pipeline_cli(sb, 'apply', '--project', sb.root, '--json')
+
+        self.assertEqual(blind.returncode, 0, blind.stderr)
+        self.assertEqual('wait', json.loads(blind.stdout)['action'], blind.stdout)
+        self.assertEqual([], sb.path(), '没点名的那一趟结算了一格')
+
+        named = self.pipeline_cli(sb, 'apply', '--project', sb.root, '--after', NODE2, '--json')
+
+        self.assertEqual(named.returncode, 0, named.stderr)
+        self.assertEqual([step['node'] for step in sb.path()], [NODE2])
+        self.assertEqual(sb.dag_status(NODE2), 'completed')
 
     def test_the_closing_answers_are_refused_without_a_preview(self):
         """收尾的回答没有可结算的那一问时被拒 —— 与 `pf next` 同一条口径。
@@ -564,3 +589,31 @@ class TestTheSpawnerShell(Base):
                          '这一拍把标记搬进了那个目录里')
         self.assertEqual([], sorted(item.name for item in path.parent.glob('*.tmp-*')),
                          '这一拍在标记目录里留下了临时文件')
+
+
+class TestDSHSpawnFailures(Base):
+    """`spawn/dsh-spawn.ps1`：DSH 这一半自己的失败拍，真进程驱动。
+
+    整条链的下一棒全押在这个脚本上，所以开不出会话的每一拍都要留下降级标记。基址不成形是这一半
+    在**任何调用之前**就断掉的那一拍（URL 读到就判），所以这一趟碰不到任何端点 —— 而标记照样落盘。
+    """
+
+    CYCLE = 'dsh-base-case'
+
+    def test_a_malformed_base_url_leaves_the_marker(self):
+        if not shutil.which('pwsh'):
+            self.skipTest('pwsh is not on PATH')
+        sb = self.make()
+        prompt = sb.root / 'prompt.txt'
+        prompt.write_text('# /pf-conduct drill\n', encoding='utf-8')
+        marker = _marker_module().marker_path(sb.root, self.CYCLE)
+        proc = subprocess.run(['pwsh', '-NoProfile', '-File', str(SPAWN_DIR / 'dsh-spawn.ps1'),
+                               '-CycleId', self.CYCLE, '-PromptFile', str(prompt),
+                               '-WorkspacePath', str(sb.root), '-MarkerPath', str(marker),
+                               '-WebUrl', 'http://:8080'],
+                              capture_output=True, text=True, encoding='utf-8', errors='replace')
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertTrue(marker.is_file(), '基址不成形那一拍没留下降级标记')
+        record = json.loads(marker.read_text(encoding='utf-8'))
+        self.assertEqual(record['cycle_id'], self.CYCLE)
+        self.assertEqual(record['phase'], 'auth')

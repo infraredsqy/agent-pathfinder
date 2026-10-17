@@ -264,6 +264,15 @@ def ideas_bytes(data: dict) -> bytes:
     return _shared('pf_shared_jsonio', 'jsonio.py').json_bytes(data, sort_keys=True)
 
 
+def write_ideas_bytes(path, payload: bytes) -> None:
+    """把这串字节落到这个路径：`ideas_bytes` 的判据与这里的落盘出自同一棵树。
+
+    合并驱动经这两道门问同一个写方（本树的 `tools/shared/jsonio.py`），所以它不会拿一棵树的格式
+    判完、再用另一棵树的写法落盘。谁持锁、写完之后怎么收场是调用方的事，这里只有这次落盘。
+    """
+    _shared('pf_shared_jsonio', 'jsonio.py').atomic_write_bytes(path, payload)
+
+
 def _write(data: dict) -> None:
     """Atomically write ideas.json: temp file, fsync, a replace that tolerates a live reader.
 

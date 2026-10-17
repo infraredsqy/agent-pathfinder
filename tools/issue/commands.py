@@ -67,8 +67,9 @@ def _gate(source, name, default):
 
     A batch row that writes `null` for one of these has said something a record cannot hold, so the
     `null` travels on to the checks in `build_issue_record` and the whole batch stops there, naming
-    the row. A key that is simply absent takes the default -- and so does every one of them on the
-    command line, where `argparse` hands a flag that was not passed over as `None`.
+    the row. A key that is simply absent takes the default -- and the command line cannot spell
+    anything else: a flag that was not passed over arrives either as `None` or as the parser's own
+    default, and both land on the same value.
     """
     if isinstance(source, dict):
         return source.get(name, default)

@@ -249,7 +249,7 @@ class Driver:
         """No returned action carries commands for the caller to RUN.
 
         An action that answers "nothing to do" may say so with an empty list (`commands: []` on
-        `ask_user` / `no_cycle` / `fail_hard`) -- there is nothing in it to run, so it is not a
+        `ask_user` / `no_cycle`) -- there is nothing in it to run, so it is not a
         handover. A populated list is, and that is what the action set must never contain.
         """
         return [a for a in self.actions if a.get('commands')]

@@ -85,6 +85,10 @@ def _snapshot(project: Path, cycle_id: str) -> tuple:
     return (sigs, bool(cycle.get('path')), cycle.get('status'))
 
 
+#: `_snapshot`'s three positions, by name: `progress` reports them under these keys, in this order.
+_SNAPSHOT_FIELDS = ('hand', 'path', 'status')
+
+
 def _claim_pid(body: str) -> int | None:
     """The pid a claim body opens with (`<pid> started <iso>`); None when there is none to read.
 
@@ -373,9 +377,10 @@ def apply(project, cycle_id: str | None = None, decision: str | None = None,
                 ran.append(maintenance.substitute(list(add_command), node_id))
                 action['node_id'] = node_id
                 if action.get('prompt'):
-                    # The prompt file's path names the node, and the node had no name until now. The
-                    # text inside it does not: it is the same three blocks whatever the node turns
-                    # out to be called, so it was written above without waiting.
+                    # The path the action reports names the node, and the node had no name until now.
+                    # The placeholder's own file was written above and is never read: the re-plan this
+                    # rebind feeds writes the real node's prompt, and `_prune_launch_dirs` sweeps the
+                    # placeholder's directory away.
                     action['prompt'] = str(launch_prompt_path(project, action['cycle'], node_id))
                 add_command = None
                 done += 1
@@ -400,8 +405,8 @@ def apply(project, cycle_id: str | None = None, decision: str | None = None,
             f'changed (before={before_state}, after={after_state})')
     action['applied'] = True
     action['did'] = [seam.as_text(c) for c in ran + commands]
-    action['progress'] = {'before': {'node': before_state[0], 'signal': before_state[1]},
-                          'after': {'node': after_state[0], 'signal': after_state[1]}}
+    action['progress'] = {'before': dict(zip(_SNAPSHOT_FIELDS, before_state)),
+                          'after': dict(zip(_SNAPSHOT_FIELDS, after_state))}
     action.pop('commands', None)
     # An open_node is a dispatch in disguise: run the follow-up too, so callers have exactly one
     # shape to handle ("spawn a session with this prompt"). A maintenance_due is the same deal: the
@@ -444,7 +449,7 @@ def record(project, cycle_id: str | None = None) -> dict:
             return apply(project, cycle_id, action=action)
         if kind == 'stop_pipeline':
             return apply(project, cycle_id, action=action) if commands else action
-        if kind in ('wait', 'ask_user', 'no_cycle', 'fail_hard'):
+        if kind in ('wait', 'ask_user', 'no_cycle'):
             return action
         if commands:
             apply(project, cycle_id, action=action)
