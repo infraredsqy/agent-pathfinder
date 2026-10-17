@@ -33,8 +33,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import NODE, NODE2, Base, added  # noqa: E402
-from harness import CONDUCT_DIR, TOOLS_DIR, run_dag, run_state_manage
-from harness_env import _fresh_module
+from harness import CONDUCT_DIR, TOOLS_DIR, _fresh_module, run_dag, run_state_manage  # noqa: E402
 
 __all__ = ['TestAddNotesTheBirthSession', 'TestTheRunNoteAtDispatch', 'TestTheSpawnerResultLine',
            'TestTheNoteItself', 'TestSessionReadsAndImport', 'TestTheRecordDoors',

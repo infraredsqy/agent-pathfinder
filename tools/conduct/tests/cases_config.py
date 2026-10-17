@@ -29,7 +29,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from harness_env import STATE_MANAGE, TOOLS_DIR, init_markers, run_argv  # noqa: E402
+from harness import STATE_MANAGE, TOOLS_DIR, init_markers, run_argv  # noqa: E402
 
 __all__ = ['TestConfig']
 

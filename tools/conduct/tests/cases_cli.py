@@ -14,13 +14,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from cases_base import ACTION_VOCABULARY, Base, NODE, NODE2, normalise, pipeline, skill_of  # noqa: E402
+from cases_base import Base, NODE, NODE2, normalise, pipeline, skill_of  # noqa: E402
 from harness import (  # noqa: E402
-    CONDUCT_DIR, PIPELINE_PATH, SIGNAL_KEYS, SKILLS, STATE_MANAGE, WorkerSession, finish_node,
-    run_state_manage,
+    CONDUCT_DIR, PIPELINE_PATH, STATE_MANAGE, WorkerSession, _child_env, _fresh_module,
+    finish_node, patched, run_argv, run_state_manage,
     _dag_hook as harness_dag_hook,
 )
-from harness_env import _fresh_module, patched, run_argv  # noqa: E402
 
 __all__ = ['TestCLIEntryPoints', 'TestRobustness', 'TestOneSpawner', 'TestTheSpawnerShell']
 

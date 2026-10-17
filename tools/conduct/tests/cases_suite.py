@@ -1,32 +1,33 @@
 """The rules about the tests themselves, pinned where the suite can go red on them.
 
-Three of them, each a fault the suite would otherwise carry silently: a session start spliced into a
+Four of them, each a fault the suite would otherwise carry silently: a session start spliced into a
 case's command line (the drill switch would be the only thing left holding it), a `cases_*.py` that
-only imports once something else has run, and a shipped `.ps1` edited without its BOM -- the cases
-drive these through pwsh 7, which reads either encoding, so a lost BOM leaves the suite green.
+only imports once something else has run, an entry-point header that names a class nothing defines,
+and a shipped `.ps1` edited without its BOM -- the cases drive these through pwsh 7, which reads
+either encoding, so a lost BOM leaves the suite green.
 """
 
 from __future__ import annotations
 
 import ast
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from harness_env import HERE, TOOLS_DIR, run_argv  # noqa: E402
-from harness_sandbox import SPAWN_FLAG  # noqa: E402
+from harness import HERE, SPAWN_FLAG, TOOLS_DIR, run_argv  # noqa: E402
 
 __all__ = ['TestNoRealDispatchInTheSuite', 'TestEveryCasesFileStandsAlone',
-           'TestShippedPowerShellCarriesItsBom']
+           'TestTheHeaderNamesRealClasses', 'TestShippedPowerShellCarriesItsBom']
 
 #: The repo root this checkout is a worktree of. The shipped tree is everything under it.
 ROOT = TOOLS_DIR.parent
-#: The one file allowed to bind the spawn flag -- read from `harness_sandbox.SPAWN_FLAG`, never
-#: spelled here: `Sandbox.spawn_next` builds its argv from that name, and it is the suite's only door
-#: to a call that could open a session.
+#: The one file allowed to bind the spawn flag -- read from `harness.SPAWN_FLAG` (which
+#: `harness_sandbox.py` owns), never spelled here: `Sandbox.spawn_next` builds its argv from that
+#: name, and it is the suite's only door to a call that could open a session.
 SPAWN_OWNER = 'harness_sandbox.py'
 
 
@@ -123,6 +124,29 @@ class TestEveryCasesFileStandsAlone(unittest.TestCase):
         self.assertEqual(set(), on_disk - imported,
                          'a cases file on disk is not collected by the entry point, so its cases '
                          f'never run: {sorted(on_disk - imported)}')
+
+
+class TestTheHeaderNamesRealClasses(unittest.TestCase):
+    """The entry point's own list of what it covers names classes the suite really collects.
+
+    That list is the suite's only statement of what is guarded; a reader who follows it to a class
+    that was renamed or folded away has been told something untrue about the suite.
+    """
+
+    def test_every_test_class_the_entry_point_names_exists(self):
+        entry = (HERE / 'test_conduct_pipeline.py').read_text(encoding='utf-8')
+        header = ast.get_docstring(ast.parse(entry)) or ''
+        named = set(re.findall(r'\bTest[A-Z][A-Za-z0-9_]*\b', header))
+        self.assertTrue(named, 'the header names no class at all: the reading is wrong')
+
+        defined = set()
+        for path in HERE.glob('cases_*.py'):
+            for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
+                if isinstance(node, ast.ClassDef) and node.name.startswith('Test'):
+                    defined.add(node.name)
+        self.assertEqual(set(), named - defined,
+                         'the header names classes no cases file defines: '
+                         f'{sorted(named - defined)}')
 
 
 class TestShippedPowerShellCarriesItsBom(unittest.TestCase):

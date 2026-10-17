@@ -1,4 +1,4 @@
-"""The sandbox: `_SANDBOX_SEQ` and the `Sandbox` throwaway temp project every test drives.
+"""The sandbox: the `Sandbox` throwaway temp project every test drives, and the spawn flag.
 
 Owns the fixture builders for the on-disk world the pipeline reads, and the two ways of
 running the tools against it: in-process by default, `cli=True` through the real processes.
@@ -14,12 +14,12 @@ import tempfile
 from pathlib import Path
 
 import harness_proc as hproc
-from harness_env import (DAG_MANAGE, SPEC_OF, SPAWN_DRY_RUN, STATE_MANAGE, _child_env, _decode,
+from harness_env import (DAG_MANAGE, SPAWN_DRY_RUN, STATE_MANAGE, _child_env, _decode,
                          chdir, init_markers, patched, spawn_dry_run)
 from harness_fast import FastStateManage, InProcessDagManage, _dag_hook, _signal_module
 from harness_proc import _cycle_of, _kw, _json_out
 
-__all__ = ['SPAWN_FLAG', 'STUB_LINE', '_SANDBOX_SEQ', 'Sandbox']
+__all__ = ['SPAWN_FLAG', 'Sandbox']
 
 _SANDBOX_SEQ = 0
 
@@ -29,7 +29,7 @@ _SANDBOX_SEQ = 0
 SPAWN_FLAG = '--spawn'
 
 #: The line a stand-in spawner prints: the shape `conduct_spawn.session_id_of` reads an id out of.
-STUB_LINE = 'spawned: session session-stub (node session)'
+_STUB_LINE = 'spawned: session session-stub (node session)'
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -81,16 +81,6 @@ class Sandbox:
             self._tmp.cleanup()
         except OSError:
             pass
-
-    def make(self, **kw):
-        """A second throwaway project in the same test (for A/B comparisons)."""
-        return Sandbox(**kw)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self.close()
 
     # ── test setup only: building the world the pipeline will CONSUME ────────
     # Fixture data: the graph, a node's directory, a forge for hand-written state. Nothing here
@@ -148,12 +138,6 @@ class Sandbox:
 
     def node(self, uid):
         return self.dag()['nodes'].get(uid)
-
-    def spec_path(self, uid):
-        return SPEC_OF % uid
-
-    def node_dir(self, uid):
-        return self.root / '.pf' / 'nodes' / uid
 
     def temp_dir(self, uid):
         """Where a node's generated history goes: scratch, and NOT the node's ledger directory."""
@@ -225,18 +209,9 @@ class Sandbox:
         """`cycle policy <cycle> <key> <value>`: one of the line's own policies."""
         return self._tool('cycle', 'policy', cycle_id, key, value, cli=cli, check=check)
 
-    def with_started(self, **kw):
-        """This sandbox, with a cycle started in it (the fluent form of `start_cycle`)."""
-        self.start_cycle(**kw)
-        return self
-
     def set_current_node(self, node_id, cycle_id='cyc', check=True):
         """`cycle hold <cycle> <node>`: what `conduct_pipeline` runs to pin a cycle on a node."""
         return self._tool('cycle', 'hold', cycle_id, node_id, check=check)
-
-    def close_node(self, node_id, cycle_id='cyc', result='completed', check=True):
-        """`cycle close <cycle> <node> --result ...`: what the closing call runs."""
-        return self._tool('cycle', 'close', cycle_id, node_id, '--result', result, check=check)
 
     def clean_temp(self, node=None, yes=False, project=None, check=True):
         args = ['clean-temp', '--project', str(project or self.root)]
@@ -375,7 +350,7 @@ class Sandbox:
         (a failing one). Never a host spawner: what a case does with this path is hand it to
         `--spawner`, on the rail that has taken the drill switch back out.
         """
-        script = body if body is not None else 'Write-Output "%s"\n' % (line or STUB_LINE)
+        script = body if body is not None else 'Write-Output "%s"\n' % (line or _STUB_LINE)
         path = self.root / name
         path.write_text(script, encoding='utf-8')
         return path
@@ -538,11 +513,6 @@ class Sandbox:
 
     def path_nodes(self, cycle_id='cyc'):
         return [step.get('node') for step in self.path(cycle_id)]
-
-    def signal_of(self, cycle_id='cyc'):
-        """The signal of the node the cycle currently carries, or None."""
-        node = self.current_node(cycle_id)
-        return self.read_signal(cycle_id, node) if node else None
 
     def read_instructions(self):
         return _decode(self.root / '.pf' / 'instructions.json') or {'instructions': []}

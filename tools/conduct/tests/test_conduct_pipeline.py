@@ -22,9 +22,8 @@ an earlier version did, and that is exactly what let a missing bookkeeping call 
 tests.
 
 Speed is part of the contract here: the whole suite must finish in a few seconds, so `load_tests`
-hands `unittest discover` the same suite this file runs directly -- the parallel runner first, the
-serial tail behind it. See harness.py for what is driven in-process versus as a process -- and for
-the one test that pins the two together.
+hands `unittest discover` the same suite this file runs directly. See harness.py for what is driven
+in-process versus as a process -- and for the one test that pins the two together.
 
 What this suite is organised around
 -----------------------------------
@@ -36,7 +35,8 @@ What this suite is organised around
   4. the invariants that each cost a bug (the stop rule, tags as a pick filter, `wait` being
      stable, plan being read-only)
   5. the levers that survive: `cycle retry` + `cycle hold`, `--stop`, `clean-temp`
-  6. the defects found while writing it: `TestKnownBugs`
+  6. the guards each of those costs: `TestCloseGuards` (the close), `TestSignalGuards` (a forged
+     ticket), `TestCleanTemp` (the sweep, and a state it cannot read)
   7. `TestEndToEnd`: the whole walk through the real CLI, with a dry-run spawn and no session
 """
 
@@ -59,10 +59,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # one would run every case twice.
 from cases_base import *          # noqa: F401,F403
 from cases_node import *          # noqa: F401,F403
+from cases_select import *        # noqa: F401,F403
 from cases_instruct import *      # noqa: F401,F403
 from cases_contract import *      # noqa: F401,F403
+from cases_close import *         # noqa: F401,F403
 from cases_recovery import *      # noqa: F401,F403
 from cases_maintenance import *   # noqa: F401,F403
+from cases_maintenance_run import *  # noqa: F401,F403
 from cases_cli import *           # noqa: F401,F403
 from cases_e2e import *           # noqa: F401,F403
 from cases_ledger_merge import *  # noqa: F401,F403

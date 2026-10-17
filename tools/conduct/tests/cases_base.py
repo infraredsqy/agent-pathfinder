@@ -76,16 +76,6 @@ class Base(unittest.TestCase):
         self.addCleanup(sb.close)
         return sb
 
-    def independent(self, count=2):
-        """A sandbox whose nodes do not depend on each other.
-
-        Used wherever the subject is one node's own record, not the graph.
-        """
-        sb = self.make()
-        for i in range(count):
-            sb.add_node(f'n{i}-0000-4000-8000-00000000000{i}', f'节点 {i}', mode='auto')
-        return sb
-
     def run_to_stop(self, sb, cycle='cyc', closer=None, worker=None, max_steps=80):
         driver = Driver(sb, cycle, closer=closer, worker=worker, max_steps=max_steps)
         return driver.run(), driver

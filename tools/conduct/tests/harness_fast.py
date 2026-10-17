@@ -228,8 +228,6 @@ class FastStateManage:
     def _dispatch(self, argv) -> int:
         mod = self.mod
         argv = list(argv)
-        if len(argv) > 1 and Path(str(argv[1])).name == 'dag-manage.py':
-            argv[1] = str(DAG_MANAGE)
         if argv[0] == 'instruction':
             sub = argv[1] if len(argv) > 1 else None
             if sub not in self._INSTRUCTION_SPEC:

@@ -1,7 +1,7 @@
 """The real subprocesses and the CLI-call helpers: `_run_proc`, `run_state_manage`, `run_dag`,
-`run_signal`, `run_handoff`, plus the small CLI helpers `_cycle_of`, `_kw`, `_json_out`,
-`next_action`, `plan_action`. `run_state_manage` stays a module-level global: the test suite
-patches it through this module object, and every call site must see the patch.
+`run_signal`, `run_handoff`, plus the small CLI helpers `_cycle_of`, `_kw`, `_json_out`.
+`run_state_manage` stays a module-level global: the test suite patches it through this module
+object, and every call site must see the patch.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from harness_env import DAG_MANAGE, HANDOFF_PY, SIGNAL_PY, STATE_MANAGE, run_arg
 
 __all__ = [
     "_run_proc", "run_state_manage", "run_dag", "run_signal", "run_handoff",
-    "_cycle_of", "_kw", "_json_out", "next_action", "plan_action",
+    "_cycle_of", "_kw", "_json_out",
 ]
 
 
@@ -115,13 +115,3 @@ def _json_out(proc, argv):
         raise AssertionError(f'no stdout could be read from: {" ".join(map(str, argv))}\n'
                              f'rc={proc.returncode}\nstderr={proc.stderr!r}')
     return json.loads(proc.stdout)
-
-
-def next_action(project: Path, *extra, plan: bool = False):
-    """The CLI's `next`: a thin wrapper over the module, parsed from its JSON."""
-    argv = ['next', '--json'] + (['--plan'] if plan else []) + list(extra)
-    return _json_out(run_state_manage(project, *argv), argv)
-
-
-def plan_action(project: Path, *extra):
-    return next_action(project, *extra, plan=True)

@@ -37,8 +37,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from harness_env import (CONDUCT_DIR, DAG_MANAGE, TOOLS_DIR, _child_env, _decode, init_markers,
-                         run_argv, shared_loader)  # noqa: E402
+from harness import (CONDUCT_DIR, DAG_MANAGE, TOOLS_DIR, _child_env, _decode, init_markers,
+                     run_argv, shared_loader)  # noqa: E402
 
 MERGE_PY = CONDUCT_DIR / 'ledger-merge.py'
 MERGE_PKG = CONDUCT_DIR / 'ledger_merge'
@@ -878,14 +878,23 @@ class TestAMissingToolIsAUsageError(LedgerCase):
         return run_argv(argv, cwd=self.root, env=child, check=False)
 
     def _nowhere(self, env_name: str):
-        return {env_name: str(self.root / 'nowhere' / 'the-tool')}
+        """The environment that aims `env_name` at a path holding no such tool."""
+        return {env_name: str(self.missing_tool())}
+
+    def missing_tool(self):
+        """The path those environments point at: what the refusal line has to name."""
+        return self.root / 'nowhere' / 'the-tool'
 
     def assertUsageError(self, proc, ours_data):
-        """One line on stderr naming the path, exit 2, and `<ours>` exactly as this case wrote it."""
+        """One line naming the path that came up empty, exit 2, `<ours>` exactly as this case wrote it."""
         self.assertEqual(2, proc.returncode, proc.stdout)
         self.assertNotIn('Traceback', proc.stderr)
         self.assertEqual(1, len(proc.stderr.strip().splitlines()), proc.stderr)
         self.assertIn('ledger-merge:', proc.stderr)
+        # The line spells the missing path either plainly or through the OS error's own `repr`
+        # (that one doubles every backslash); flatten the repr form before matching.
+        self.assertIn(str(self.missing_tool()), proc.stderr.replace('\\\\', '\\'),
+                      'a person has to read which path came up empty off this one line')
         self.assertEqual(tool_bytes(ours_data, sort_keys=self.SORT_KEYS),
                          self.side_path('ours').read_bytes(), '<ours> was touched')
 

@@ -25,9 +25,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import Base, NODE  # noqa: E402
-from harness import _run_proc, run_dag, run_signal  # noqa: E402
-from harness_env import (HANDOFF_PY, SIGNAL_PY, TOOLS_DIR, _child_env, _fresh_module, init_markers,
-                         load_pipeline, shared_loader)  # noqa: E402
+from harness import (HANDOFF_PY, SIGNAL_PY, TOOLS_DIR, _child_env, _fresh_module, _run_proc,
+                     init_markers, load_pipeline, run_dag, run_signal, shared_loader)  # noqa: E402
 
 __all__ = ['TestTheOneLoader', 'TestOneSharedDoor', 'TestOneReaderOneWording',
            'TestTheLockSerialisesANote', 'TestTheMarkerWaitsOutAReader', 'TestTheMarkerContract',
