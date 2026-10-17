@@ -127,7 +127,6 @@ class FastStateManage:
                       '--project': ('project', True, None), '--node': ('node', True, None)}),
         'resolve': (('ins_id',), {'--state': ('state', True, None),
                                   '--note': ('note', True, None),
-                                  '--superseded-by': ('superseded_by', True, None),
                                   '--project': ('project', True, None)}),
     }
     #: Verb -> the module function that verb runs, as `function(namespace)`.

@@ -5,7 +5,7 @@ the file has). What this engine adds to the generic walk:
 
   * `path` is append-only: a prefix extends, two different tails are merged in the order walked, and
     the same node recorded twice with two different outcomes is a conflict (`_path` hands that rule to
-    `_extend_or_union`, the one the instructions' `applied` log uses too)
+    `_extend_or_union`)
   * `status` is `active` / `inactive`: two sides naming two different words really do disagree, and a
     conflict is what a human settles -- never a coin toss
   * no cycle entry is ever deleted: neither tool has a command that removes one, so a missing entry is

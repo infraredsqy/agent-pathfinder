@@ -65,10 +65,6 @@ AUTO-MERGE  (no question asked)
   * state cycle `status`                              -> the two words are `active` / `inactive`;
                                                          two sides naming different ones is a fight
   * instructions resolution (state + its stamp)       -> the side whose `resolved_at` is newer
-  * instructions `applied`/`applied_rounds`
-    (append-only)                                     -> the longer list when one is a prefix of the
-                                                         other; else the two logs merged, ordered by
-                                                         `at`
   * signals                                           -> a terminal status beats a non-terminal one;
                                                          otherwise the newer file mtime (tie: ours)
 
@@ -85,8 +81,9 @@ FLAG  (nothing is written, exit 1, a human decides)
   * state cycle: `title` / `tags` / `policies` both changed to different values (`status` is
     reachable only as a real disagreement: two sides naming two different words)
   * instructions: the same `id` added by BOTH sides with different content (an add/add collision)
-  * instructions: any field both sides changed, except the resolution group and the applied log
-  * instructions: the same `applied` mark (same `at` + `cycle` + `round`) with different contents
+  * instructions: any field both sides changed, except the resolution group. The fields an older
+    tool wrote (`applied` / `applied_rounds` / `superseded_by`) are ordinary fields with no rule of
+    their own, so changing one on both sides lands here too
 
 NOTES  (deliberate consequences, worth knowing before trusting a clean merge)
 -----------------------------------------------------------------------------
@@ -100,10 +97,14 @@ NOTES  (deliberate consequences, worth knowing before trusting a clean merge)
   * A node deleted while another node still depends on it is checked (`ideas._flag_broken_dependency`),
     but only for edges THIS merge breaks: an edge already dangling on one side stays that side's
     problem, and `dag-manage validate` is the place for the graph as a whole.
-  * instructions: `state`/`resolved_at`/`resolved_by`/`superseded_by` are written by ONE code path
+  * instructions: `state`/`resolved_at`/`resolved_by` are written by ONE code path
     (`cmd_instruction_resolve`), so they are one act and the newer `resolved_at` wins for all of them.
     `note` deliberately does NOT travel with them: a hand-written note is never silently
     overwritten, so a `note` both sides changed is a conflict.
+  * instructions: an older tool's bookkeeping (`applied` / `applied_rounds` / `superseded_by`) is not
+    claimed by anything any more, so the driver gives it no rule. A record still carrying those
+    fields merges as it stands and needs no repair: a reader treats any `state` other than `live` as
+    archived, and these fields are ordinary data nobody reads.
   * Key order in the merged file: ours', with keys only theirs has appended (`ideas.json` is sorted
     by its own writer). An existing record is never reordered, so a merge that decides nothing new
     leaves the bytes alone -- and `run` skips the write entirely when they are unchanged.

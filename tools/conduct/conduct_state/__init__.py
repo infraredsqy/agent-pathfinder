@@ -79,10 +79,10 @@ __all__ = [
     'resolve_cycle_for_node', 'describe_holders',
 
     # instruct: the instruction account, the scope vocabulary, and what is visible from where
-    'valid_scopes', 'VALID_TARGETS', 'RESOLVE_STATES',
-    'CONSTRAINT_MARKS', 'CONSTRAINT_MARK_LABELS', '_scope_rules',
+    # instruct: the instruction account, the scope vocabulary, and what is visible from where
+    'LIVE_STATE', 'VALID_INSTRUCTION_STATES', 'valid_scopes', 'VALID_TARGETS', '_scope_rules',
     '_scope_from_flag', '_retired', '_is_live', '_cycle_of_node', '_position', '_dag_nodes',
-    '_active_cycles', '_fold', '_last_applied',
+    '_active_cycles', '_fold',
     '_instruct_empty_lines', '_nothing_visible_lines', 'SCOPE_WORDS', '_render_constraints',
     'cmd_instruction_add', 'cmd_instruction_list', 'cmd_instruction_resolve',
 
