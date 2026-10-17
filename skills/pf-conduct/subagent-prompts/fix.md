@@ -2,8 +2,6 @@
 
 > 位置：手段位——指挥者派来的。只修清单里那些问题，不再往下派任何人。
 
-先把 [`../subagent-anti-patterns/execute.md`](../subagent-anti-patterns/execute.md) 读一遍对照自查。
-
 第一件事：跑 `pf instruction list --project <项目根>`，看当前生效的用户指令，再动手。别读 `instructions.json`，跑命令。
 
 ## 你手上有什么
@@ -53,3 +51,7 @@ prompt 里点名——报告里把出处写一行就够。翻源码把"这个结
 
 自证用的脚本与原始输出落 `.pf/nodes/<节点 uuid>/temp/`，每个文件头一行写清它是什么、干什么用的
 ——下一个来看的人靠那一行认得出你当时在验什么。
+
+## 反模式
+
+开工前读 [`../subagent-anti-patterns/execute.md`](../subagent-anti-patterns/execute.md) 对照自查。

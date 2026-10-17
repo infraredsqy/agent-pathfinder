@@ -49,8 +49,8 @@ disable-model-invocation: true
 - **只能由用户或指挥位跑**：这份卡要派 subagent；被派来的手段位读到它，停手回报
 - 不判 `decision`、不修代码、不改 spec、不进图——挑选与排序是 DAG 的事
 - 撞见「该进图的新功能」记一句给机主，别自己建节点，那是 `/pf-route` 的活
-- 大规模重构信号（≥3 文件且要改模块间依赖）单独立一条 `decision=external`，建议转 `/engineering`
+- 大规模重构信号单独立一条，阈值与判据见 [`../shared/pf/pool.md`](../shared/pf/pool.md)
 
 ## 反模式
 
-开工前读 [`./anti-patterns.md`](./anti-patterns.md)。
+开工前读 [`./anti-patterns.md`](./anti-patterns.md) 对照自查。

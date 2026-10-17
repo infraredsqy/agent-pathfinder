@@ -12,8 +12,6 @@ disable-model-invocation: true
 
 把需求谈成 DAG 里的一个节点，或按用户要求改图、查图。只在用户面前出现，不被任何管线派发。
 
-> 参见 `./anti-patterns.md` 对照自查。
->
 > 先读 `../shared/pf/philosophy.md` 理解 pf 系统哲学；工具技巧见 `../shared/pf/toolcraft.md`。
 
 ## 角色定位
@@ -147,8 +145,7 @@ issue 池；给还没落笔的节点做一次选型对比，结论回填它的 s
 | agent 自己跑得出来（测试、脚本、探针、离线素材），过程不打扰你，每格收尾停下来等你一句「继续」 | `checkpoint` |
 | 真会议、用户看着界面点一下、他的手感与耳朵 | `manual` |
 
-三档的差别在**人闸的位置**：`auto` 没有人闸，收尾自己开下一格；`manual` 的闸在格子的会话里——
-整格就是与用户来回推进；`checkpoint` 的闸在收尾那一拍，循环内部照 `auto` 跑。
+三档的闸各在哪一拍、为什么这么定，见工具 checkout 里的 `docs/conduct-state.md`「结论与停手」。
 
 产物本身就是交付的活（一份盘点、一次选型、一份设定）照常跑，验收口径写「产物即交付」。需要用户介入才能判的验收，只能落在 `manual` 或 `checkpoint` 上：agent 只能 mock 整套系统自己跟自己对接，烧掉的钱和显存换不来那个结论。
 
@@ -169,7 +166,7 @@ issue 池；给还没落笔的节点做一次选型对比，结论回填它的 s
 
 **现在就做（不进图）：**
 
-派 subagent 去做，可以并行派几个（在飞的不超过 `pf config max_agents`，见 [`../shared/pf/agents.md`](../shared/pf/agents.md)），**它们只改文件，不提交**；做完向用户报告，提交在第五步一起做。
+派 subagent 去做，可以并行派几个（先按 [`../shared/pf/agents.md`](../shared/pf/agents.md) 数一遍在飞的），**它们只改文件，不提交**；做完向用户报告，提交在第五步一起做。
 三样东西归这条：
 
 - **文档、设计说明追上现状**：照 `doc-update` 走，只写已经实现的东西——docs/ 只装 ground truth 是这套系统的地基
@@ -227,4 +224,4 @@ issue 池；给还没落笔的节点做一次选型对比，结论回填它的 s
 
 ## 反模式
 
-参见 `./anti-patterns.md`。
+开工前读 [`./anti-patterns.md`](./anti-patterns.md) 对照自查。

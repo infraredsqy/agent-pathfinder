@@ -47,11 +47,11 @@ disable-model-invocation: true
 | 场景 | 处理 |
 |---|---|
 | 深聊某条的实现细节 | 建议转 `/engineering` |
-| 大规模重构信号（≥3 文件且要改模块间依赖） | 单独立一条，建议转 `/engineering`；别在池子里展开重构方案 |
+| 大规模重构信号 | 单独立一条（阈值与口径见 [`../shared/pf/pool.md`](../shared/pf/pool.md)），建议转 `/engineering` |
 | 要修一批 | `/pf-issue-repair` |
 | 池子该刷新了 | `/pf-issue-scan` |
 | 该进图的新功能 | `/pf-route` |
 
 ## 反模式
 
-开工前读 [`./anti-patterns.md`](./anti-patterns.md)。
+开工前读 [`./anti-patterns.md`](./anti-patterns.md) 对照自查。
