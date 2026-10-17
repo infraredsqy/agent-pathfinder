@@ -48,12 +48,12 @@ def describe_holders(cycles: list, node: str) -> str:
             f'Every cycle holds {heads or "none"}.')
 
 
-def cmd_next(cycle_id: str | None, mode: str, as_json: bool,
-             decision: str | None = None,
-             node: str | None = None, note: str = '', spawn: bool = False,
-             after: str | None = None, spawner: str | None = None,
-             project: str | None = None, decision_given: bool = False) -> None:
+def cmd_next(args) -> None:
     """Print (and, unless told otherwise, carry out) the pipeline's next action.
+
+    `args` is the parsed `next` line (state-manage's namespace): every field this command needs is read
+    here, off that one object. A new flag is therefore one line in the parser plus the one line here
+    that reads it -- no second place restating a default the parser already holds.
 
     The decision logic lives in conduct_pipeline.py, loaded by path so that every caller gets a
     module of its own (the test harness loads a fresh copy per sandbox). Two modes:
@@ -72,6 +72,11 @@ def cmd_next(cycle_id: str | None, mode: str, as_json: bool,
     that could not report it would be a second command for the worker to learn.
     """
     pipeline = _load_pipeline()
+    mode = 'plan' if args.plan else 'apply'
+    cycle_id, after, node, note = args.cycle, args.after, args.node, args.note
+    decision = 'continue' if args.cont else 'stop' if args.stop else None
+    decision_given = bool(args.cont or args.stop)
+    spawn, spawner, named_project, as_json = args.spawn, args.spawner, args.project, args.json
 
     # The closing call's answers answer a settle. With neither `--after` nor `--plan` there is no
     # question for them to answer, and the branch below would drop them on the floor in silence.
@@ -83,7 +88,7 @@ def cmd_next(cycle_id: str | None, mode: str, as_json: bool,
 
     # cwd 在 linked worktree 里时回主树：并行模式下收尾那几条命令是从 worktree 的 cwd 跑的，
     # 结转、挑人、prompt 全部落主树的记录与 scratch，worktree 只是代码检出。
-    project = (Path(project).expanduser().resolve() if project
+    project = (Path(named_project).expanduser().resolve() if named_project
                else _resolve_project_root(Path.cwd()))
 
     # 裸 `next` 是给「至多一条线在跑」的世界的简写。两条线并排时它不再是简写而是歧义——歧义
@@ -134,10 +139,7 @@ def cmd_next(cycle_id: str | None, mode: str, as_json: bool,
                                 decision_given=decision_given)
         elif mode == 'plan':
             action = pipeline.plan(project, cycle_id, decision=decision, node=node, note=note,
-                               decision_given=decision_given)
-            # A preview must not be runnable. A plan that carried commands was still mid-step.
-            if action.pop('commands', None):
-                action['settling'] = True
+                                   decision_given=decision_given)
         else:
             action = pipeline.record(project, cycle_id)
     except (RuntimeError, ValueError) as e:
@@ -181,15 +183,16 @@ def cmd_next(cycle_id: str | None, mode: str, as_json: bool,
         if skipped:
             action['spawn_skipped'] = skipped
         action['spawned'] = spawned if len(spawned) > 1 else (spawned[0] if spawned else '')
-    if as_json:
-        print(json.dumps(action, ensure_ascii=False, indent=2))
-    else:
-        print(pipeline._render(action))
+    # 输出只有一套：`render_action` 管 JSON 与人读的那一版，也管「预览不可执行」那条规则。
+    # `--plan` 与 `--after` 一起给出时这一趟其实在结算（上面走的是 apply 那条路），所以预览只认
+    # 真的预览了的那一种。
+    print(pipeline.render_action(action, as_json, preview=mode == 'plan' and not after))
 
 
-def cmd_dispatch(cycle_id: str, as_json: bool = False, project: str | None = None,
-                 spawner: str | None = None) -> None:
+def cmd_dispatch(args) -> None:
     """Dispatch and nothing else: start the session for the node this cycle is holding.
+
+    `args` is the parsed `dispatch` line (state-manage's namespace), read here field by field.
 
     The closing call (`next --after <node> --json`) deliberately stops short of starting anything --
     it settles the node, picks the next one and writes its prompt to
@@ -209,7 +212,8 @@ def cmd_dispatch(cycle_id: str, as_json: bool = False, project: str | None = Non
     without opening a session and keeps the prompt file, which is what a human retries by hand.
     """
     pipeline = _load_pipeline()
-    root = (Path(project).expanduser().resolve() if project
+    cycle_id, as_json, spawner, named_project = args.id, args.json, args.spawner, args.project
+    root = (Path(named_project).expanduser().resolve() if named_project
             else _resolve_project_root(Path.cwd()))
     try:
         state = pipeline.load_state(root)
@@ -236,13 +240,14 @@ def cmd_dispatch(cycle_id: str, as_json: bool = False, project: str | None = Non
     prompts = []
     already = []
     for node_id in holding:
-        directory = pipeline.meta_dir(root) / 'launch' / cycle_id / node_id
+        # prompt 的落点与 started 记号都由管线那一侧算（`prompts.launch_prompt_path` /
+        # `started_marker`）：这一侧只交出「哪条线、哪一格」。
         if pipeline.started_marker(root, cycle_id, node_id).is_file():
             # 这一格的会话已经开过了（started 记号是上一次成功派发留下的）。再交给 spawner 一次
             # 就是在同一个节点上开第二个会话 —— 跳过它，绝不重开。
             already.append(node_id)
             continue
-        prompt = directory / 'prompt.txt'
+        prompt = pipeline.launch_prompt_path(root, cycle_id, node_id)
         if not prompt.is_file():
             print(f'Error: no prompt file at {prompt}. That file is written by the closing call '
                   f'that settled this node: `pf next --after {node_id} --json`.',

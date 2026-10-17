@@ -1,8 +1,8 @@
 """What a dispatch prompt says.
 
-`prompt_for` / `write_prompt_file` / `build_prompt_text` assemble a dispatch prompt. A dispatch
-prompt holds one line -- the invocation -- and the session reads the rest (the node's text, the
-closing commands, the ticket form) from the node and the skill it invokes.
+`write_prompt_file` / `build_prompt_text` assemble a dispatch prompt. A dispatch prompt holds one
+line -- the invocation -- and the session reads the rest (the node's text, the closing commands, the
+ticket form) from the node and the skill it invokes.
 """
 
 from __future__ import annotations
@@ -11,26 +11,23 @@ import os
 import tempfile
 from pathlib import Path
 
-from .store import meta_dir
+from .store import _jsonio, meta_dir
 
 
 # ── prompt layer ─────────────────────────────────────────────────────────────
 
-def prompt_for(node_id: str | None = None) -> str:
-    """The invocation line -- the FIRST non-empty line of prompt.txt (hard constraint).
+def launch_dir(project: Path, cycle_id: str) -> Path:
+    """`.pf/meta/launch/<cycle>/`: the dispatch plumbing of one line, one directory per node.
 
-    `/pf-conduct <node_id> [pipeline]`. `[pipeline]` is ALWAYS there: it is how pf-conduct knows it
-    is running inside the pipeline (rather than having been invoked by hand), which is what makes it
-    end with the one closing command instead of reporting to a human. The node's mode is not on this
-    line: it lives in the node's own record, which the session reads with `dag-manage.py info`.
-
-    The node is the work; naming it is the one thing this line does. Nothing else belongs here, and
-    nothing may be prepended as a paragraph above this line. The node's weight, title and spec path
-    live in `dag-manage.py info` / `open`, which the session runs itself.
+    A node's prompt file, its spawn claim and its `started` stamp all hang off here, so this is the
+    one place that path is built; moving the plumbing moves all three with it.
     """
-    if not node_id:
-        raise ValueError('a dispatch prompt needs a node id: it is the line the session is told to run')
-    return f'/pf-conduct {node_id} [pipeline]'
+    return meta_dir(project) / 'launch' / cycle_id
+
+
+def launch_prompt_path(project: Path, cycle_id: str, node_id: str) -> Path:
+    """This node's `prompt.txt` -- what a dispatch hands its session, and what a caller reports."""
+    return launch_dir(project, cycle_id) / node_id / 'prompt.txt'
 
 
 def started_marker(project: Path, cycle_id: str, node_id: str) -> Path:
@@ -41,26 +38,27 @@ def started_marker(project: Path, cycle_id: str, node_id: str) -> Path:
     把它算进派发名单。重开那一格是 `cycle retry --drop`：它从 conduct_state 侧按同一个路径把
     这枚记号抹掉。
     """
-    return meta_dir(project) / 'launch' / cycle_id / node_id / 'started'
+    return launch_dir(project, cycle_id) / node_id / 'started'
 
 
 def write_prompt_file(project: Path, cycle_id: str, node_id: str, text: str) -> Path:
-    """Write one dispatch prompt, atomically: tempfile in place, then `os.replace` over the target.
+    """Write one dispatch prompt, atomically: a temp file in place, then the tree's retried replace.
 
     The prompt file is read by whoever dispatches the node, and under parallel=2 the same node's
     prompt can be rewritten while a reader has the old one open -- an in-place `write_text` would
-    let that reader see a half-written file. The replace is atomic, so a reader sees the old bytes
-    or the new ones, never a mixture.
+    let that reader see a half-written file. The replace, and its tolerance for a reader holding the
+    target open on Windows, is `tools/shared/jsonio.py`'s: this writes text, which is why the JSON
+    writer next to it does not fit, and the replace under it is shared.
     """
-    path = meta_dir(project) / 'launch' / cycle_id / node_id / 'prompt.txt'
+    path = launch_prompt_path(project, cycle_id, node_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix='.tmp')
     try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
+        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _jsonio().replace_with_retry(tmp, path)
     except BaseException:
         if os.path.exists(tmp):
             os.unlink(tmp)
@@ -68,18 +66,22 @@ def write_prompt_file(project: Path, cycle_id: str, node_id: str, text: str) -> 
     return path
 
 
-def build_prompt_text(project: Path, cycle: dict, node: dict) -> str:
+def build_prompt_text(node_id: str) -> str:
     """One dispatch prompt: the invocation line, and nothing after it.
 
-    Everything past this line the session reads for itself -- the node (title, weight, spec path,
-    dependencies) with `dag-manage.py info` / `open`, and the closing commands and ticket form with
-    the skill the line invokes. Standing instructions stay out for the same reason they always did:
-    a session reads them itself with `pf instruction list`.
+    `/pf-conduct <node_id> [pipeline]` —— the FIRST non-empty line of prompt.txt（硬约束）。`[pipeline]`
+    ALWAYS there: it is how pf-conduct knows it is running inside the pipeline (rather than having been
+    invoked by hand), which is what makes it end with the one closing command instead of reporting to a
+    human. The node's mode is not on this line: it lives in the node's own record, which the session
+    reads with `dag-manage.py info`.
 
-    `node` is the DAG row with its `id` handed in (the id is the storage key, so it is not a field on
-    the row itself -- see `actions._dispatch`).
+    The node is the work; naming it is the one thing this text does, and the id is all it asks for.
+    Nothing else belongs here, and nothing may be prepended as a paragraph above this line: the node's
+    weight, title and spec path live in `dag-manage.py info` / `open`, the closing commands and the
+    ticket form live in the skill the line invokes, and standing instructions stay out because a
+    session reads them itself with `pf instruction list`.
     """
-    node_id = node.get('id')
     if not node_id:
-        raise ValueError('build_prompt_text needs the node id; the row does not carry one')
-    return prompt_for(node_id).rstrip('\n') + '\n'
+        raise ValueError('a dispatch prompt needs a node id: '
+                         'it is the line the session is told to run')
+    return f'/pf-conduct {node_id} [pipeline]\n'

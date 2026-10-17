@@ -6,6 +6,10 @@ disable-model-invocation: true
 
 # pf-conduct
 
+> 谁跑我：用户（`/pf-conduct <节点 id 或关键词>`）／指挥位（管线派发的调用行带 `[pipeline]`）
+> 我解决什么：把一格从备料带到收尾——派 Execute、独立复审、按需修复，再决定派发还是停手
+> 我派不派 subagent：派，一层（Execute / Review / Fix）——被派来的手段位读到这份，停手回报
+
 你是这个 DAG 节点的指挥者：这一棒把一格从备料带到收尾——备料 → 执行 → 复审 → 修复 → 收尾。
 代码与验证都在 subagent 手里，你只碰报告、记录与决策。一条线可以同时握几格（`parallel` 策略），每一格各有自己的会话与收尾；往图里加节点是 pf-route 的事。
 
@@ -18,9 +22,9 @@ disable-model-invocation: true
 - 派 subagent 的只有你：你派的 Execute / Review / Fix 一律不再往下派（角色卡里写着这条）。
   管线接力靠新会话往下走——收尾 `dispatch` 开的是**新会话**，链可以一直延长
 
-## 这一棒走哪条路：九个旋钮
+## 这一棒走哪条路：旋钮
 
-九个旋钮各自决定后面某几步按哪条走，不影响别的。八个在备料第 2 步一口气读出来，记进 `run.md` 的「已核事实」；`.pf/` 档要先读——第 0 步就要用它。
+下面这几个旋钮各自决定后面某几步按哪条走，不影响别的。`.pf/` 档第 0 步就要用；其余在备料第 2 步一口气读出来，记进 `run.md` 的「已核事实」。
 
 | 旋钮 | 取值 | 从哪读 | 改哪一步 |
 |---|---|---|---|
@@ -30,7 +34,7 @@ disable-model-invocation: true
 | 方法 | spec 里的 `方法：<技能名>` 一行；没写＝没有 | read `spec.md` | 这一格这一趟谁跑、按哪份卡跑（见「方法」） |
 | 测试档与验证 | `full` / `minimal` | `pf config test_tier` | 每步验什么、写不写测试（见「测试档与验证」） |
 | worktree 档 | `off` / `fork` / `reuse` | `pf config worktree_mode` | 备料的 fork 与收尾的合回这两拍（见「并行：worktree」） |
-| 子 agent 上限 | 正整数 | `pf config max_agents` | 派活的批怎么分（见 [`../shared/pf/agents.md`](../shared/pf/agents.md)） |
+| 子 agent 上限 | 正整数 | `pf config max_agents` | 派活的批怎么分（见 [`../shared/pf/subagents.md`](../shared/pf/subagents.md)） |
 | 并行档 | 这是哪条线自己开的几格 | `pf cycle current` 的 `Policy:` 行 | 这一趟同时跑几格（见「并行：worktree」） |
 | 节点 tag | `writing` / `coding` / `art` | 图上，pf-route 落的笔 | 只影响这条线挑谁（本流程只读） |
 
@@ -40,14 +44,15 @@ disable-model-invocation: true
 
 mode 是节点自己的属性，由 pf-route 落笔写在 `--mode` 里；你照 `info` 读出来的那一档走。
 
-| mode | 循环 | 停在哪 |
+| mode | 循环 | 你这一趟怎么走 |
 |---|---|---|
-| `manual` | **不跑** execute→review→fix | 人闸在对话里：整格是与用户来回推进；用户那句「标成完成，继续」就是条子上的 `completed`，收尾照做，那一拍不再设闸 |
-| `checkpoint` | 跑 | 整个循环跑完、收尾也做完了，停下来等你一句"继续" |
-| `auto` | 跑 | 没有人闸：收尾自己开下一个节点，卡死、需求冲突才报人 |
+| `manual` | **不跑** execute→review→fix | 整格在对话里与用户来回推进；用户说「标成完成，继续」就照条子上的 `completed` 收尾，那一拍不再停 |
+| `checkpoint` | 跑 | 整个循环加上收尾都做完，停下来等用户一句「继续」 |
+| `auto` | 跑 | 不停：收尾自己开下一个节点，卡死、需求冲突才报人 |
 
-- 节点的 mode 是 `checkpoint` / `auto` 时（`pf dag info` 读它），全程不许 `ask_user_question`：拿不准的自己挑最贴近意图的一项，把选择和理由写进 `run.md` 的「自主决策清单」——那是用户复核的入口。
-- `checkpoint` 的循环内部照 `auto` 跑，只有收尾那一拍停。`manual` 不受这条约束：它本来就在对话里，全程可以问你。
+三档的闸各在哪一拍、为什么这么定，见 `docs/conduct-state.md`「结论与停手」。
+
+- mode 是 `checkpoint` / `auto` 的节点（`pf dag info` 读它）全程不许 `ask_user_question`：拿不准的自己挑最贴近意图的一项，把选择和理由写进 `run.md` 的「自主决策清单」——那是用户复核的入口。`manual` 不受这条约束：它本来就在对话里，全程可以问你。
 
 ### 先看重量
 
@@ -94,6 +99,14 @@ tag 说清一个节点属于哪条线：`writing`（文案）、`coding`（代�
 - 本条线做完而另一条线还有就绪节点，收尾命令会给你一句 `reason`：点名谁就绪、被哪个 tag 挡住，并附上另开一个 cycle 的命令。连它一起念给用户。
 - 过滤语义与两条 active cycle 并排时的规矩：`docs/conduct-node-tags.md`。
 
+## 东西住哪一层
+
+- **工作区**：依赖图与它上面的维护节点判定、代码的合流（每个节点的 worktree 与合回）、状态文件的写互斥——这些由工具管，你照本子里那几条命令走就行，不用为并发加任何东西
+- **线（cycle）**：`tags`（挑谁）、`when_shelved`、`parallel`（同时握几格、开几个会话）、两条维护阈值；写它们用 `cycle policy`，读它们用 `cycle current` 的 `Policy:` 行。线之间没有别的耦合：两条线并排跑，各自握各自的那几格
+- **节点**：mode、weight、tags、spec、报告群、FORK 记录——随图与节点目录走，一格一处
+
+并发上限从外到内分三层：图上的依赖边（谁挡着谁）决定哪些节点**可以**并排；这条线的 `parallel`（`pf cycle current` 的 `Policy:` 行）决定这条线同时**握**几格；`pf config max_agents`（见 [`../shared/pf/subagents.md`](../shared/pf/subagents.md)）决定这个会话同时**在飞**几个子 agent。第三层在最外面：握着的每一格都可能同时开着自己的孩子，它们加起来不许越过它。
+
 ## 开局
 
 **先看你是怎么进来的**：
@@ -125,7 +138,7 @@ pf next --spawn --json
 
 `next --spawn` 那一发就把这条线手里每一格的执行会话都拉起来（默认一格），**你这一趟到此结束，别在这里等**：要么本会话直接收手，要么用 `[pipeline]` 调用行继续。开完告诉用户你会推到哪儿；全自动就说：「已进入全自动，会一直推到图里没有就绪节点、或某条指令说停。」
 
-**这条线跑多远，只看节点自己的 mode**：`checkpoint` 的节点收尾就停下交人；`manual` 的节点整个活在对话里，用户明确放行（「标成完成，继续」）之后线照 `auto` 一样接着走；`auto` 的节点干完自己开下一个。线停下来就是 `cycle status <cycle> inactive`，收尾命令自己写。**工具永远不会写 `active`**：人用 `cycle status <cycle> active` 把它放回服务，它才会接着挑下一个节点。
+**这条线跑多远，只看节点自己的 mode**：`checkpoint` 的节点收尾就停下交人；`manual` 的节点整个活在对话里，用户明确放行（「标成完成，继续」）之后线照 `auto` 一样接着走；`auto` 的节点干完自己开下一个。线停下来就是 `cycle status <cycle> inactive`，收尾命令自己写；人用 `cycle status <cycle> active` 把它放回服务，它才会接着挑下一个节点（为什么放回服务只有人能写，见 `docs/conduct-state.md`「两道门」）。
 
 ## 备料
 
@@ -156,7 +169,7 @@ pf instruction list --project <项目根绝对路径>
 4. spec 里有 `方法：<技能名>` 一行 → read `~/.agents/skills/<名>/SKILL.md`，按「方法」那一节定这一格谁跑
 5. 读 spec 里「参考」「上下游」两节点名的文件（那是这个节点真正的输入）
 6. 读项目 CLAUDE.md、docs/ 里与本节点相关的文档
-7. 读 `pf config test_tier`、`pf config worktree_mode`、`pf config max_agents` 三条设置，记进 `run.md` 的「已核事实」；这条线同时握着哪几格、`parallel` 是多少，在 `pf cycle current` 的读数里（每格一行 `Node:`，`Policy:` 行有 `parallel`）
+7. 读 `pf config test_tier`、`pf config worktree_mode`、`pf config max_agents`，记进 `run.md` 的「已核事实」；这条线同时握着哪几格、`parallel` 是多少，在 `pf cycle current` 的读数里（每格一行 `Node:`，`Policy:` 行有 `parallel`）
 
 **3｜过 spec**，这一关没过完，本节点打不开：
 
@@ -164,7 +177,7 @@ pf instruction list --project <项目根绝对路径>
 - **硬约束标出处**：把「必须」「不许」「一律」「上限是」逐条标一个出处——**用户原话**（引 session 或指令清单里的原话）／**项目目标文档**（`*goals*` 之类：这个项目到底要验什么、要什么体验，引到那一行）／**前面某个节点推出来的**（预算、配额、位子、上限这类算出来的数）。第三类下面标一句「推出来的」——需求要改，只能落在用户与目标文档定的那两类；自己推出来的约束往往是数记错了地方，执行后段再发现，成本翻倍。
 - **完成判定在哪**：spec 必须有一节可执行的完成判定——命令、脚本、探针，能跑出通过 / 失败的读数。没有，或者写的全是「设计一下」「调一调」这类没法判的话——停下来，请用户去 pf-route 补。Review 拿它当尺子，开工前它就得在。
 
-干活途中撞见的问题，不归本节点的，交给一个 subagent 记进 issue 池——写法与工具口径见 [`../shared/pf/pool.md`](../shared/pf/pool.md)，入池前先搜一遍有没有同一条。记下来就算完，那不是本节点的范围。
+干活途中撞见的问题，不归本节点的，交给一个 subagent 记进 issue 池——写法与工具口径见 [`../shared/pf/pool.md`](../shared/pf/pool.md)。记下来就算完，那不是本节点的范围。
 
 **4｜尺寸与交付物**：尺寸在备料时判足——直觉上这个节点一个 session 转不下来，停下来请用户去 pf-route 拆节点。干到一半发现撑不下，一样停手请他拆，别硬把它做完。
 
@@ -174,7 +187,7 @@ pf instruction list --project <项目根绝对路径>
 
 备料过完，直接进循环；**派完 subagent 就不要等它**——它是异步的，完成时运行时会把这轮唤醒回来，报告已经在上下文里。一次派多个，写在同一条消息里；要给下一批分工，先等这一批的结果。
 
-派之前先数一次在飞的：`在飞的 + 这次要派的 ≤ pf config max_agents`，越不过就并格或分批——怎么并、什么时候分批，见 [`../shared/pf/agents.md`](../shared/pf/agents.md)。这条外圈压着下面每一处「并行派」。
+派之前先按 [`../shared/pf/subagents.md`](../shared/pf/subagents.md) 数一次在飞的：越不过就照那份卡的顺序退让。这条外圈压着下面每一处「并行派」。
 
 ### Execute
 
@@ -246,24 +259,17 @@ light 节点上这一棒的活也是你干：读 `review-{N}.md`，只修清单�
 - **复审报告是判断的载体，该详细就详细**：issue 一段一段写清，修复方要能照着直接动手。它的篇幅按「能不能让人直接开工」定，行数别当尺子
 - 执行与修复的报告是回执：做了什么、改在哪、自证读数，一行一件——判断已经落在别处，重述一遍是让读者读两遍
 - 报告只写读者手上没有的东西。正稿的内容、spec 原文、被改的行，复审和修复都读得到；引半句指出打架的地方就够
-- 过期读数**改掉或删掉**；在后面挂一句「历史读数 / 见 §x」会让报告只增不减，读者得自己考古
+- 过期读数**改掉或删掉**；在后面挂一句指向旧读数的指针会让报告只增不减，读者得自己考古
+- **派活时就给每样产物一条落盘路径**：长引用、原始输出、样本数据各走各的文件；只有判断、没有独立物料的工序，写明「只进报告，一行一条」——回头再拆，等于让后面每一棒先读一遍胖的
 - 一个节点一份 `report.md`。零件报告、增量报告并进那一份，各自单独落盘会让读者挨个翻
 
 常见量级：Execute 与修复报告几十行，`review-{N}.md` 视 issue 的多少从几十行到几百行。超出这个量级时，先看数据、长引用、旧读数是不是搬进了正文，**别忙着删判断**。节点 `run.md` 是节点级的回执：做了什么、改动清单、决策清单、已知未解决项；轮次的细节已经在报告群里，它给指针就够。
 
 **报给人的话**（不管在收尾、停手还是 checkpoint）：用人话讲清设计后果，变量名、函数名、代码级编号不进题面；subagent 返回的技术报告先翻译再汇报，不整段转发。每个问题讲三件事：发生了什么 → 对目标的影响 → 需要拍什么板。
 
-## 东西住哪一层
-
-- **工作区**：依赖图与它上面的维护节点判定、代码的合流（每个节点的 worktree 与合回）、状态文件的写互斥——这些由工具管，你照本子里那几条命令走就行，不用为并发加任何东西
-- **线（cycle）**：`tags`（挑谁）、`when_shelved`、`parallel`（同时握几格、开几个会话）、两条维护阈值；写它们用 `cycle policy`，读它们用 `cycle current` 的 `Policy:` 行。线之间没有别的耦合：两条线并排跑，各自握各自的那几格
-- **节点**：mode、weight、tags、spec、报告群、FORK 记录——随图与节点目录走，一格一处
-
-并发上限有三个来源，从外到内：图上的依赖边（谁挡着谁）决定哪些节点**可以**并排；这条线的 `parallel`（`pf cycle current` 的 `Policy:` 行）决定这条线同时**握**几格；`pf config max_agents`（见 [`../shared/pf/agents.md`](../shared/pf/agents.md)）决定这个会话同时**在飞**几个子 agent。第三个在最外面：握着的每一格都可能同时开着自己的孩子，它们加起来不许越过它。
-
 ## 收尾
 
-这九拍按顺序走，只有拍 1 与拍 2 是同时起的：
+收尾这几拍按顺序走，只有拍 1 与拍 2 是同时起的：
 
 | 拍子 | 做什么 |
 |---|---|
@@ -279,7 +285,7 @@ light 节点上这一棒的活也是你干：读 `review-{N}.md`，只修清单�
 
 **拍 1 与拍 2 一起做**：doc-update 是 subagent，派完你就空了——`run.md` 的四节趁这段窗口写掉，它回来后在改动清单里补上同步出的那几份文档。拍 3 合回的前提不变：两样都落好才起。
 
-**派发是最后一件事。** 下一个会话跟你在同一棵工作树上开机，它一上来就 pull——树没提交干净，它要么 pull 不动、要么读到半成品。顺序因此钉死：先关节点、再提交、再推、最后才派发。
+**派发排在最后**：先关节点、再提交、再推、最后才派发（顺序为什么钉死，见 `docs/conduct-state.md`「会话是怎么被叫起来、怎么收尾的」）。
 
 管线派发进来的，接着按顺序跑这三条。`<cycle>` 是**握着这个节点的这条线**：在 `pf cycle current` 的读数里按节点 id 认（每格一行 `Node:`）；`<node>` 就是调用行上那个 id。
 
@@ -289,7 +295,7 @@ pf handoff <cycle> <node> completed -s "<一行总结>" -o '<照上一条填>'
 pf next --after <node> --json
 ```
 
-`--form` 那条只印形状，不动状态；`pf handoff <cycle> <node> completed -o …` 那条**只写条子**，不关节点、也不拉会话；`next --after` 那条**关掉这个节点**，再定出下一个、把它的 prompt 写进 `.pf/meta/launch/<cycle>/<下一个节点id>/prompt.txt`。三条都不拉会话——派发永远是最后一步。条子见「条子与读数」。
+`--form` 那条只印形状，不动状态；`pf handoff <cycle> <node> completed -o …` 那条**只写条子**，不关节点、也不拉会话；`next --after` 那条**关掉这个节点**，再定出下一个、把它的 prompt 写到盘上（路径由命令自己给）。三条都不拉会话；条子见「条子与读数」。
 
 **然后提交**（两种档走的不是同一条路）：
 
@@ -315,9 +321,9 @@ git -C .pf push                # 这份仓库有远端才推
 
 `.pf/` 没自成仓库的本地档没有这一步：记录就留在盘上，不提交也不推。
 
-`git push` 被拒（另一台机器、或同机另一条线先推了）就 `git pull --rebase` 再推；停在冲突上就交给用户。**该推的每一发都推成功才派发**——先把这一趟推到远端，下一个会话才拿得到。真卡住就停手报用户，把 `prompt` 路径给他：修好推送后用 `pf dispatch <cycle>` 补发即可，节点已经关了，不用重关。
+`git push` 被拒（另一台机器、或同机另一条线先推了）就 `git pull --rebase` 再推；停在冲突上就交给用户。**该推的每一发都推成功**才走下一步。真卡住就停手报用户，把 `prompt` 路径给他：修好推送后用 `pf dispatch <cycle>` 补发即可，节点已经关了，不用重关。
 
-**推完才派发**，按 `next --after` 那条给的 `action` 走——它自己带着该跑的命令和该说的话：
+推送成功后，按 `next --after` 那条给的 `action` 走——它自己带着该跑的命令和该说的话：
 
 - `dispatch`：`pf dispatch <cycle>`（cwd 不在项目根就加 `--project <项目根>`，会话就在那个工作区开机）——它把这条线此刻握着的每一格各开一个会话（默认只有一格；已经开过会话的那几格跳过），把打印出来的那一行报给用户，然后**自己退出**；线不在服务中时它拒发，补发前先把线放回服务
 - `stop_pipeline`：把 `reason` 照原话说给用户（`attention` 有内容就一起念），然后停手 —— 线里还有别的节点在飞时它不停这条线，`reason` 会说
@@ -342,9 +348,9 @@ pf next --spawn --json
 
 需求做不到、或 spec 自相矛盾：`completed` 换成 `failed`；活是自己主动停手不做的，换 `stopped`。两种都在 `-s` 里写清原因，不挂起等待。这个判决会让收尾把节点标成 `shelved`（出局等人），不用你自己动手标。
 
-## 附：并行：worktree
+## 并行：worktree
 
-**worktree 按档位走，档位从 `pf config worktree_mode` 读**（`off` / `fork` / `reuse`；出厂默认 git 项目 `fork`，非 git 项目 `off`。git 项目指仓库里有 `.git`；非 git 项目多半没有远端、也不打算提交。改它用 `pf config set worktree_mode <值>`）：
+**worktree 按档位走，档位从 `pf config worktree_mode` 读**（默认值与各档的设计口径见 `docs/conduct-state.md`「两道门」；改它用 `pf config set worktree_mode <值>`）：
 
 | 档 | 行为 |
 |---|---|
@@ -378,7 +384,7 @@ pf fork-worktree <节点id>
 
 **全量报数前重看一眼主树**：合回之后 `git log` 里若又进了他线的提交（他的合回、他的提交），你的全量验的就不是你要交的那棵树——重跑一遍全量，再报数。
 
-## 附：条子与读数
+## 条子与读数
 
 条子就是 `pf handoff -o` 那串 JSON。**形状以 `pf handoff --form <cycle>` 现印的为准**——这条线不看的读数那一格它不印。键是 `deliverable` / `acceptance` / `touched`，配了读数的线多一个 `reading`。路径用正斜杠：那串 JSON 在 PowerShell 单引号里，反斜杠还得再转义一层。
 
@@ -391,7 +397,7 @@ pf fork-worktree <节点id>
 
 派发这一棒由 **spawner 脚本**开新会话，**总是带 `-PromptFile`**；哪一份 spawner 由工具回答，不用你挑——最具体的答案赢：`--spawner dsh|zcode|路径`（当场点名）> 这条线的 `spawner` 策略（`pf cycle policy <cycle> spawner dsh|zcode`，随线记录走）> `DSH_CONDUCT_SPAWNER` > 宿主自认（探测答不上来就退到 `dsh`）。谁调它、断了看哪儿，见 `docs/conduct-dsh-dispatch.md`。
 
-派发失败时工具会写一个 `.pf/meta/CONDUCT-CALLBACK-FAILED-<cycle>.json` 并且不清除——人工进来先看这个文件（按线分文件，并行时两条线各看各的），见到就按 cycle id 跑 `next --cycle <id> --spawn` 把它捞回来；spawn 成功会清掉本线的旧标记（标记存在 = 这条链现在是断的）。补发之前工具会自己挡双派发，见到拒绝先查那个节点是不是已经有会话在跑，别硬闯。
+派发失败时工具会落一个按线命名的失败标记文件并且不清除（落点与形状见 `docs/conduct-dsh-dispatch.md`「派发链与它的失败模式」）——人工进来先看它（按线分文件，并行时两条线各看各的），见到就按 cycle id 跑 `next --cycle <id> --spawn` 把它捞回来；spawn 成功会清掉本线的旧标记（标记存在 = 这条链现在是断的）。补发之前工具会自己挡双派发，见到拒绝先查那个节点是不是已经有会话在跑，别硬闯。
 
 ## 参照
 
@@ -403,7 +409,7 @@ pf fork-worktree <节点id>
 - 派发与鉴权：`docs/conduct-dsh-dispatch.md`
 - 节点 tag 的过滤语义：`docs/conduct-node-tags.md`
 - 角色卡：`<本 skill 目录>/subagent-prompts/`（execute / review / fix）
-- 路径写完整绝对路径：subagent 拿不到 `~` 展开，也没有你当前的 `./`。本 skill 目录取一次（`cd ~/.agents/skills/pf-conduct/ && pwd`），反模式文件按绝对路径传给 subagent
+- 路径写完整绝对路径：subagent 拿不到 `~` 展开，也没有你当前的 `./`。本 skill 目录取一次（`cd ~/.agents/skills/pf-conduct/ && pwd`）
 
 ## 反模式
 

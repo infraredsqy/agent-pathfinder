@@ -56,7 +56,7 @@ Invariants this module owns, each of which cost a bug to learn
 
 Usage:
     python conduct_pipeline.py plan   [--cycle ID] [--project DIR]
-    python conduct_pipeline.py apply  [--cycle ID] [--project DIR]
+    python conduct_pipeline.py apply  [--cycle ID] [--project DIR] [--after NODE_ID]
     python conduct_pipeline.py record [--cycle ID] [--project DIR]
     python conduct_pipeline.py contract
 
@@ -69,18 +69,15 @@ Environment:
                              directory of this file (a review draft, a drill copy).
     DSH_CONDUCT_SPAWNER      which spawner opens the next session: `dsh`, `zcode`, or a path.
                              Default: whichever host this shell is running under (see
-                             `_default_spawner`). The per-call `--spawner` beats it, and a
-                             cycle's own `spawner` policy beats it too -- the full order is
-                             `resolve_spawner`'s.
+                             `spawn/host.py`'s `default_spawner`). The per-call `--spawner` beats
+                             it, and a cycle's own `spawner` policy beats it too -- the full order
+                             is `resolve_spawner`'s.
 """
 
 from __future__ import annotations
 
 import argparse
-import ctypes
 import importlib.util
-import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -88,20 +85,6 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CONDUCT = HERE.parent                      # the conduct tool directory
 STATE_MANAGE = HERE / 'state-manage.py'
-SPAWN_SCRIPTS = {'dsh': CONDUCT / 'spawn' / 'dsh-spawn.ps1', 'zcode': CONDUCT / 'spawn' / 'zcode-spawn.ps1'}
-# `dag-manage.py` lives in the sibling `dag/` directory of the shipped tree, and that is the only
-# place this module looks for it. A tree that keeps the conduct scripts somewhere else (a review
-# draft, a drill copy) points at the real tool with `DSH_CONDUCT_DAG_MANAGE` rather than relying on
-# this module having a second search path of its own: a silent fallback into `~/.agents` would also
-# hide the failure that matters -- a shipped tree whose sibling `dag/` went missing.
-DAG_MANAGE = Path(os.environ.get('DSH_CONDUCT_DAG_MANAGE')
-                  or CONDUCT.parent / 'dag' / 'dag-manage.py')
-#: `issue_manager.py` owns the issue pool (`.pf/issues/issues.json`) and the one number this side
-#: reads out of it: the pool's weighted debt, which the maintenance channel compares with a line's
-#: `issue_pool_weight_limit`. Same rule as `DAG_MANAGE` above -- the sibling `issue/` directory of
-#: the shipped tree, with `DSH_CONDUCT_ISSUE_MANAGE` for a tree that keeps these scripts elsewhere.
-ISSUE_MANAGE = Path(os.environ.get('DSH_CONDUCT_ISSUE_MANAGE')
-                    or CONDUCT.parent / 'issue' / 'issue_manager.py')
 #: Every child process this module starts is bounded by this many seconds. It lives
 #: HERE, in the entry module, with the command builders below and `_run`, because those are the
 #: names a caller patches on the loaded module: the test harness replaces `pipeline._run` with its
@@ -133,7 +116,7 @@ def _run(cmd: list, cwd: Path) -> None:
     # cwd matters: `.pf/` is resolved relative to the process cwd.
     try:
         proc = subprocess.run([str(c) for c in cmd], cwd=str(cwd), capture_output=True,
-                              text=True, encoding='utf-8', timeout=CMD_TIMEOUT)
+                              text=True, encoding='utf-8', errors='replace', timeout=CMD_TIMEOUT)
     except subprocess.TimeoutExpired as e:
         raise RuntimeError(f'command did not finish within {CMD_TIMEOUT}s: {_as_text(cmd)}') from e
     if proc.returncode != 0:
@@ -148,6 +131,11 @@ def _capture(cmd: list, cwd: Path) -> str:
     appears in its output (the uuid it minted), so that one call needs the text as well. Same bound,
     same loud failure, and it lives here next to `_run` because it is the same seam: a caller
     patching child processes patches this too.
+
+    这两个函数是**子进程仅有的两条路**（同一条缝的两半）：包里的模块一律经 `seam.run` /
+    `seam.capture` 走到这里，谁都不自己 `subprocess`。子进程输出怎么解码也由这里定：一律
+    `errors='replace'` —— 这台机器的控制台代码页是 GBK，而 PYTHONIOENCODING 未必设过，读回来的
+    字节宁可带替换符，也不能让解码异常把整条管线掀翻。
     """
     try:
         proc = subprocess.run([str(c) for c in cmd], cwd=str(cwd), capture_output=True,
@@ -160,122 +148,59 @@ def _capture(cmd: list, cwd: Path) -> str:
 
 
 # ── which spawner opens the next session ─────────────────────────────────────
-# Two hosts, one pipeline. `dsh-spawn.ps1` opens a DSH session over the DSH web API. Under ZCode that
-# session would never reach the GUI -- the task list there is a projection seeded once inside the
-# agent host, and a local workspace has no re-read path -- so the ZCode half queues the node into the
-# desktop's own cron scheduler instead (see `zcode-dispatch.py`). What the pipeline touches is the
-# same either way: one argv shape (built in `conduct_spawn.py`), the same `spawned:` last line, and
-# the same failure marker.
-
-class _PROCESSENTRY32W(ctypes.Structure):
-    _fields_ = [
-        ('dwSize', ctypes.c_ulong),
-        ('cntUsage', ctypes.c_ulong),
-        ('th32ProcessID', ctypes.c_ulong),
-        ('th32DefaultHeapID', ctypes.POINTER(ctypes.c_ulong)),
-        ('th32ModuleID', ctypes.c_ulong),
-        ('cntThreads', ctypes.c_ulong),
-        ('th32ParentProcessID', ctypes.c_ulong),
-        ('pcPriClassBase', ctypes.c_long),
-        ('dwFlags', ctypes.c_ulong),
-        ('szExeFile', ctypes.c_wchar * 260),
-    ]
-
-
-def spawn_path(which=None) -> Path:
-    """A spawner as a path: the bare words `dsh` / `zcode`, or any path a caller names outright."""
-    if which is None:
-        return SPAWN_SCRIPTS['dsh']
-    text = str(which).strip()
-    if text.lower() in SPAWN_SCRIPTS:
-        return SPAWN_SCRIPTS[text.lower()]
-    return Path(text).expanduser()
-
-
-def _under_zcode() -> bool:
-    """Is a `ZCode.exe` process an ancestor of this one?
-
-    DSH answers this for itself: it injects `DSH_SESSION_ID` into every shell it runs, so its own
-    case needs no probe. ZCode injects nothing into the Bash tool (`ZCODE_SESSION_ID` is set for
-    hooks, slash-command expansion and MCP servers only), so the process tree is the one dependable
-    signal left: a tool call inside ZCode hangs off the agent host, and that host is `ZCode.exe`.
-    """
-    if os.name != 'nt':
-        return False
-    try:
-        kernel32 = ctypes.windll.kernel32
-        snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
-        if snapshot == -1:
-            return False
-        parents = {}
-        entry = _PROCESSENTRY32W()
-        entry.dwSize = ctypes.sizeof(_PROCESSENTRY32W)
-        try:
-            more = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
-            while more:
-                parents[entry.th32ProcessID] = (entry.th32ParentProcessID, str(entry.szExeFile))
-                more = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
-        finally:
-            kernel32.CloseHandle(snapshot)
-    except Exception:
-        # A probe that cannot answer must not decide: fall through to the historical default.
-        return False
-    pid = os.getpid()
-    for _ in range(12):
-        parent, name = parents.get(pid, (0, ''))
-        if name.lower() == 'zcode.exe':
-            return True
-        if parent in (0, pid):
-            return False
-        pid = parent
-    return False
-
-
-def _default_spawner() -> Path:
-    """Which spawner this shell's host should use, when the caller names none.
-
-    `DSH_CONDUCT_SPAWNER` answers first: a caller that has already decided should not be
-    second-guessed. Then the host answers for itself. Anything else -- a human at a prompt, a drill,
-    another harness -- keeps the historical default, so DSH behaves exactly as it did before this
-    file learned about a second host.
-    """
-    explicit = os.environ.get('DSH_CONDUCT_SPAWNER')
-    if explicit:
-        return spawn_path(explicit)
-    if os.environ.get('DSH_SESSION_ID'):
-        return SPAWN_SCRIPTS['dsh']
-    if _under_zcode():
-        return SPAWN_SCRIPTS['zcode']
-    return SPAWN_SCRIPTS['dsh']
-
-
-#: The entry's `SPAWN_PS1`: what `seam.spawn_ps1()` hands `writer.spawn_session`, read at call time
-#: because a caller -- and now a host -- may replace it.
-SPAWN_PS1 = _default_spawner()
-
-
-def resolve_spawner(project, cycle_id: str | None, cli_value: str | None = None) -> Path:
-    """Which spawner opens this dispatch's session: the most specific answer wins.
-
-    `--spawner`（调用方这一次的点名叫什么就是什么）> 这条线自己的 `spawner` 策略（
-    `pf cycle policy <cycle> spawner dsh|zcode`，随线记录走）> `DSH_CONDUCT_SPAWNER`（这台机器）
-    > 宿主自认 > `dsh`。线没配策略、调用没带旗子，落回 `SPAWN_PS1` —— 与这条函数存在之前
-    完全同一条路，所以没配的线行为一字不变。`SPAWN_PS1` 而不是现算 `_default_spawner()`：
-    它是本模块可替换的那道缝（`seam.bind` 的约定），替换它的调用方在线策略缺席时仍被尊重。
-    """
-    if cli_value:
-        return spawn_path(cli_value)
-    if cycle_id:
-        cycle = find_cycle(load_state(project), cycle_id)
-        word = cycle_policy(cycle).get('spawner') if cycle else None
-        if word:
-            return SPAWN_SCRIPTS[word]
-    return SPAWN_PS1
+# `spawn/host.py` owns that answer: the two shipped spawners, the process-tree probe that tells the
+# two hosts apart, and the `DSH_CONDUCT_SPAWNER` override all live next to the scripts they name, so
+# a change to the probe lands in that file while the drills that patch this module's seam keep
+# working. What this module keeps of it is one seam name, `SPAWNER_SCRIPT` (bound below, next to the
+# loader that reaches the file).
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  The implementation package, loaded by path
+#  Loading a neighbouring file, and the implementation package
 # ═══════════════════════════════════════════════════════════════════════════════
+
+# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
+# loaded by path through `loader.py`. This function is that bootstrap, the same shape in every file
+# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+SHARED = CONDUCT.parent / 'shared'
+
+_LOADER = None
+
+
+def _loader():
+    """`tools/shared/loader.py`: the one loader, for the modules this tree keeps outside `shared/`."""
+    global _LOADER
+    if _LOADER is None:
+        spec = importlib.util.spec_from_file_location('pf_shared_loader', SHARED / 'loader.py')
+        _LOADER = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_LOADER)
+    return _LOADER
+
+
+def _tool_path(env_var: str, default):
+    """`tools/shared/toolpath.py`: `<env var>` when it is set, else the neighbour this tree ships.
+
+    The two tools below are the tree's parts this module only calls; one rule, resolved once, is what
+    keeps `DSH_CONDUCT_DAG_MANAGE` and `DSH_CONDUCT_ISSUE_MANAGE` meaning the same thing here as they
+    do in the merge driver.
+    """
+    toolpath = _loader().load_by_path('pf_shared_toolpath', SHARED / 'toolpath.py',
+                                      register=True, reuse=True)
+    return toolpath.tool_path(env_var, default)
+
+
+# `dag-manage.py` lives in the sibling `dag/` directory of the shipped tree, and that is the only
+# place this module looks for it. A tree that keeps the conduct scripts somewhere else (a review
+# draft, a drill copy) points at the real tool with `DSH_CONDUCT_DAG_MANAGE` rather than relying on
+# this module having a second search path of its own: a silent fallback into `~/.agents` would also
+# hide the failure that matters -- a shipped tree whose sibling `dag/` went missing.
+DAG_MANAGE = _tool_path('DSH_CONDUCT_DAG_MANAGE', CONDUCT.parent / 'dag' / 'dag-manage.py')
+#: `issue_manager.py` owns the issue pool (`.pf/issues/issues.json`) and the one number this side
+#: reads out of it: the pool's weighted debt, which the maintenance channel compares with a line's
+#: `issue_pool_weight_limit`. Same rule as `DAG_MANAGE` above -- the sibling `issue/` directory of
+#: the shipped tree, with `DSH_CONDUCT_ISSUE_MANAGE` for a tree that keeps these scripts elsewhere.
+ISSUE_MANAGE = _tool_path('DSH_CONDUCT_ISSUE_MANAGE', CONDUCT.parent / 'issue' / 'issue_manager.py')
+
 
 def _load_impl():
     """Load `conduct_pipeline_impl/` by path, fresh, and hand it back.
@@ -283,23 +208,31 @@ def _load_impl():
     By PATH, not by name, and with the name dropped from `sys.modules` first: every caller loads
     this file fresh (`tests/harness.py`, `handoff.py`, `state-manage.py`), and a by-name import
     would hand the second load the first load's modules. Inside the package, `from . import store`
-    resolves through the registration below.
+    resolves through the registration the load makes.
     """
     pkg = 'conduct_pipeline_impl'
-    for stale in [n for n in sys.modules if n == pkg or n.startswith(pkg + '.')]:
-        del sys.modules[stale]
-    spec = importlib.util.spec_from_file_location(
-        pkg, CONDUCT / pkg / '__init__.py', submodule_search_locations=[str(CONDUCT / pkg)])
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[pkg] = mod
-    spec.loader.exec_module(mod)
-    return mod
+    return _loader().load_by_path(pkg, CONDUCT / pkg / '__init__.py',
+                                  package_dir=CONDUCT / pkg, register=True, fresh=True)
 
+
+def _host():
+    """`spawn/host.py`: the two spawners, the host probe and the pid question, loaded by path.
+
+    One copy per process (`register` + `reuse`): this module and the logic package's writer both ask
+    for it, and a caller patching the probe patches the copy they both see.
+    """
+    return _loader().load_by_path('conduct_spawn_host', CONDUCT / 'spawn' / 'host.py',
+                                  register=True, reuse=True)
+
+
+#: The entry's `SPAWNER_SCRIPT`: what `seam.spawner_script()` hands `writer.spawn_session`, read at
+#: call time because a caller may replace it. Its value is the host's own answer, asked once here.
+SPAWNER_SCRIPT = _host().default_spawner()
 
 _impl = _load_impl()
 
 # The seam: the logic modules read `_cmd` / `_dag` / `_as_text` / `_run` / `CMD_TIMEOUT` /
-# `SPAWN_PS1` out of THIS module's live namespace, so a caller patching them here is honoured
+# `SPAWNER_SCRIPT` out of THIS module's live namespace, so a caller patching them here is honoured
 # everywhere. `globals()` is the live dict, not a copy -- that is the whole point.
 _impl.seam.bind(globals())
 
@@ -313,8 +246,7 @@ globals().update({name: getattr(_impl, name) for name in _impl.__all__})
 
 # The action vocabulary, printable with `conduct_pipeline.py contract`. Kept as data so the doc and
 # the code cannot drift: the same list answers "what can `next` hand me". This dict is the single
-# source of the names -- a name added to the code without a line here, or a line here with no
-# producer, fails the suite.
+# source of the names.
 ACTIONS = {
     'dispatch':      '一个节点已钉住、prompt 已落盘 —— 把它派出去（`dispatch <cycle>` 就是干这个；'
                      '`next --spawn` 是一次到位的同一次调用）',
@@ -326,7 +258,6 @@ ACTIONS = {
     'wait':          '还没到能动手的时候 —— 读 note / close_with，绝不轮询',
     'ask_user':      '状态有歧义 —— 问人',
     'no_cycle':      '还没有 cycle —— 开 cycle 要人的意图',
-    'fail_hard':     '状态坏了 / 链走不下去 —— 把 reason 和 options 摆给用户',
 }
 
 
@@ -340,46 +271,24 @@ def _render_contract() -> str:
     return '\n'.join(lines)
 
 
-def _render(action: dict) -> str:
-    lines = [f"action: {action['action']}"]
-    if action.get('cycle'):
-        lines.append(f"cycle:  {action['cycle']}")
-    # `hint` is where the way back lives (the command that puts a line back in service, or the
-    # one that pins the node a cycle with nothing in hand has to choose between): a reader who is
-    # not using --json is exactly the reader who needs it, so it is rendered, not just returned.
-    for key in ('note', 'reason', 'question', 'hint', 'blocked', 'close_with'):
-        if action.get(key):
-            lines.append(f"{key + ':':<9} {action[key]}")
-    if action.get('node_id'):
-        lines.append(f"node:   {action.get('node_title', '')}  ({action['node_id']})")
-    for item in action.get('nodes') or []:
-        if isinstance(item, dict) and item.get('node_id') != action.get('node_id'):
-            lines.append(f"node:   {item.get('node_title', '')}  ({item['node_id']})")
-    for step in action.get('steps', []):
-        lines.append(f"  - {step}")
-    if action.get('prompt'):
-        lines.append(f"prompt: {action['prompt']}")
-    if action.get('action') in ('dispatch', 'maintenance_due'):
-        lines.append(f"mode:   {action.get('mode')}")
-    # The maintenance channel's own fields: which measurement crossed, what it read, where the line
-    # was, and the node the close had picked before this one was put in front of it. A reader who is
-    # not using --json is exactly the reader who needs to see why the graph grew a node.
-    if action.get('metric'):
-        lines.append(f"metric: {action['metric']} = {action.get('reading')} "
-                     f"(line {action.get('line')})")
-    if action.get('deferred_node'):
-        lines.append(f"after:  {action.get('deferred_title', '')}  ({action['deferred_node']})")
-    if 'applied' in action:
-        lines.append(f"applied: {action['applied']}")
-    for item in action.get('attention', []):
-        who = f"{item.get('node_title')} ({item.get('node_id')})" if item.get('node_id') else '?'
-        lines.append(f"attention: {item.get('kind')}  {who}")
-        if item.get('hint'):
-            lines.append(f"           {item['hint']}")
-    return '\n'.join(lines)
-
-
 def main(argv=None) -> int:
+    """This module's own entry: parse the line, run `plan` / `apply` / `record`, print the answer.
+
+    What is here is the parse, the vocabulary (`contract`) and the one call into the package. The
+    output -- JSON or the human rendering, and the rule that a preview carries no commands -- is
+    `actions.render_action`'s, the same one `pf next` prints through, so the two spellings of the
+    pipeline's front door cannot drift apart in what they show.
+
+    The closing call's answers (`--continue` / `--stop` / `--node` / `--note`) are refused unless
+    something is being settled or previewed, exactly as `pf next` refuses them without `--after` or
+    `--plan`: with nothing being settled, there is no question for them to answer, and a quiet no-op
+    would read as if that answer had been taken. `apply` is this module's spelling of
+    `pf next --after <node>` -- the settle that reads the ticket -- so `--after` names the node it is
+    about (one line can hold several at once) and the closing answers ride with it; the reason text a
+    human reads is the same on both entries, `self_verified` and `decision_given` included. `--after`
+    is refused where nothing is settled (`plan` / `record`): the preview spelling of a closing call is
+    `plan` with the same answers.
+    """
     # 中文 everywhere：reason、options、contract 全是人话。两个流都按 UTF-8 走，否则控制台代码页
     # （这台机器默认 GBK）把字节写歪，按 UTF-8 解码的父进程直接炸在读线程上（stdout 变 None）。
     for stream in (sys.stdout, sys.stderr):
@@ -396,6 +305,9 @@ def main(argv=None) -> int:
     parser.add_argument('--stop', dest='stop', action='store_true',
                         help="the closing call's answer: stop here (parks the cycle)")
     parser.add_argument('--node', help="the closing call's override: which node to run next")
+    parser.add_argument('--after', dest='after', default=None, metavar='NODE_ID',
+                        help='apply: settle THIS node -- how a line holding more than one node says '
+                             'which close this is')
     parser.add_argument('--note', default='', help='why the closing call decided that')
     parser.add_argument('--json', action='store_true')
     args = parser.parse_args(argv)
@@ -405,23 +317,30 @@ def main(argv=None) -> int:
         return 0
 
     decision = 'continue' if args.cont else 'stop' if args.stop else None
-    fn = {'plan': plan, 'apply': apply, 'record': record}[args.command]
+    decision_given = bool(args.cont or args.stop)
+    if args.after and args.command != 'apply':
+        print('Error: --after names the node `apply` settles, and nothing is settled by '
+              f'`{args.command}`. Nothing was changed.', file=sys.stderr)
+        return 2
+    if (decision or args.node or args.note) and args.command != 'plan' and not args.after:
+        print("Error: --continue/--stop/--node/--note are the closing call's answers and need "
+              '`plan` (preview that call) or `apply --after <node_id>` (settle that node). '
+              'Nothing was changed.', file=sys.stderr)
+        return 2
     try:
         if args.command == 'record':
-            action = fn(args.project, args.cycle)
+            action = record(args.project, args.cycle)
+        elif args.command == 'apply':
+            action = apply(args.project, args.cycle, decision=decision, node=args.node,
+                           note=args.note, self_verified=True, after=args.after,
+                           decision_given=decision_given)
         else:
-            action = fn(args.project, args.cycle, decision=decision,
-                        node=args.node, note=args.note)
+            action = plan(args.project, args.cycle, decision=decision, node=args.node,
+                          note=args.note, decision_given=decision_given)
     except (RuntimeError, ValueError) as e:
         print(f'Error: {e}', file=sys.stderr)
         return 2
-    if args.command == 'plan':
-        # A preview must not be runnable. A plan that carried commands was still mid-step
-        # (mechanical bookkeeping) -- say so instead.
-        if action.pop('commands', None):
-            action['settling'] = True
-    print(json.dumps(action, ensure_ascii=False, indent=2) if args.json
-          else _render(action))
+    print(render_action(action, args.json, preview=args.command == 'plan'))
     return 0
 
 

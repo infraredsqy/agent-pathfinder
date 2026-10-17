@@ -1,20 +1,18 @@
 """The `cycle` group: one line of work, and every verb that acts on it.
 
 Owns all eleven verbs of `pf cycle` -- create / start / rename / status / policy / list / current /
-show / hold / close / retry -- plus the vocabulary a cycle carries: VALID_TAGS,
-_parse_cycle_tags and the policy table. `_dispatch_cycle` is the group's own dispatch, so the
-surface and the code that answers it are one list.
+show / hold / close / retry -- plus the vocabulary a cycle carries: VALID_TAGS, `_parse_cycle_tags`
+and the policy table (`POLICY_*`, and `cycle_policy` as the one reading of it).
 """
 
 import json
 import sys
-import time
 from pathlib import Path
 
 from .store import (CYCLE_VALID_STATUSES, PARALLEL_DEFAULT, VALID_NODE_RESULTS,
                     _find_cycle, _holding_ids, _holding_of, _ledger_lock, _now, _read_signal,
-                    _read_state, _resolve_project_root, _set_holding, _signal_path, _write_signal,
-                    _write_state, meta_dir_for)
+                    _read_state, _resolve_project_root, _set_holding, _signal_path, _shared,
+                    _write_signal, _write_state, ledger_dir_for)
 from .pipeline_loader import _load_pipeline
 
 
@@ -57,11 +55,15 @@ POLICY_COUNTS = ('parallel',)
 #: 所以跟着 cycle 记录走 —— 一条不碰代码的线（`art` / `writing`）身上根本没有这两个键。
 POLICY_NUMBERS = ('test_seconds_limit', 'issue_pool_weight_limit')
 #: 词表型策略：值必须在候选表里，`off` 是清除；没有默认值 —— 没配的线落在调用链的下一级，
-#: 行为与这条策略存在之前一字不变。`spawner` 住在这里：这条线的会话由哪份 spawner 开
+#: 行为不变。`spawner` 住在这里：这条线的会话由哪份 spawner 开
 #: （`dsh` / `zcode`）。只收词、不收路径：cycle 记录随 `.pf/` 跨机器合并，机器本地的路径
 #: 落进状态文件就是另一台机器上的死值；要路径的场合走单发 `--spawner <路径>`。
 POLICY_WORDS = ('spawner',)
 POLICY_WORD_CHOICES = {'spawner': ('dsh', 'zcode')}
+#: 合法策略键的并集：四张表就是全部来源，这里算一次 —— `cycle policy` 的报错与 argparse 的
+#: `choices`（经 `state-manage.py`）都取这一份。
+POLICY_KEYS = tuple(sorted(set(POLICY_VALUES) | set(POLICY_NUMBERS) | set(POLICY_COUNTS)
+                           | set(POLICY_WORDS)))
 
 
 def cycle_policy(cycle: dict) -> dict:
@@ -252,9 +254,7 @@ def cmd_cycle_policy(cycle_id: str, key: str, value: str) -> None:
             sys.exit(1)
         stored = value
     else:
-        valid = sorted(set(POLICY_VALUES) | set(POLICY_NUMBERS) | set(POLICY_COUNTS)
-                       | set(POLICY_WORDS))
-        print(f'Error: unknown policy {key!r}; valid keys: {valid}',
+        print(f'Error: unknown policy {key!r}; valid keys: {list(POLICY_KEYS)}',
               file=sys.stderr)
         sys.exit(1)
 
@@ -273,7 +273,7 @@ def cmd_cycle_policy(cycle_id: str, key: str, value: str) -> None:
 
 
 def cmd_cycle_start(cycle_id: str, title: str | None,
-                    force: bool = False, tags=None) -> None:
+                    force: bool = False, tags=None, parallel=None) -> None:
     """Create a cycle AND pin it on the node the rule picks. One command.
 
     The launcher should not have to know how the DAG is ranked, so the pick happens here, using the
@@ -283,6 +283,10 @@ def cmd_cycle_start(cycle_id: str, title: str | None,
     `--tags` is the filter set this cycle will pick from, and it has to reach the PICK here: the
     pick happens while the cycle is being created, so a set that only landed in the cycle record
     would be too late for the first node.
+
+    `--parallel` 是这条线同时握几格：它落的正是 `policies.parallel` 那一格（`cycle policy` 写的
+    是同一个键），所以开局这一次挑到几格、以后每一次收尾补几格，取的是同一个数。不给就用缺省
+    （一次一格）。
 
     Refuses while another cycle is still active, unless `--force`. The alternative -- two active
     cycles -- makes the next bare `next` an `ask_user`, which an unattended run cannot answer, and
@@ -296,9 +300,16 @@ def cmd_cycle_start(cycle_id: str, title: str | None,
 
     tags = _parse_cycle_tags(tags)
     _require_tags(tags, 'pf cycle start')
+    # 命令行那一格过 `cycle policy` 用的同一个解析口：正整数落盘，`off` 落回缺省。
+    stated = _parse_policy_count('parallel', parallel) if parallel is not None else None
     with _ledger_lock():
         project = _resolve_project_root(Path.cwd())
-        ranked = pipeline.ranked_ready_nodes(project, tags=tags)
+        # 开局钉几格与收尾补几格是同一件事：`parallel` 说这条线同时握几个节点。这一次挑选的
+        # `limit` 与开局钉几格都是它 —— `cycle_policy` 是拿它的唯一来源，命令行给了就先问它一次，
+        # 没给就是这条新线落盘后的那个缺省值。
+        stated_or_default = {'parallel': stated} if stated is not None else {}
+        cap = cycle_policy({'policies': stated_or_default})['parallel']
+        ranked = pipeline.ranked_ready_nodes(project, limit=cap, tags=tags)
         if not ranked:
             blocked = pipeline.tag_blocked_ready_nodes(project, tags)
             if blocked:
@@ -315,15 +326,14 @@ def cmd_cycle_start(cycle_id: str, title: str | None,
         cmd_cycle_create(cycle_id, title, force=force, tags=tags)
         state = _read_state()
         cycle = _find_cycle(state, cycle_id)
-        cap = cycle_policy(cycle)['parallel']
+        if stated is not None:
+            cycle.setdefault('policies', {})['parallel'] = stated
         holding = [{'id': n['id'], 'since': cycle['created_at']} for n in ranked[:cap]]
         _set_holding(cycle, holding)
         _write_state(state)
-    others = len(ranked) - len(holding)
+    # 名单是按这条线的 `parallel` 取的，所以「后面还排着多少」这次读不出来 —— 不报，也不猜。
     print(f'STARTED: cycle "{cycle_id}" → {node.get("title", node["id"])}'
-          + (f'  ({len(holding)} node(s) pinned; {others} more ready node(s) behind)'
-             if len(holding) > 1 else
-             f'  ({others} more ready node(s) behind it)' if others else ''))
+          + (f'  ({len(holding)} node(s) pinned)' if len(holding) > 1 else ''))
 
 
 # ── the group's queries ──────────────────────────────────────────────────────
@@ -348,8 +358,7 @@ def cmd_cycle_current() -> None:
     """现在要紧的那几条线：每一条 `active` 的，**以及每一条手上有节点的**。
 
     第二条是这里存在的原因：一条不在服务中的线照样握着它没收尾的节点 —— 那正是人必须看见的
-    状态（活停在半路，而这条线不会自己往前走）。以前只列 active，于是停住的线在这份读数里根本
-    不存在。
+    状态（活停在半路，而这条线不会自己往前走；只列 active 的读数里没有它）。
 
     一条线可以同时握着多个节点（`parallel` 策略）：这份读数把每一个都列出来，各自的认领时刻也
     就在每一行上。
@@ -410,7 +419,7 @@ def cmd_cycle_hold(cycle_id: str, node_id: str) -> None:
     one atomic step.
 
     一条线同时可以握多个节点（`parallel` 策略），所以往已经有节点的这条线上再 pin 一个不是错误
-    —— 这一笔就是「再开一格」；同一个 id 重 pin 照旧放行（重启语义）。
+    —— 这一笔就是「再开一格」；同一个 id 重 pin 放行（重启语义）。
     """
     with _ledger_lock():
         state = _read_state()
@@ -444,19 +453,25 @@ def cmd_cycle_retry(cycle_id: str, node_id: str, summary: str | None,
     起步的那一步 —— 只要还有一张 `pending` 条子，`next` 就永远答 `wait`，一个字节都推不动
     （这条卡住过一条线）。
     """
+    if drop:
+        # 装载放在锁外面：它不是这次读-改-写的一部分。
+        pipeline = _load_pipeline()
     with _ledger_lock():
         state = _read_state()
         _find_cycle(state, cycle_id)
         sp = _signal_path(cycle_id, node_id)
+        remove = _shared('pf_shared_jsonio', 'jsonio.py').unlink_with_retry
         if drop:
             if sp.exists():
-                _unlink_with_retry(sp)
+                remove(sp)
             # 会话那条记号也一并抹掉：留着它，重试根本派不出去（派发会把这一格跳过，见 nextcmd）。
-            _unlink_with_retry(_launch_dir(cycle_id, node_id) / 'started')
+            # 这枚记号与 prompt / claim 同住一处（`prompts.started_marker`），这里只交出「哪条线、
+            # 哪一格」，落点算法不在这边再拼一份。
+            remove(pipeline.started_marker(ledger_dir_for(None).parent, cycle_id, node_id))
             print(f'Signal dropped (no ticket left): {sp}')
             return
         if sp.exists():
-            _unlink_with_retry(sp)
+            remove(sp)
         p = _write_signal(cycle_id, node_id, 'pending',
                           summary or 'Node restarted (previous signal cleared)', {})
     print(f'Signal cleared and rewritten as pending: {p}')
@@ -526,58 +541,4 @@ def cmd_cycle_rename(cycle_id: str, title: str) -> None:
         cycle['updated_at'] = _now()
         _write_state(state)
     print(f'RENAMED: "{cycle_id}" → "{title}"')
-
-
-# ── the launch dir, and one unlink that tolerates a reader ───────────────────
-
-def _launch_dir(cycle_id: str, node_id: str) -> Path:
-    """`.pf/meta/launch/<cycle>/<node>/` —— 派发那一格的落点（prompt / claim / started 都在里面）。"""
-    return meta_dir_for(None) / 'launch' / cycle_id / node_id
-
-
-def _unlink_with_retry(path, attempts: int = 4) -> None:
-    """`unlink`, tolerating a reader that holds the file open this instant.
-
-    Same shape as store's `_replace_with_retry`: on Windows a plain `open()` for reading does not
-    carry FILE_SHARE_DELETE, so a concurrent reader mid-read makes the unlink fail with
-    PermissionError. The window is tiny and the retry is bounded well under a second.
-    """
-    for attempt in range(attempts):
-        try:
-            path.unlink(missing_ok=True)
-            return
-        except PermissionError:
-            if attempt == attempts - 1:
-                raise
-            time.sleep(0.05 * (attempt + 1))
-
-
-# ── the group's own dispatch ─────────────────────────────────────────────────
-
-def _dispatch_cycle(args) -> None:
-    """`pf cycle <verb>`: the group answers its own verbs, so this list is the surface."""
-    verb = getattr(args, 'cycle_command', None)
-    handlers = {
-        'create': lambda: cmd_cycle_create(args.id, args.title,
-                                           getattr(args, 'force', False),
-                                           getattr(args, 'tags', None)),
-        'start': lambda: cmd_cycle_start(args.id, args.title,
-                                         getattr(args, 'force', False),
-                                         getattr(args, 'tags', None)),
-        'rename': lambda: cmd_cycle_rename(args.id, args.title),
-        'status': lambda: cmd_cycle_status(args.id, args.status),
-        'policy': lambda: cmd_cycle_policy(args.id, args.key, args.value),
-        'list': lambda: cmd_cycle_list(),
-        'current': lambda: cmd_cycle_current(),
-        'show': lambda: cmd_cycle_show(args.id, args.node),
-        'hold': lambda: cmd_cycle_hold(args.id, args.node),
-        'close': lambda: cmd_cycle_close(args.id, args.node, args.result),
-        'retry': lambda: cmd_cycle_retry(args.id, args.node, getattr(args, 'summary', None),
-                                         getattr(args, 'drop', False)),
-    }
-    fn = handlers.get(verb)
-    if fn is None:
-        print('usage: state-manage.py cycle {' + '|'.join(handlers) + '} ...', file=sys.stderr)
-        sys.exit(1)
-    fn()
 

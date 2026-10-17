@@ -6,25 +6,31 @@ from the issue tool that owns the pool), the lines come from the cycle's own pol
 crossing line puts a maintenance node between the node just closed and the node the close had
 already picked. A project that configures no line gets the close it always got -- that is the
 regression this channel lives or dies by, and it is the first case here.
+
+这条线真的跑起来那一头（真进程改图、整条线走到底、收条子那一方看到的表单）住在
+`cases_maintenance_run.py`。
 """
 from __future__ import annotations
 
 import json
-import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import Base, NODE, NODE2, NODE3, pipeline, normalise
-from harness import HANDOFF_PY, InProcessDagManage, TOOLS_DIR, WorkerSession, _run_proc, run_state_manage
-from harness_env import STATE_MANAGE, _fresh_module
+from harness import (InProcessDagManage, TOOLS_DIR, WorkerSession, _fresh_module, _run_proc,
+                     run_state_manage, STATE_MANAGE)
 
-__all__ = ['TestMaintenanceDedup', 'TestMaintenanceChannel', 'TestMaintenanceThresholds', 'TestMaintenanceScope',
-           'TestMaintenanceCli', 'TestMaintenanceDrive', 'TestTheForm', 'TestIssueRepairSwitch']
+__all__ = ['TestMaintenanceDedup', 'TestMaintenanceChannel', 'TestMaintenanceThresholds',
+           'TestMaintenanceScope', 'TestIssueRepairSwitch']
 
 #: The tool that owns the issue pool; `pool_weight()` asks it for the number through the same CLI.
 ISSUE_MANAGE = TOOLS_DIR / 'issue' / 'issue_manager.py'
+
+#: The line the maintenance cases write onto a cycle (`test_seconds_limit`), and the number their
+#: tickets report around it.
+LINE = 120
 
 
 def seed_pool(sb, *issues) -> None:
@@ -42,6 +48,33 @@ def set_config(sb, key, value, *extra):
     写的那一层。
     """
     return run_state_manage(sb.root, 'config', 'set', key, value, *extra)
+
+
+def coding_line(test, *, policies=(), reading=None, dispatch=True, pair=True):
+    """A coding line, started and pinned on its head node, with a ticket ready for it.
+
+    The DAG is a real one -- `NODE` the head, `NODE2` waiting for it -- because the insertion
+    rewrites the edge BETWEEN the node that was closed and the node the close had already picked: a
+    pair with no edge between them would exercise only the no-op half of that.
+
+    `policies` writes the cycle's own numbers (`test_seconds_limit`, `issue_pool_weight_limit`),
+    `dispatch` walks the line one step and leaves the head's ticket carrying `reading`, and `pair`
+    adds the second node -- a case whose subject is the line's own settings takes just the head.
+    """
+    sb = test.make()
+    sb.add_node(NODE, '写代码 A', mode='auto', tags=['coding'])
+    if pair:
+        sb.add_node(NODE2, '写代码 B', mode='auto', tags=['coding'], deps=[NODE])
+    sb.start_cycle(tags=['coding'])
+    for key, value in policies:
+        sb.set_policy('cyc', key, value)
+    if dispatch:
+        sb.next()                                  # the dispatch for NODE
+        outputs = {'deliverable': 'x'}
+        if reading is not None:
+            outputs['reading'] = {'test_seconds': reading}
+        sb.write_signal('cyc', NODE, 'completed', 'done', outputs)
+    return sb
 
 
 class ReadingWorker(WorkerSession):
@@ -97,43 +130,28 @@ class SelfHealingWorker(ReadingWorker):
 
 
 class TestMaintenanceChannel(Base):
-    """The channel itself: nothing configured (byte-for-byte the old close), a crossed line, and a
-    reading under its line."""
+    """The channel itself: a project with nothing configured, a crossed line, and a reading under
+    its line."""
 
-    LINE = 120
-
-    def two_coding_nodes(self, reading=None, thresholds=True, cli=False):
-        """A two-node coding line, pinned on the first of them, with one worker's report ready.
-
-        The DAG is a real one -- `NODE` the head, `NODE2` waiting for it -- because the insertion
-        rewrites the edge BETWEEN what was closed and what the close picks, and a pair with no edge
-        between them would exercise only the no-op half of that.
-        """
-        sb = self.make(cli=cli)
-        sb.add_node(NODE, '写代码 A', mode='auto', tags=['coding'])
-        sb.add_node(NODE2, '写代码 B', mode='auto', tags=['coding'], deps=[NODE])
-        sb.start_cycle(tags=['coding'])
-        if thresholds:
-            sb.set_policy('cyc', 'test_seconds_limit', self.LINE)
-        outputs = {'deliverable': 'x'}
-        if reading is not None:
-            outputs['reading'] = {'test_seconds': reading}
-        sb.next()                                  # the dispatch for NODE
-        sb.write_signal('cyc', NODE, 'completed', 'done', outputs)
-        return sb
-
-    # ── 回归底线：一个数都不配，收尾与这个通道出现之前逐字节相同 ──────────────
+    # ── 回归底线：一个数都不配时，收尾一个字都不多带 ──────────────
 
     def test_without_a_threshold_the_close_and_the_graph_are_untouched(self):
-        """项目一个数都不配时，这条通道整个不生效：返回值、图、记录与今天逐字节相同。
+        """项目一个数都不配时，这条通道整个不生效：返回值、图、记录与不配它时逐字节相同。
 
         两个项目跑同一条线，唯一的差别是其中一个在 cycle 上多配了一根线。多配的那一个照样**不插**
         （读数没越线），于是两份记录必须一字不差 —— 配置那一格除外（它本来就该不同），剩下的口径照
         `TestNodeTags.test_an_untagged_cycle_picks_what_it_always_picked`：时间戳是合法差异，
         别的一个字都不许变。
         """
-        control = self.two_coding_nodes(reading=10, thresholds=False)
-        configured = self.two_coding_nodes(reading=10, thresholds=True)
+        def walked(data):
+            """记录里去掉配置那一格：收尾写了什么，全看剩下的部分。"""
+            data = normalise(data)
+            for cycle in data.get('cycles') or []:
+                cycle.pop('policies', None)
+            return data
+
+        control = coding_line(self, reading=10)
+        configured = coding_line(self, policies=[('test_seconds_limit', LINE)], reading=10)
 
         control_action = control.close_round(NODE)
         configured_action = configured.close_round(NODE)
@@ -143,12 +161,6 @@ class TestMaintenanceChannel(Base):
                          'a line that is not crossed must change nothing at all')
         self.assertEqual(configured.current_node(), NODE2, 'the close still pins its own pick')
         self.assertEqual(len(configured.dag()['nodes']), 2, 'no node was inserted')
-        def walked(data):
-            """记录里去掉配置那一格：收尾写了什么，全看剩下的部分。"""
-            data = normalise(data)
-            for cycle in data.get('cycles') or []:
-                cycle.pop('policies', None)
-            return data
 
         for rel in ('.pf/ideas.json', '.pf/state.json'):
             left = walked(json.loads(control.tree_contents()[rel]))
@@ -157,7 +169,7 @@ class TestMaintenanceChannel(Base):
 
     def test_a_ticket_carrying_no_reading_never_inserts_anything(self):
         """读数由会话自报：条子上没有 `reading` 时，阈值写得再明白也无事发生。"""
-        sb = self.two_coding_nodes(reading=None)
+        sb = coding_line(self, policies=[('test_seconds_limit', LINE)], reading=None)
 
         action = sb.close_round(NODE)
 
@@ -167,7 +179,7 @@ class TestMaintenanceChannel(Base):
 
     def test_a_reading_under_the_line_inserts_nothing(self):
         """读数没越线：这是对照组 —— 同一个项目、同一根线，只把读数压到线下。"""
-        sb = self.two_coding_nodes(reading=self.LINE - 1)
+        sb = coding_line(self, policies=[('test_seconds_limit', LINE)], reading=LINE - 1)
 
         action = sb.close_round(NODE)
 
@@ -185,7 +197,7 @@ class TestMaintenanceChannel(Base):
         一次断言把四件事钉住：图上多了一个节点、两条新边接对了、旧的那条**直接**边没了、被钉住的
         是刚插进来的那个 —— 而原本挑中的那个还在图里、还是 `todo`。
         """
-        sb = self.two_coding_nodes(reading=self.LINE + 40)
+        sb = coding_line(self, policies=[('test_seconds_limit', LINE)], reading=LINE + 40)
 
         action = sb.close_round(NODE)
 
@@ -212,6 +224,45 @@ class TestMaintenanceChannel(Base):
         self.assertTrue(Path(action['prompt']).is_file())
         self.assertEqual(Path(action['prompt']).parent.name, made)
 
+    def test_the_reported_prompt_path_is_what_the_writer_wrote(self):
+        """维护那一格报出来的 prompt 路径，与写口算出来的那一处逐字相同。
+
+        新节点的 uuid 是 `dag-manage add` 现场才有的，所以这条路径在收尾那一趟被算过两回：写
+        prompt 的那一回与报给调用方的那一回。两处必须落在同一个文件上。
+        """
+        sb = coding_line(self, policies=[('test_seconds_limit', LINE)], reading=LINE + 40)
+
+        action = sb.close_round(NODE)
+
+        made = sb.current_node()
+        expected = pipeline.prompts.launch_prompt_path(sb.root, 'cyc', made)
+        self.assertEqual(Path(action['prompt']), expected)
+        self.assertTrue(expected.is_file())
+        self.assertEqual(sb.prompt_of(action), f'/pf-conduct {made} [pipeline]\n')
+
+    def test_the_generated_spec_lands_where_the_one_path_says(self):
+        """生成 spec 的落点由 `nodes.node_spec_path` 一处定。
+
+        写下去的那一份、spec 末尾自己报的那一句、写口算出来的那一处，三者是同一个文件。
+        """
+        sb = coding_line(self, policies=[('test_seconds_limit', LINE)], reading=LINE + 40)
+
+        sb.close_round(NODE)
+
+        made = sb.current_node()
+        landed = Path(pipeline.nodes.node_spec_path(sb.root, made))
+        self.assertTrue(landed.is_file(), f'{landed} 不在写口说的那个地方')
+        self.assertIn(f'（本 spec 落在：{landed.as_posix()}）',
+                      landed.read_text(encoding='utf-8'))
+
+    def test_the_spec_path_is_built_in_one_file(self):
+        """实现包里拼 `spec.md` 这一段的文件只有 `nodes.py`。"""
+        impl = TOOLS_DIR / 'conduct' / 'conduct_pipeline_impl'
+        sites = sorted(path.name for path in sorted(impl.glob('*.py'))
+                       if "'spec.md'" in path.read_text(encoding='utf-8'))
+
+        self.assertEqual(['nodes.py'], sites)
+
     def test_a_crossed_line_only_defers_the_node_it_picked(self):
         """多格线撞上维护：延后的只有被挑中的那一格，同一趟补上来的其余格照常钉在手里。
 
@@ -224,10 +275,10 @@ class TestMaintenanceChannel(Base):
         sb.add_node(NODE3, '写代码 C', mode='auto', tags=['coding'], deps=[NODE])
         sb.start_cycle(tags=['coding'])            # 缺省 parallel=1：开局只钉一个
         sb.set_policy('cyc', 'parallel', 3)
-        sb.set_policy('cyc', 'test_seconds_limit', self.LINE)
+        sb.set_policy('cyc', 'test_seconds_limit', LINE)
         sb.next()                                  # NODE 的 dispatch
         sb.write_signal('cyc', NODE, 'completed', 'done',
-                        {'deliverable': 'x', 'reading': {'test_seconds': self.LINE + 40}})
+                        {'deliverable': 'x', 'reading': {'test_seconds': LINE + 40}})
 
         action = sb.close_round(NODE)
 
@@ -245,7 +296,7 @@ class TestMaintenanceChannel(Base):
 
     def test_the_inserted_node_carries_why_what_scope_and_a_mechanical_verdict(self):
         """维护节点的 spec 由工具生成：为什么被插进来、这次的范围、以及一条机械可判的完成判定。"""
-        sb = self.two_coding_nodes(reading=self.LINE + 40)
+        sb = coding_line(self, policies=[('test_seconds_limit', LINE)], reading=LINE + 40)
 
         sb.close_round(NODE)
         made = sb.current_node()
@@ -254,8 +305,8 @@ class TestMaintenanceChannel(Base):
 
         # 为什么：哪个度量、读到多少、线在哪
         self.assertIn('test_seconds', spec)
-        self.assertIn(f'{self.LINE + 40:g}s', spec)
-        self.assertIn(f'{self.LINE:g}s', spec)
+        self.assertIn(f'{LINE + 40:g}s', spec)
+        self.assertIn(f'{LINE:g}s', spec)
         self.assertIn('test_seconds_limit', spec)
         # 范围：这次只做这一件事
         self.assertIn('只做这件事', spec)
@@ -270,22 +321,22 @@ class TestMaintenanceChannel(Base):
         self.assertNotIn('.py', spec)
         # 图上的那个节点一行说清它是什么
         self.assertIn('维护：', node['title'])
-        self.assertIn(str(self.LINE + 40), node['title'])
+        self.assertIn(str(LINE + 40), node['title'])
 
     def test_the_spec_and_the_note_name_the_line_and_the_field_it_came_from(self):
         """线是多少、读的是条目上的哪个字段：spec 与收尾那句 note 都点名，人回头查就查这里。"""
-        sb = self.two_coding_nodes(reading=self.LINE + 5)
+        sb = coding_line(self, policies=[('test_seconds_limit', LINE)], reading=LINE + 5)
         action = sb.close_round(NODE)
         made = sb.current_node()
         spec = (sb.root / '.pf' / 'nodes' / made / 'spec.md').read_text(encoding='utf-8')
 
         self.assertEqual(len(sb.dag()['nodes']), 3)
         self.assertIn('test_seconds_limit', spec)
-        self.assertIn(f'达到这条线策略里的线 {self.LINE:g}s', action['note'])
+        self.assertIn(f'达到这条线策略里的线 {LINE:g}s', action['note'])
 
     def test_the_reading_exactly_on_the_line_is_over_it(self):
         """线是能接受的最后一个数：读数正好落在线上的那一刻，债就已经到顶了。"""
-        sb = self.two_coding_nodes(reading=self.LINE)
+        sb = coding_line(self, policies=[('test_seconds_limit', LINE)], reading=LINE)
 
         sb.close_round(NODE)
 
@@ -293,7 +344,7 @@ class TestMaintenanceChannel(Base):
 
     def test_the_inserted_node_is_the_one_the_next_step_dispatches(self):
         """插完接着走：再问一次管线，它派发的就是维护节点，而那个被推迟的节点还在等。"""
-        sb = self.two_coding_nodes(reading=self.LINE + 40)
+        sb = coding_line(self, policies=[('test_seconds_limit', LINE)], reading=LINE + 40)
         sb.close_round(NODE)
         made = sb.current_node()
 
@@ -311,7 +362,7 @@ class TestIssueRepairSwitch(Base):
     只是项目设置里那一格。没设过的那一条是回归底线：它与写着 `on` 的那一条必须判出同一个东西。
     """
 
-    LINE = TestMaintenanceChannel.LINE
+    LINE = LINE
 
     def crossed_line(self, issue_repair=None, global_value=None):
         """一条两个节点的 coding 线：配好线、条子上带着越线的读数，收尾随时可以走。"""
@@ -447,37 +498,22 @@ class TestMaintenanceThresholds(Base):
         self.assertEqual(pipeline.thresholds_for(sb.cycle()), {})
         self.assertIsNone(sb.cycle().get('policies'))
 
-    def test_the_two_packages_spell_the_threshold_fields_the_same_way(self):
-        """写的那一侧与读的那一侧是同一份约定，两个包各有一份表：这条用例比对它们。
+    def test_the_numeric_lines_come_from_the_one_policy_table(self):
+        """数值型那两条线取自 `conduct_state.cycles.POLICY_NUMBERS` 那一份正本。
 
-        `conduct_pipeline_impl` 与 `conduct_state` 是两个按路径各自加载的包，import 一个进另一个会
-        绕出一个环，所以两边各写一份字段名 —— 而两份分头长出自己的词，正是同一个字段用一个名字
-        写下去、用另一个名字读回来的来路。
+        整数型的 `parallel` 是同格的另一类键，不在其中；一个数值线都没配时这份读数是空的 ——
+        `crossed` 的非空门靠的就是它。
         """
-        source = (Path(pipeline.__file__).resolve().parent.parent / 'conduct_state'
-                  / 'cycles.py').read_text(encoding='utf-8')
-        found = re.search(r'POLICY_NUMBERS = \(([^)]*)\)', source)
-        self.assertIsNotNone(found, 'the writer side has no numeric policy table')
-        written = tuple(re.findall(r"'([a-z_]+)'", found.group(1)))
-        self.assertEqual(written, tuple(pipeline.POLICY_KEYS))
+        stated = {'parallel': 3, 'test_seconds_limit': 120}
+        self.assertEqual(pipeline.thresholds_for({'id': 'c', 'policies': stated}),
+                         {'test_seconds_limit': 120}, '`parallel` 不是这条通道读的键')
+        self.assertEqual(pipeline.thresholds_for({'id': 'c', 'policies': {'parallel': 3}}), {},
+                         '只配了整数型策略时这份读数该是空的')
+        self.assertEqual(
+            pipeline.thresholds_for({'id': 'c', 'policies': {'test_seconds_limit': 1,
+                                                            'issue_pool_weight_limit': 2}}),
+            {'test_seconds_limit': 1, 'issue_pool_weight_limit': 2})
 
-    def test_the_two_packages_spell_the_word_policies_the_same_way(self):
-        """词表型策略同一条纪律：写侧（cycles.py）与读侧（store.py）各一份表，这条比对它们。
-
-        `spawner` 的词是两份 spawner 脚本的名字：写侧收不出的词根本落不了盘，读侧认不出的词
-        读作没配 —— 两边的候选表分头漂移，就是一条线配了 `zcode` 却读成没配的那种哑坑。
-        """
-        source = (Path(pipeline.__file__).resolve().parent.parent / 'conduct_state'
-                  / 'cycles.py').read_text(encoding='utf-8')
-        found_words = re.search(r'POLICY_WORDS = \(([^)]*)\)', source)
-        self.assertIsNotNone(found_words, 'the writer side has no word policy table')
-        self.assertEqual(tuple(re.findall(r"'([a-z_]+)'", found_words.group(1))),
-                         tuple(pipeline.POLICY_WORDS))
-        for key in pipeline.POLICY_WORDS:
-            found_choices = re.search(rf"'{key}': \(([^)]*)\)", source)
-            self.assertIsNotNone(found_choices, f'the writer side has no choices for {key!r}')
-            self.assertEqual(tuple(re.findall(r"'([a-z_]+)'", found_choices.group(1))),
-                             tuple(pipeline.POLICY_WORD_CHOICES[key]))
 
 class TestMaintenanceScope(Base):
     """领域限定：两个度量归代码这一支，别的线读得到同一个数，但不动。"""
@@ -539,207 +575,12 @@ class TestMaintenanceScope(Base):
         self.assertNotIn('"reading": {"issue_pool_weight', spec)
 
 
-class TestMaintenanceCli(Base):
-    """改图走的是**真的那些进程**：`dag-manage add` 打的 uuid 只有它的 stdout 里有。
-
-    沙箱默认把 `dag-manage` 的调用在这一个进程里答掉（省一个进程启动），上面那些用例走的就是那条
-    快路；而抓取子进程输出这一步，两条路上是两种东西 —— 这一条把整趟收尾放回真 CLI 上跑，
-    新节点的 uuid 由真进程印出来、由 `_capture` 读回来。
-    """
-
-    def test_the_graph_edit_runs_through_the_real_processes(self):
-        sb = self.make(cli=True)
-        sb.add_node(NODE, '写代码 A', mode='auto', tags=['coding'])
-        sb.add_node(NODE2, '写代码 B', mode='auto', tags=['coding'], deps=[NODE])
-        sb.start_cycle(tags=['coding'])
-        sb.set_policy('cyc', 'test_seconds_limit', 60)
-        sb.next()                                  # the real `next` CLI pins NODE and dispatches it
-        sb.handoff('cyc', NODE, 'completed', 'done',
-                   {'deliverable': 'x', 'reading': {'test_seconds': 400}})
-
-        action, proc = sb.next_cli('--after', NODE)
-
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(action['action'], 'dispatch')
-        nodes = sb.dag()['nodes']
-        self.assertEqual(len(nodes), 3, f'the maintenance node was not inserted: {action}')
-        made = action['node_id']
-        self.assertEqual(nodes[made]['dependencies'], [NODE])
-        self.assertEqual(nodes[NODE2]['dependencies'], [made])
-        # 派发这一步到 prompt 文件为止：`dispatch <cycle>` 读的就是它，而这条用例断言的就是
-        # 「那个文件在、里面是维护节点的调用行」。**不调 `dispatch`，也不传 `--spawn`** ——
-        # 那条通路是通的，它会真的开出会话（派发语义那一层由 `TestDispatchVerb` 的 fake spawner 守）。
-        self.assertTrue(Path(action['prompt']).is_file())
-        self.assertEqual(Path(action['prompt']).parent.name, made)
-        self.assertIn(made, Path(action['prompt']).read_text(encoding='utf-8'))
-        self.assertTrue((sb.root / '.pf' / 'nodes' / made / 'spec.md').is_file())
-        self.assertEqual(sb.current_node(), made)
-
-
-class TestMaintenanceDrive(Base):
-    """整条线跑到底：维护节点照常被派发、照常收尾，然后接着走它推迟的那一个。"""
-
-    def two_coding_nodes(self):
-        """一条两个节点的 coding 线，开好机、配好线：`NODE2` 等 `NODE`。
-
-        `cycle start` 要排在那条指令之前：`scope=cycle` 的条目要有一个 line 可绑，这是它在
-        `instruction add` 那一步就定下来的。
-        """
-        sb = self.make()
-        sb.add_node(NODE, '写代码 A', mode='auto', tags=['coding'])
-        sb.add_node(NODE2, '写代码 B', mode='auto', tags=['coding'], deps=[NODE])
-        sb.start_cycle(tags=['coding'])
-        sb.set_policy('cyc', 'test_seconds_limit', 60)
-        return sb
-
-    def test_the_driver_walks_through_the_inserted_node_and_on_to_the_deferred_one(self):
-        """无人值守这一趟：A 报了一个越线的读数，于是 B 之前先跑维护节点，再接着跑 B。
-
-        维护节点把那笔债还上了（它报回来的读数在线下），所以这一趟插**一个**节点就收尾 ——
-        这条用例同时钉住「插进来的是普通节点、照常被派发、照常收尾」和「还上了就不再插」。
-        """
-        sb = self.two_coding_nodes()
-
-        # 每个会话都在条子里带上读数；维护节点报的是修好之后的数
-        terminal, driver = self.run_to_stop(
-            sb, worker=SelfHealingWorker(sb, {'test_seconds': 400}))
-
-        made = [n for n, _ in driver.dispatched if n not in (NODE, NODE2)]
-        self.assertEqual(len(made), 1,
-                         f'the maintenance node was never dispatched: {driver.dispatched}')
-        maintenance_node = made[0]
-        self.assertEqual(sb.path_nodes(), [NODE, maintenance_node, NODE2],
-                         'the maintenance node runs between the node it was inserted after and '
-                         'the node that was already picked')
-        self.assertEqual(terminal['action'], 'stop_pipeline')
-        self.assertEqual(sb.dag()['nodes'][maintenance_node]['status'], 'completed')
-        self.assertEqual(sb.dag()['nodes'][NODE2]['status'], 'completed')
-        # 插进来的那个节点是个普通的节点：它自己也被派发、也交条子
-        self.assertEqual(sb.read_signal('cyc', maintenance_node)['status'], 'completed')
-
-    def test_a_plain_run_never_produces_a_maintenance_action(self):
-        """没有阈值时整条线里不会出现维护动作：这条通道是加法的，关着时一点痕迹都没有。"""
-        sb = self.make()
-        sb.add_chain(2)
-        sb.start_cycle(tags=['coding'])
-        _, driver = self.run_to_stop(sb)
-
-        self.assertNotIn('maintenance_due', driver.kinds())
-        self.assertEqual(len(sb.dag()['nodes']), 2)
-
-    def test_the_closing_call_keeps_the_worker_out_of_the_graph_edit(self):
-        """收尾那次调用返回的走法只有 `dispatch` 与 `stop_pipeline`：改图是工具的事，
-        调用方手里没有可以再跑一遍的命令（不变量 6）。"""
-        sb = self.two_coding_nodes()
-        sb.next()
-        sb.write_signal('cyc', NODE, 'completed', 'done',
-                        {'deliverable': 'x', 'reading': {'test_seconds': 400}})
-
-        action = sb.close_round(NODE)
-
-        self.assertEqual(action['action'], 'dispatch')
-        self.assertFalse(action.get('commands'), 'the caller must have nothing left to run')
-        # 工具自己那两样中间物不外泄
-        self.assertNotIn('add_command', action)
-        self.assertNotIn('spec_of', action)
-        self.assertTrue(action['applied'])
-        # 这次结算做了什么，逐条可查：建节点、拆旧边、连两条新边、钉指针
-        did = ' '.join(action['did'])
-        self.assertIn('dag-manage.py add', did)
-        self.assertIn('undepend', did)
-        self.assertIn('depend', did)
-        self.assertIn('cycle hold', did)
-        # 插进来的那个节点被记为这一次开出来的节点
-        self.assertEqual(action['opened_node'], sb.current_node())
-
-    def test_the_worker_can_report_a_reading_through_the_real_handoff(self):
-        """`reading` 是条子上普通的一个 `outputs` 键：`handoff.py` 原样收下。
-
-        收尾只读它认的那几个（`test_seconds`）；池子那一格即便写在条子上也照样由 issue 工具算。
-        """
-        sb = self.make()
-        sb.add_node(NODE, '写代码 A', mode='auto', tags=['coding'])
-        sb.add_node(NODE2, '写代码 B', mode='auto', tags=['coding'], deps=[NODE])
-        sb.start_cycle(tags=['coding'])
-        sb.set_policy('cyc', 'test_seconds_limit', 60)
-        sb.next()
-        sb.handoff('cyc', NODE, 'completed', 'done',
-                   {'deliverable': 'x', 'reading': {'test_seconds': 400, 'issue_pool_weight': 3}})
-
-        ticket = sb.read_signal('cyc', NODE)
-        self.assertEqual(ticket['outputs']['reading'],
-                         {'test_seconds': 400, 'issue_pool_weight': 3})
-        sb.close_round(NODE)
-        self.assertEqual(len(sb.dag()['nodes']), 3)
-        made = sb.current_node()
-        # 只有越线的那个度量进来，没越线的那个留在原地
-        spec = (sb.root / '.pf' / 'nodes' / made / 'spec.md').read_text(encoding='utf-8')
-        self.assertIn('test_seconds', spec)
-        self.assertIn('"reading": {"test_seconds"', spec)
-        self.assertNotIn('issue_pool_weight', (sb.dag()['nodes'][made]['title']))
-
-class TestTheForm(Base):
-    """`handoff.py --form <cycle>`：这条线要什么，由收条子的那一方现印，写不进去任何东西。"""
-
-    def form(self, sb, cycle='cyc') -> str:
-        return _run_proc(sb.root, [HANDOFF_PY, '--form', cycle]).stdout
-
-    def a_line(self, **policies):
-        sb = self.make()
-        sb.add_node(NODE, '写代码', mode='auto', tags=['coding'])
-        sb.start_cycle(tags=['coding'])
-        for key, value in policies.items():
-            sb.set_policy('cyc', key, value)
-        return sb
-
-    def test_a_line_without_numeric_policies_asks_for_nothing(self):
-        """没配线的项目（`minimal` 档就是这种）拿到一张没有读数格子的骨架。"""
-        text = self.form(self.a_line())
-
-        self.assertIn('-o \'{"deliverable"', text)
-        self.assertNotIn('"reading"', text)
-
-    def test_the_test_line_asks_for_the_wall_clock(self):
-        text = self.form(self.a_line(test_seconds_limit=60))
-
-        self.assertIn('"reading":{"test_seconds":', text)
-
-    def test_the_pool_line_never_becomes_a_ticket_slot(self):
-        """池子那格由 issue 工具算：这条线配了它，表单里也不出现这个键。"""
-        text = self.form(self.a_line(issue_pool_weight_limit=8))
-
-        self.assertNotIn('issue_pool_weight', text)
-        self.assertNotIn('"reading"', text)
-
-    def test_the_form_writes_nothing(self):
-        sb = self.a_line(test_seconds_limit=60)
-        before = (sb.root / '.pf' / 'state.json').read_text(encoding='utf-8')
-
-        self.form(sb)
-
-        self.assertEqual((sb.root / '.pf' / 'state.json').read_text(encoding='utf-8'), before)
-        signals = (sb.root / '.pf' / 'signals')
-        self.assertEqual(sorted(signals.rglob('*.json')) if signals.exists() else [], [])
-
-
 class TestMaintenanceDedup(Base):
     """同一度量同时只许一个未了结的维护节点：债已经有人在还，就不再插第二个。"""
-    LINE = TestMaintenanceChannel.LINE
-
-    def two_coding_nodes(self, reading):
-        sb = self.make()
-        sb.add_node(NODE, '写代码 A', mode='auto', tags=['coding'])
-        sb.add_node(NODE2, '写代码 B', mode='auto', tags=['coding'], deps=[NODE])
-        sb.start_cycle(tags=['coding'])
-        sb.set_policy('cyc', 'test_seconds_limit', self.LINE)
-        sb.next()
-        sb.write_signal('cyc', NODE, 'completed', 'done',
-                        {'deliverable': 'x', 'reading': {'test_seconds': reading}})
-        return sb
 
     def test_a_metric_already_in_hand_is_not_inserted_twice(self):
         """维护节点还在局中（todo）时，同一个度量再越线也不再插 —— 修的人只有一个。"""
-        sb = self.two_coding_nodes(reading=self.LINE + 40)
+        sb = coding_line(self, policies=[('test_seconds_limit', LINE)], reading=LINE + 40)
         first = sb.close_round(NODE)
         self.assertEqual(first['action'], 'dispatch')
         made = sb.current_node()
@@ -748,7 +589,7 @@ class TestMaintenanceDedup(Base):
 
         # 这一次关的是维护节点自己，它的条子又报了一个越线的数：不插第二个，收尾照走。
         sb.write_signal('cyc', made, 'completed', 'still over',
-                        {'deliverable': 'x', 'reading': {'test_seconds': self.LINE + 10}})
+                        {'deliverable': 'x', 'reading': {'test_seconds': LINE + 10}})
         second = sb.close_round(made)
         self.assertEqual(second['action'], 'dispatch')
         self.assertEqual(len(sb.dag()['nodes']), 3, 'a second maintenance node was inserted')
@@ -761,10 +602,10 @@ class TestMaintenanceDedup(Base):
         sb.add_node(NODE2, '写代码 B', mode='auto', tags=['coding'], deps=[NODE])
         sb.add_node(NODE3, '写代码 C', mode='auto', tags=['coding'], deps=[NODE])
         sb.start_cycle(tags=['coding'])
-        sb.set_policy('cyc', 'test_seconds_limit', self.LINE)
+        sb.set_policy('cyc', 'test_seconds_limit', LINE)
         sb.next()
         sb.write_signal('cyc', NODE, 'completed', 'done',
-                        {'deliverable': 'x', 'reading': {'test_seconds': self.LINE + 40}})
+                        {'deliverable': 'x', 'reading': {'test_seconds': LINE + 40}})
         # 一次一格地走（parallel 先压到 1）：每一次收尾只推进自己这一个节点，后面的判定看得清。
         sb.set_policy('cyc', 'parallel', 1)
         first = sb.close_round(NODE)
@@ -778,14 +619,14 @@ class TestMaintenanceDedup(Base):
         sb.set_current_node(NODE2)
         # 再往后，别的节点又报了一个越线的数：债还在，就得再进来一趟
         sb.write_signal('cyc', NODE2, 'completed', 'done',
-                        {'deliverable': 'x', 'reading': {'test_seconds': self.LINE + 50}})
+                        {'deliverable': 'x', 'reading': {'test_seconds': LINE + 50}})
         sb.close_round(NODE2)
         self.assertEqual(len(sb.dag()['nodes']), 4,
                          'a repaired metric that crosses again must insert a fresh node')
 
     def test_the_insert_lands_after_the_node_is_closed(self):
         """图编辑的顺序：老节点先标掉，维护节点才创建 —— 去重读图时不能把刚交的节点算在局内。"""
-        sb = self.two_coding_nodes(reading=self.LINE + 40)
+        sb = coding_line(self, policies=[('test_seconds_limit', LINE)], reading=LINE + 40)
         sb.close_round(NODE)
         self.assertEqual(sb.node(NODE)['status'], 'completed')
         self.assertEqual(sb.path_nodes(), [NODE])

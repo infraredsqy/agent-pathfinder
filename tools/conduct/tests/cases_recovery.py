@@ -8,6 +8,7 @@ the two commands a worker runs, and the sweep that clears the one place process 
 
 from __future__ import annotations
 
+import ast
 import json
 import sys
 from pathlib import Path
@@ -17,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cases_base import Base, NODE, NODE2, NODE3  # noqa: E402
 from harness import HANDOFF_PY, SIGNAL_PY, run_handoff, run_signal  # noqa: E402
 
-__all__ = ['TestRetry', 'TestHandoff', 'TestSignalGuards']
+__all__ = ['TestRetry', 'TestHandoff', 'TestSignalGuards', 'TestCleanTemp']
 
 
 class TestRetry(Base):
@@ -157,7 +158,7 @@ class TestHandoff(Base):
         self.assertEqual(sb.next()['action'], 'wait')
 
     def test_it_never_asks_a_spawner_for_anything(self):
-        """No test may ever call dsh-spawn.ps1, and this command no longer wants to."""
+        """No test may ever call dsh-spawn.ps1, and this command stops short of asking one for anything."""
         sb, first = self.started()
         proc = sb.handoff('cyc', NODE, 'completed', 'done', self.outputs(), dry_run=True)
         self.assertNotIn('dry-run', proc.stdout)
@@ -203,6 +204,48 @@ class TestHandoff(Base):
         proc = sb.handoff('cyc', NODE, 'completed', 'done', self.outputs())
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertFalse((sb.root / '.pf' / 'meta' / 'CONDUCT-CALLBACK-FAILED-cyc.json').exists())
+
+    def test_the_ticket_write_is_the_only_thing_that_lands(self):
+        """交条子这一拍只落那一张条子：手里另一格不因为这一趟而被补上 prompt。
+
+        另一格此刻既没有条子、也没有 `started` 记号 —— 正是「补写下一份 prompt」会挑中的那个
+        状态。交条子的命令读一遍下一步就交回去，落 prompt 是收尾那一拍的事。
+        """
+        sb = self.make()
+        sb.add_node(NODE, '甲', mode='auto')
+        sb.add_node(NODE2, '乙', mode='auto')
+        sb.start_cycle(tags=['coding'])
+        sb._tool('cycle', 'hold', 'cyc', NODE2, cli=True)
+        self.assertEqual(sorted(sb.holding_ids()), sorted([NODE, NODE2]), '两格没都在手里')
+
+        proc = sb.handoff('cyc', NODE, 'completed', 'done', self.outputs())
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        launch = sb.root / '.pf' / 'meta' / 'launch'
+        written = sorted(p.parts[-2] for p in launch.rglob('prompt.txt')) if launch.exists() else []
+        self.assertEqual(written, [], '交条子这一拍写出了下一份 prompt')
+        self.assertIsNone(sb.read_signal('cyc', NODE2), '另一格凭空多了一张条子')
+        self.assertEqual(sb.path(), [], '这一拍动了线的路径')
+        self.assertEqual(sb.holding_ids(), [NODE, NODE2], '这一拍动了手里那两格')
+
+    def test_it_reads_the_next_step_instead_of_driving_it(self):
+        """交条子读下一步走的是只读的 `plan`；写方那条 `record` 在这条命令的路外。
+
+        `record` 是 conductor 的机械例行：它 apply、它替手里的格补 prompt。交条子的会话读一遍
+        下一步就交回去 —— 收格、挑下一格、落下一份 prompt 都是收尾那一拍的事。它自己落笔的那一处
+        是降级标记（`marker.record`）：条子写不下去时留给人工接手的记号。
+        """
+
+        def receiver(node):
+            """被调用那一头是怎么写的（`marker.record` 里的 `marker`）。"""
+            return getattr(node.value, 'id', getattr(node.value, 'attr', ''))
+
+        calls = {f'{receiver(node.func)}.{node.func.attr}'
+                 for node in ast.walk(ast.parse(HANDOFF_PY.read_text(encoding='utf-8')))
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
+        self.assertEqual(sorted(call for call in calls if call.endswith('.record')), ['marker.record'],
+                         'handoff.py 调上了写方那条 record：交条子会落笔')
+        self.assertIn('pipeline.plan', calls, 'handoff.py 没读下一步')
 
 
 class TestSignalGuards(Base):
@@ -258,5 +301,79 @@ class TestSignalGuards(Base):
         sb.next()
         self.assertIsNone(sb.read_signal('cyc', NODE))
         self.assertEqual(sb.plan()['action'], 'dispatch')
+
+
+class TestCleanTemp(Base):
+    """`clean-temp`：扫每一格自己的 `temp/`，被某条线握着的那一格跳过。
+
+    「谁被握着」是从这个项目的 `state.json` 读出来的事实，走的是读记录的那道门：读不懂就停下，
+    一个 temp 都不动。把它读成「没有一个节点被握着」，`--yes` 就会照着这句话把正在用的 temp 删掉。
+    """
+
+    def test_a_held_nodes_temp_survives_the_sweep_unless_forced(self):
+        sb = self.make()
+        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.start_cycle()
+        sb.add_temp(NODE)                       # 正在干活的那一格
+
+        proc = sb.clean_temp(yes=True)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertTrue(sb.temp_dir(NODE).is_dir(), 'a node in hand was swept')
+
+        sb._tool('clean-temp', '--project', str(sb.root), '--yes', '--force')
+        self.assertFalse(sb.temp_dir(NODE).exists(), '--force takes a live node anyway')
+
+    def test_an_unreadable_state_is_not_read_as_nobody_holds_anything(self):
+        sb = self.make()
+        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.start_cycle()
+        sb.add_temp(NODE)
+        (sb.root / '.pf' / 'state.json').write_text('{ not json', encoding='utf-8')
+
+        proc = sb.clean_temp(yes=True, check=False)
+
+        self.assertNotEqual(0, proc.returncode, '读不懂 state，这一趟不许当它没说过话')
+        self.assertIn('state.json', proc.stderr)
+        self.assertTrue(sb.temp_dir(NODE).is_dir(), 'state.json 读不懂时一个 temp 都不许动')
+
+    def test_the_listing_run_names_what_it_would_sweep_and_removes_nothing(self):
+        """不给 `--yes`：把可清的念一遍就收，盘上一个字节都不动 —— 包括真会被清掉的那一格。"""
+        sb = self.make()
+        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE2, '另一格', mode='auto')
+        sb.start_cycle()
+        sb.add_temp(NODE, 'held.txt')                  # 被握着：只念，不扫
+        sb.add_temp(NODE2, 'free.txt')                 # 没被握着：这一趟也不扫
+        before = sb.tree_hashes()
+
+        proc = sb.clean_temp()
+
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn(NODE2[:8], proc.stdout, '可清的那一格该被念到')
+        self.assertIn(NODE[:8], proc.stdout, '跳过的那一格也该被念到')
+        self.assertEqual(before, sb.tree_hashes(), '没有 --yes 的一趟动过盘')
+
+    def test_a_named_node_is_swept_and_nothing_outside_its_temp_moves(self):
+        """`--node` 只扫点名的那一格：spec、state.json、ideas.json 与别的节点的 temp 一字不动。"""
+        sb = self.make()
+        for uid, title in ((NODE, '写代码'), (NODE2, '写文案'), (NODE3, '第三格')):
+            sb.add_node(uid, title, mode='auto')
+        sb.start_cycle()
+        held = sb.current_node()
+        target, untouched = [uid for uid in (NODE, NODE2, NODE3) if uid != held]
+        for uid in (held, target, untouched):
+            sb.add_temp(uid, 'probe.txt')
+        ledger = {str(path): path.read_bytes() for path in
+                  (sb.root / '.pf' / 'state.json', sb.root / '.pf' / 'ideas.json',
+                   sb.root / '.pf' / 'nodes' / target / 'spec.md')}
+
+        proc = sb.clean_temp(node=target, yes=True)
+
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertFalse(sb.temp_dir(target).exists(), '点名的那一格该被扫掉')
+        self.assertTrue(sb.temp_dir(held).is_dir(), '被握着的另一格不该动')
+        self.assertTrue(sb.temp_dir(untouched).is_dir(), '没点名的那一格不该动')
+        self.assertEqual(ledger, {path: Path(path).read_bytes() for path in ledger},
+                         'temp 之外的记录被动了')
 
 

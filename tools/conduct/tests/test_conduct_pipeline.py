@@ -2,16 +2,15 @@
 
 One entry point, the whole collection (no DSH, no real sessions, no network):
 
-    python tools/conduct/tests/test_conduct_pipeline.py      # pool, then the serial tail
+    python tools/conduct/tests/test_conduct_pipeline.py      # the pool
     python -m unittest discover -s conduct/tests -t .        # from tools/, the same collection
 
 Both run every case the same way: the pool spreads the subprocess-bound cases over the machine's
-cores, and the serial tail runs after it, in process (~1 s). `--jobs=N` and `-v` are accepted by
-the first form; anything else is handed to `unittest`.
+cores. `--jobs=N` and `-v` are accepted by the first form; anything else is handed to `unittest`.
 
-Why a serial tail: `cases_chain_spawn` mocks `subprocess.run` -- a patch on the module object, so
-process-wide -- and the pool runs real-subprocess cases in those very worker processes. Its cases
-never enter the pool; both entries run them after it, in this process.
+No case patches a process-global name any more, so every module runs in the pool: a seam that a case
+needs is a name on the module that owns it (`harness_env.patched` is the one place those are swapped
+and put back).
 
 **pytest 不走这条路**：它逐个用例跑，同一批用例要半分钟。要看失败详情时再用它，平时这条
 `python <这份文件>` 才是本套件的口径。
@@ -23,9 +22,8 @@ an earlier version did, and that is exactly what let a missing bookkeeping call 
 tests.
 
 Speed is part of the contract here: the whole suite must finish in a few seconds, so `load_tests`
-hands `unittest discover` the same suite this file runs directly -- the parallel runner first, the
-serial tail behind it. See harness.py for what is driven in-process versus as a process -- and for
-the one test that pins the two together.
+hands `unittest discover` the same suite this file runs directly. See harness.py for what is driven
+in-process versus as a process -- and for the one test that pins the two together.
 
 What this suite is organised around
 -----------------------------------
@@ -37,7 +35,8 @@ What this suite is organised around
   4. the invariants that each cost a bug (the stop rule, tags as a pick filter, `wait` being
      stable, plan being read-only)
   5. the levers that survive: `cycle retry` + `cycle hold`, `--stop`, `clean-temp`
-  6. the defects found while writing it: `TestKnownBugs`
+  6. the guards each of those costs: `TestCloseGuards` (the close), `TestSignalGuards` (a forged
+     ticket), `TestCleanTemp` (the sweep, and a state it cannot read)
   7. `TestEndToEnd`: the whole walk through the real CLI, with a dry-run spawn and no session
 """
 
@@ -60,40 +59,40 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # one would run every case twice.
 from cases_base import *          # noqa: F401,F403
 from cases_node import *          # noqa: F401,F403
+from cases_select import *        # noqa: F401,F403
 from cases_instruct import *      # noqa: F401,F403
 from cases_contract import *      # noqa: F401,F403
+from cases_close import *         # noqa: F401,F403
 from cases_recovery import *      # noqa: F401,F403
 from cases_maintenance import *   # noqa: F401,F403
+from cases_maintenance_run import *  # noqa: F401,F403
 from cases_cli import *           # noqa: F401,F403
+from cases_cli_entries import *   # noqa: F401,F403
+from cases_spawn_shell import *   # noqa: F401,F403
 from cases_e2e import *           # noqa: F401,F403
 from cases_ledger_merge import *  # noqa: F401,F403
 from cases_ledger_merge_git import *  # noqa: F401,F403
 from cases_dispatch import *      # noqa: F401,F403
 from cases_zcode import *         # noqa: F401,F403
 from cases_parallel import *      # noqa: F401,F403
+from cases_parallel_slots import *  # noqa: F401,F403
 from cases_fork import *          # noqa: F401,F403
 from cases_init import *          # noqa: F401,F403
 from cases_config import *        # noqa: F401,F403
 from cases_session import *       # noqa: F401,F403
-# The last one is the serial tail (see the module docstring): star-imported so its classes are in
-# this namespace for collection, but pinned OUT of the pool by `_collect_tests` and run after it,
-# in process, on both entry points.
-from cases_chain_spawn import *    # noqa: F401,F403
-
-#: The serial tail's modules; `_collect_tests` sorts their classes out by `__module__`.
-_SERIAL_MODULES = ('cases_chain_spawn',)
+from cases_shared import *        # noqa: F401,F403
+from cases_bin import *           # noqa: F401,F403
+from cases_chain_spawn import *   # noqa: F401,F403
+from cases_suite import *         # noqa: F401,F403
 
 
 def _collect_tests():
-    """(class name, method name) pairs -- the PARALLEL pool's share of the collection.
+    """(class name, method name) pairs for the pool.
 
     Walked straight off this module's own `TestCase` classes, NOT via `loadTestsFromModule`:
     this module defines `load_tests`, and asking the loader for a suite here would call it again
     (which calls this function again) -- the recursion returns a partial list, and the partial
     list is what a worker process would then be asked to run.
-
-    The serial tail's classes are in this namespace too (star-imported above) and are sorted out
-    here by their `__module__`: they must never enter the pool.
     """
     found = set()
     for name, obj in list(globals().items()):
@@ -101,8 +100,6 @@ def _collect_tests():
                 unittest.TestCase:
             if name.startswith('_'):
                 continue                      # `_Outcome` and friends are not cases
-            if obj.__module__ in _SERIAL_MODULES:
-                continue                      # the serial tail runs these, after the pool
             for method in dir(obj):
                 if method.startswith('test') and callable(getattr(obj, method)):
                     found.add((name, method))
@@ -122,46 +119,6 @@ def _run_one(name):
 def _run_batch(names):
     """Worker process: run a batch of cases, one result each."""
     return [_run_one(name) for name in names]
-
-
-def _serial_suite():
-    """The serial tail, collected from its own modules the way `unittest` would.
-
-    A plain suite: these cases run in whichever process opens them, so no twins and no pool.
-    `load_tests` puts it behind `ParallelSuite`, and discovery then runs exactly what running
-    this file directly runs.
-    """
-    loader = unittest.TestLoader()
-    return unittest.TestSuite([loader.loadTestsFromModule(sys.modules[mod])
-                               for mod in _SERIAL_MODULES])
-
-
-def _serial_names():
-    """(class name, method name) pairs of the serial tail -- `_collect_tests`' walk, but over the
-    two modules' own namespaces."""
-    found = set()
-    for mod in _SERIAL_MODULES:
-        for obj in vars(sys.modules[mod]).values():
-            if isinstance(obj, type) and issubclass(obj, unittest.TestCase) \
-                    and obj is not unittest.TestCase:
-                for method in dir(obj):
-                    if method.startswith('test') and callable(getattr(obj, method)):
-                        found.add((obj.__name__, method))
-    return sorted(found)
-
-
-def _run_serial_one(name):
-    """One serial-tail case, in this process. `_run_one`, but resolved in its module of origin:
-    a class name shared with a pool case must run the tail's class here, not the pool's."""
-    cls_name, method = name
-    for mod in _SERIAL_MODULES:
-        cls = vars(sys.modules[mod]).get(cls_name)
-        if isinstance(cls, type) and issubclass(cls, unittest.TestCase):
-            result = unittest.TestResult()
-            cls(method).run(result)
-            report = ''.join(tb for _, tb in list(result.failures) + list(result.errors))
-            return name, result.wasSuccessful(), report
-    raise AssertionError(f'{cls_name} is not in any of {_SERIAL_MODULES}')
 
 
 def _jobs(count):
@@ -303,20 +260,19 @@ def _as_exc_info(report, label):
 
 
 def load_tests(loader, standard_tests, pattern):
-    """`unittest discover` entry point: the pool as `ParallelSuite`, the serial tail behind it --
-    the same collection, in the same order, as running this file directly."""
+    """`unittest discover` entry point: the pool as `ParallelSuite` -- the same collection, in the
+    same order, as running this file directly."""
     names = _collect_tests()
     if not names:
         return standard_tests
-    return unittest.TestSuite([ParallelSuite(names), _serial_suite()])
+    return unittest.TestSuite([ParallelSuite(names)])
 
 
 def _run_parallel(argv):
     """The `python test_conduct_pipeline.py` entry point.
 
-    The pool first -- same cases, same batching and the same worker function as `load_tests` uses
-    -- then the serial tail, in process: the whole collection, with `--jobs=N`, `-v` and the
-    progress dots on top. It exists so this file is runnable on its own.
+    Same cases, same batching and the same worker function as `load_tests` uses, with `--jobs=N`,
+    `-v` and the progress dots on top. It exists so this file is runnable on its own.
     """
     verbosity = 1
     jobs = 0
@@ -332,13 +288,9 @@ def _run_parallel(argv):
         return unittest.main(argv=[sys.argv[0], *rest], verbosity=verbosity, exit=False)
 
     names = _collect_tests()
-    serial = _serial_names()
     global _JOBS_OVERRIDE
     _JOBS_OVERRIDE = jobs
     elapsed, outcomes = run_in_parallel(names)
-    serial_started = time.perf_counter()
-    outcomes.extend(_run_serial_one(name) for name in serial)
-    serial_elapsed = time.perf_counter() - serial_started
     outcomes.sort()
     failed = [(n, r) for n, ok, r in outcomes if not ok]
     if verbosity > 1:
@@ -349,8 +301,7 @@ def _run_parallel(argv):
     for (cls_name, method), report in failed:
         print(f'\n{"=" * 70}\nFAIL: {cls_name}.{method}\n{"-" * 70}\n{report}')
     print('-' * 70)
-    print(f'Ran {len(outcomes)} tests in {elapsed:.3f}s (pool) + {serial_elapsed:.3f}s (serial) '
-          f'({_jobs(len(names))} workers)')
+    print(f'Ran {len(outcomes)} tests in {elapsed:.3f}s ({_jobs(len(names))} workers)')
     if failed:
         print(f'\nFAILED (failures={len(failed)})')
         return 1

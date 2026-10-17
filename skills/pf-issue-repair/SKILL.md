@@ -38,15 +38,15 @@ disable-model-invocation: true
 
 ## 跑
 
-循环本身照 `/pf-conduct` 的「执行」与「收尾」走，这里不抄第二份。本流程只多三条：
+循环与指挥位那几条不做，照 `/pf-conduct` 走，这里不抄第二份。本流程只多三条：
 
-- **分批按改动域，批宽受在飞上限管**：同一模块的条目成一批；确需跨模块的改动族整批显式声明。批内的改动能被同一次验证覆盖。每批 Fix 加 Review 是 2 个在飞，几批一起派之前先数：`在飞的 + 要派的 ≤ pf config max_agents`（见 [`../shared/pf/agents.md`](../shared/pf/agents.md)）
+- **分批按改动域，批宽受在飞上限管**：同一模块的条目成一批；确需跨模块的改动族整批显式声明。批内的改动能被同一次验证覆盖。每批 Fix 加 Review 是 2 个在飞，几批一起派之前先按 [`../shared/pf/subagents.md`](../shared/pf/subagents.md) 数一遍
 - **每批 Fix → Review**：Fix 用 `~/.agents/skills/pf-conduct/subagent-prompts/fix.md`，Review 用同目录的 `review.md`（只读）；prompt 照 pf-conduct 那几条规矩给——清单路径、上面已定的结论、这一轮的报告文件名
 - **批过即 commit**：整批判 no issue 才提交。不在管线里跑时没有节点收尾那一拍，提交就落在这里
 
 `critical > 0` → 派新的一轮 Fix，修完回 Review；`minor` 且明确无害 → 记成新条目留待后续同域批次，其余照修。
 
-干活里撞见的新债照旧记进池子（`add`；入池前先搜一遍有没有同一条），随后**按上面那张表当场定门**：同批同域能收的收掉，收不动的照实落定。新记的条目照实计入读数——「它是刚发现的」顶不掉这个数。
+干活里撞见的新债照旧记进池子（`add`，口径见 [`../shared/pf/pool.md`](../shared/pf/pool.md)），随后**按上面那张表当场定门**：同批同域能收的收掉，收不动的照实落定。新记的条目照实计入读数——「它是刚发现的」顶不掉这个数。
 
 ## 落定
 
@@ -70,4 +70,4 @@ pf issue reject  <id> --reason "<为什么不修>"
 
 ## 反模式
 
-开工前读 [`./anti-patterns.md`](./anti-patterns.md)。
+开工前读 [`./anti-patterns.md`](./anti-patterns.md) 对照自查。

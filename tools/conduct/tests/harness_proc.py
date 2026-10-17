@@ -1,21 +1,19 @@
 """The real subprocesses and the CLI-call helpers: `_run_proc`, `run_state_manage`, `run_dag`,
-`run_signal`, `run_handoff`, plus the small CLI helpers `_cycle_of`, `_kw`, `_json_out`,
-`next_action`, `plan_action`. `run_state_manage` stays a module-level global: the test suite
-patches it through this module object, and every call site must see the patch.
+`run_signal`, `run_handoff`, plus the small CLI helpers `_cycle_of`, `_kw`, `_json_out`.
+`run_state_manage` stays a module-level global: the test suite patches it through this module
+object, and every call site must see the patch.
 """
 
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 from pathlib import Path
 
-from harness_env import DAG_MANAGE, HANDOFF_PY, SIGNAL_PY, STATE_MANAGE, _child_env
+from harness_env import DAG_MANAGE, HANDOFF_PY, SIGNAL_PY, STATE_MANAGE, run_argv
 
 __all__ = [
     "_run_proc", "run_state_manage", "run_dag", "run_signal", "run_handoff",
-    "_cycle_of", "_kw", "_json_out", "next_action", "plan_action",
+    "_cycle_of", "_kw", "_json_out",
 ]
 
 
@@ -23,19 +21,14 @@ __all__ = [
 #  Real subprocesses (the CLI surface, and the two worker commands)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _run_proc(project: Path, argv, check: bool = True):
-    proc = subprocess.run([sys.executable, *[str(a) for a in argv]],
-                          cwd=str(project), capture_output=True, text=True, encoding='utf-8',
-                          errors='replace', env=_child_env())
-    if check and proc.returncode != 0:
-        raise AssertionError(f'command failed in {project}:\n  {" ".join(map(str, argv))}\n'
-                             f'  rc={proc.returncode}\n{proc.stdout}\n{proc.stderr}')
-    return proc
+def _run_proc(project: Path, argv, check: bool = True, env=None):
+    """One real child process against `project`, through the suite's one runner."""
+    return run_argv(argv, cwd=project, env=env, check=check)
 
 
-def run_state_manage(project: Path, *args, check: bool = True):
+def run_state_manage(project: Path, *args, check: bool = True, env=None):
     """The real state-manage.py, as a process. Used by the CLI-subject tests."""
-    return _run_proc(project, [STATE_MANAGE, *args], check=check)
+    return _run_proc(project, [STATE_MANAGE, *args], check=check, env=env)
 
 
 def run_dag(project: Path, *args, check: bool = True):
@@ -122,13 +115,3 @@ def _json_out(proc, argv):
         raise AssertionError(f'no stdout could be read from: {" ".join(map(str, argv))}\n'
                              f'rc={proc.returncode}\nstderr={proc.stderr!r}')
     return json.loads(proc.stdout)
-
-
-def next_action(project: Path, *extra, plan: bool = False):
-    """The CLI's `next`: a thin wrapper over the module, parsed from its JSON."""
-    argv = ['next', '--json'] + (['--plan'] if plan else []) + list(extra)
-    return _json_out(run_state_manage(project, *argv), argv)
-
-
-def plan_action(project: Path, *extra):
-    return next_action(project, *extra, plan=True)

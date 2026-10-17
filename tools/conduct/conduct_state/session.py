@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 from .pipeline_loader import _load_pipeline
-from .store import _read_json, ledger_dir_for, require_initialized
+from .store import _read_dag, ledger_dir_for, meta_dir_for, require_initialized
 
 #: The header an older routing session left in a node's `spec.md`:
 #: `> discussion: dsh-session:session-…[, dsh-session:…]`. Read only in the first lines of the file,
@@ -42,14 +42,14 @@ def _root(project) -> Path:
     return ledger_dir_for(project).parent
 
 
-def _graph(root: Path) -> dict:
+def _graph(project) -> dict:
     """The graph as it is on disk: the node table, or an empty one.
 
-    Read here rather than through the pipeline's door because these commands answer about a NOTE --
-    a node whose spec, title or record is missing still has a conversation worth naming.
+    Read through the store's door for the fourth record rather than through the pipeline's: these
+    commands answer about a NOTE -- a node whose spec, title or record is missing still has a
+    conversation worth naming.
     """
-    dag = _read_json(root / '.pf' / 'ideas.json', 'ideas.json') or {}
-    return dag.get('nodes') or {}
+    return _read_dag(project)
 
 
 def _title(root: Path, node_id: str) -> str:
@@ -113,7 +113,7 @@ def cmd_session_list(project=None, as_json: bool = False) -> None:
         print(json.dumps(notes, ensure_ascii=False, indent=2))
         return
     if not notes:
-        print(f'no session notes under {root / ".pf" / "meta" / "sessions"}')
+        print(f'no session notes under {meta_dir_for(project) / "sessions"}')
         return
     for uid in sorted(notes):
         note = notes[uid]
@@ -123,9 +123,13 @@ def cmd_session_list(project=None, as_json: bool = False) -> None:
               f'{_title(root, uid)}'.rstrip())
 
 
-def _spec_discussion_ids(root: Path, node_id: str) -> list:
-    """The discussion session ids an older spec header names, in file order (usually none)."""
-    spec = root / '.pf' / 'nodes' / node_id / 'spec.md'
+def _spec_discussion_ids(pipeline, root: Path, node_id: str) -> list:
+    """The discussion session ids an older spec header names, in file order (usually none).
+
+    The spec's landing is `nodes.node_spec_path` -- the one algorithm for that path -- and `pipeline`
+    is the module the caller has already loaded, so this reads exactly the file that door names.
+    """
+    spec = Path(pipeline.node_spec_path(root, node_id))
     try:
         head = spec.read_text(encoding='utf-8', errors='replace').splitlines()[:SPEC_HEAD_LINES]
     except OSError:
@@ -151,13 +155,13 @@ def cmd_session_import(project=None, dry_run: bool = False) -> None:
     require_initialized(project)
     root = _root(project)
     pipeline = _load_pipeline()
-    nodes = _graph(root)
+    nodes = _graph(project)
     planned, already, from_spec = [], 0, 0
     for uid in sorted(nodes):
         node = nodes[uid]
         legacy = node.get('dsh_session')
         ids = [legacy] if isinstance(legacy, str) and legacy else []
-        for found in _spec_discussion_ids(root, uid):
+        for found in _spec_discussion_ids(pipeline, root, uid):
             if found not in ids:
                 ids.append(found)
                 from_spec += 1
@@ -181,19 +185,3 @@ def cmd_session_import(project=None, dry_run: bool = False) -> None:
             added += 1
     print(f'noted {added} session id(s) as discussion; {already} were already noted; '
           f'{from_spec} came from a spec header; the record itself was not touched')
-
-
-def _dispatch_session(args) -> None:
-    """`pf session <verb>`: the group's own reading of its sub-command."""
-    as_json = getattr(args, 'json', False)
-    project = getattr(args, 'project', None)
-    verb = getattr(args, 'session_command', None)
-    if verb == 'show':
-        cmd_session_show(args.node, project, as_json)
-    elif verb == 'list':
-        cmd_session_list(project, as_json)
-    elif verb == 'import':
-        cmd_session_import(project, getattr(args, 'dry_run', False))
-    else:
-        print('Error: `pf session` wants one of: show | list | import', file=sys.stderr)
-        sys.exit(1)

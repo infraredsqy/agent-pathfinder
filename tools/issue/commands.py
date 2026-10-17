@@ -1,98 +1,173 @@
 """Manage a persistent issue database for code quality tracking.
 
-Usage:
-    issue_manager.py <command> [args]
-
-Commands:
-    add            Add a new issue
-    list           List issues (with optional filters)
-    update         Update issue fields
-    resolve        Mark issue as resolved
-    reject         Mark issue as rejected (requires --reason)
-    acknowledge    Mark issue as acknowledged
-    remove         Delete an issue entirely
-    status         Show summary statistics
-    weight         The pool's weighted debt, as one number
-    top            Show top N open issues by priority
-    by_module      List open issues grouped by module
-    stale          List stale open issues (high check_count)
-    mark           Record scan-aliveness confirmations (never resolves)
-    export_plan    Generate execution plan for given issue IDs
+Every verb this module answers is one entry in `issue_manager.py`'s parser, and that parser is the
+one place the verb list lives: `issue_manager.py --help` and `help` print that same text. This file
+holds what each verb does, next to the data access in `storage.py`.
 """
 
+import importlib.util
 import json
 import os
 import re
 import sys
 from pathlib import Path
 
-from storage import (
-    SEVERITY_WEIGHTS,
-    VALID_DECISIONS,
-    VALID_SEVERITIES,
-    _auto_id,
-    _ensure_plan_dir,
-    _get,
-    _now,
-    _read,
-    _write,
-)
+# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
+# loaded by path through `loader.py`. These two functions are that bootstrap, identical in every file
+# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+HERE = Path(__file__).resolve().parent
+SHARED = HERE.parent / 'shared'
+
+_LOADER = None
+
+
+def _loader():
+    """`tools/shared/loader.py`: the one loader, for the modules this tree keeps outside `shared/`."""
+    global _LOADER
+    if _LOADER is None:
+        spec = importlib.util.spec_from_file_location('pf_shared_loader', SHARED / 'loader.py')
+        _LOADER = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_LOADER)
+    return _LOADER
+
+
+#: `storage.py`：这一对里的数据访问层，同样按路径取。名字固定、留在 `sys.modules` 里并复用 ——
+#: `configure()` 在哪个模块对象上钉的项目，就是这一趟命令读写的项目；两份模块对象等于两个项目。
+_storage = _loader().load_by_path('pf_issue_storage', HERE / 'storage.py',
+                                  register=True, reuse=True)
+SEVERITY_WEIGHTS = _storage.SEVERITY_WEIGHTS
+VALID_DECISIONS = _storage.VALID_DECISIONS
+VALID_SEVERITIES = _storage.VALID_SEVERITIES
+_auto_id = _storage._auto_id
+_ensure_plan_dir = _storage._ensure_plan_dir
+_get = _storage._get
+_ledger_lock = _storage._ledger_lock
+_now = _storage._now
+_read = _storage._read
+_write = _storage._write
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Commands
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def cmd_add(args):
-    """Add a new issue (single or batch from file)."""
-    if args.from_file:
-        return cmd_add_from_file(args)
+def _pick(source, name, default=None):
+    """One key out of whichever door the values came in through.
 
-    if not args.id:
-        print('Error: --id is required (or use --from-file for batch)', file=sys.stderr)
-        sys.exit(1)
-    data = _read()
-    if args.id in data['issues']:
-        print(f'Error: issue "{args.id}" already exists', file=sys.stderr)
-        sys.exit(1)
-    if args.severity not in VALID_SEVERITIES:
-        print(f'Error: invalid severity "{args.severity}". '
-              f'Valid: {", ".join(sorted(VALID_SEVERITIES))}',
-              file=sys.stderr)
+    `cmd_add` hands in the parsed command line (`argparse.Namespace`, attributes) and
+    `cmd_add_from_file` one entry of a batch file (a dict); a key that is absent, or given as `null`,
+    means "not given" either way, and the default applies. That is how the two doors' text keys line
+    up; severity / decision / files / functions are read through `_gate` instead.
+    """
+    value = source.get(name, None) if isinstance(source, dict) else getattr(source, name, None)
+    return default if value is None else value
+
+
+def _gate(source, name, default):
+    """One of severity / decision / files / functions: a gate key, read the way both doors agree on.
+
+    A batch row that writes `null` for one of these has said something a record cannot hold, so the
+    `null` travels on to the checks in `build_issue_record` and the whole batch stops there, naming
+    the row. A key that is simply absent takes the default -- and the command line cannot spell
+    anything else: a flag that was not passed over arrives either as `None` or as the parser's own
+    default, and both land on the same value.
+    """
+    if isinstance(source, dict):
+        return source.get(name, default)
+    value = getattr(source, name, None)
+    return default if value is None else value
+
+
+def build_issue_record(source, uid: str, now: str, where: str = '') -> dict:
+    """The one construction of a pool record: both doors into the pool land here.
+
+    The keys, their defaults and the four content checks (severity / decision / files / functions)
+    live in this function and nowhere else, so a new field is one line here. `where` names the entry
+    in an error message -- 'row 3 (id=x) ' for a batch, empty for a one-at-a-time add.
+    """
+    severity = _gate(source, 'severity', 'P3')
+    if severity not in VALID_SEVERITIES:
+        print(f'Error: {where}invalid severity "{severity}", '
+              f'valid: {", ".join(sorted(VALID_SEVERITIES))}', file=sys.stderr)
         sys.exit(1)
 
-    plan_path = args.plan_path
-    if plan_path:
-        _ensure_plan_dir(plan_path)
+    decision = _gate(source, 'decision', 'unknown')
+    if decision not in VALID_DECISIONS:
+        print(f'Error: {where}invalid decision "{decision}", '
+              f'valid: {", ".join(sorted(VALID_DECISIONS))}', file=sys.stderr)
+        sys.exit(1)
 
-    now = _now()
-    data['issues'][args.id] = {
-        'id': args.id,
-        'severity': args.severity,
-        'module': args.module or '',
-        'title': args.title or args.id,
-        'decision': args.decision or 'unknown',
-        'source': args.source or 'scan',
+    files = _gate(source, 'files', [])
+    functions = _gate(source, 'functions', [])
+    for field, value in (('files', files), ('functions', functions)):
+        if not isinstance(value, list):
+            print(f'Error: {where}"{field}" must be a list, got {type(value).__name__}',
+                  file=sys.stderr)
+            sys.exit(1)
+
+    return {
+        'id': uid,
+        'severity': severity,
+        'module': _pick(source, 'module', ''),
+        'title': _pick(source, 'title', uid) or uid,
+        'decision': decision,
+        'source': _pick(source, 'source', 'scan'),
         'status': 'open',
         'discovered': now,
         'updated_at': now,
         'check_count': 1,
-        'files': args.files or [],
-        'functions': args.functions or [],
-        'description': args.description or '',
-        'suggestion': args.suggestion or '',
-        'reason': args.reason,
-        'plan_path': plan_path,
+        'files': files,
+        'functions': functions,
+        'description': _pick(source, 'description', ''),
+        'suggestion': _pick(source, 'suggestion', ''),
+        'reason': _pick(source, 'reason'),
+        'plan_path': _pick(source, 'plan_path'),
     }
-    _write(data)
-    if plan_path:
+
+
+def cmd_add(args):
+    """Add a new issue (single or batch from file)."""
+    with _ledger_lock():
+        if args.from_file:
+            return cmd_add_from_file(args)
+
+        if not args.id:
+            print('Error: --id is required (or use --from-file for batch)', file=sys.stderr)
+            sys.exit(1)
+        data = _read()
+        if args.id in data['issues']:
+            print(f'Error: issue "{args.id}" already exists', file=sys.stderr)
+            sys.exit(1)
+
+        record = build_issue_record(args, args.id, _now())
+        if record['plan_path']:
+            _ensure_plan_dir(record['plan_path'])
+        data['issues'][args.id] = record
+        _write(data)
         print(f'Issue created: {args.id}')
-        print(f'Plan path (nonexistent): {os.path.abspath(plan_path)}')
-    else:
-        print(f'Issue created: {args.id}')
+        if record['plan_path']:
+            print(f'Plan path (nonexistent): {os.path.abspath(record["plan_path"])}')
+
+
+def _free_id(base: str, named: set) -> str:
+    """`base`, or `base-2` / `base-3` ... when this batch has already used it.
+
+    Two entries of one scan whose titles share their first 40 characters are two real issues: the
+    id is what has to give, so this door appends a number and the caller names it in the output.
+    Colliding with an issue that is already in the pool is a different thing with its own answer
+    (the skip in phase 2), so nothing here looks at the pool.
+    """
+    uid, n = base, 2
+    while uid in named:
+        uid = f'{base}-{n}'
+        n += 1
+    return uid
 
 
 def cmd_add_from_file(args):
-    """Batch import issues from a JSON file."""
+    """Batch import issues from a JSON file.
+
+    The batch half of `add`: it runs inside the lock `cmd_add` takes.
+    """
     try:
         with open(args.from_file, 'r', encoding='utf-8') as f:
             batch = json.load(f)
@@ -104,9 +179,11 @@ def cmd_add_from_file(args):
         print('Error: file must contain a JSON array', file=sys.stderr)
         sys.exit(1)
 
-    # Phase 1: validate all entries, assign IDs
+    # Phase 1: assign the missing IDs and build every record (each build validates its entry)
     data = _read()
     now = _now()
+    records = []
+    named = set()          # 这一批里已经用掉的 id：显式写下的与自动生成的都算
     for i, item in enumerate(batch):
         row = f'row {i + 1}'
 
@@ -114,71 +191,34 @@ def cmd_add_from_file(args):
         uid = item.get('id')
         if not uid:
             if args.auto_id:
-                uid = _auto_id(item)
-                item['id'] = uid
+                base = _auto_id(item)
+                uid = _free_id(base, named)
+                if uid != base:
+                    print(f'Auto-id disambiguated: {row} "{base}" -> "{uid}"')
             else:
                 print(f'Error: {row} missing "id" field (use --auto-id to generate)',
                       file=sys.stderr)
                 sys.exit(1)
+        named.add(uid)
 
-        # --- severity ---
-        severity = item.get('severity', 'P3')
-        if severity not in VALID_SEVERITIES:
-            print(f'Error: {row} (id={uid}) invalid severity "{severity}", '
-                  f'valid: {", ".join(sorted(VALID_SEVERITIES))}',
-                  file=sys.stderr)
-            sys.exit(1)
-
-        # --- decision ---
-        decision = item.get('decision', 'unknown')
-        if decision not in VALID_DECISIONS:
-            print(f'Error: {row} (id={uid}) invalid decision "{decision}", '
-                  f'valid: {", ".join(sorted(VALID_DECISIONS))}',
-                  file=sys.stderr)
-            sys.exit(1)
-
-        # --- files / functions must be lists ---
-        for field in ('files', 'functions'):
-            val = item.get(field, [])
-            if not isinstance(val, list):
-                print(f'Error: {row} (id={uid}) "{field}" must be a list, '
-                      f'got {type(val).__name__}',
-                      file=sys.stderr)
-                sys.exit(1)
+        # --- the record: keys, defaults and the content checks, all in one place ---
+        records.append(build_issue_record(item, uid, now, where=f'{row} (id={uid}) '))
 
     # Phase 2: write all (validation passed)
     created = 0
     skipped = 0
 
-    for item in batch:
-        uid = item['id']
+    for record in records:
+        uid = record['id']
         if uid in data['issues']:
             print(f'Warning: issue "{uid}" already exists, skipping', file=sys.stderr)
             skipped += 1
             continue
 
-        plan_path = item.get('plan_path')
-        if plan_path:
-            _ensure_plan_dir(plan_path)
+        if record['plan_path']:
+            _ensure_plan_dir(record['plan_path'])
 
-        data['issues'][uid] = {
-            'id': uid,
-            'severity': item.get('severity', 'P3'),
-            'module': item.get('module', ''),
-            'title': item.get('title', uid),
-            'decision': item.get('decision', 'unknown'),
-            'source': item.get('source', 'scan'),
-            'status': 'open',
-            'discovered': now,
-            'updated_at': now,
-            'check_count': 1,
-            'files': item.get('files', []),
-            'functions': item.get('functions', []),
-            'description': item.get('description', ''),
-            'suggestion': item.get('suggestion', ''),
-            'reason': item.get('reason'),
-            'plan_path': plan_path,
-        }
+        data['issues'][uid] = record
         created += 1
 
     _write(data)
@@ -227,103 +267,115 @@ def cmd_list(args):
 
 def cmd_update(args):
     """Update fields on an existing issue."""
-    data = _read()
-    issue = _get(args.id, data)
-    now = _now()
-    changed = set()
+    with _ledger_lock():
+        data = _read()
+        issue = _get(args.id, data)
+        now = _now()
+        changed = set()
 
-    field_map = {
-        'severity': args.severity,
-        'decision': args.decision,
-        'status': args.status,
-        'module': args.module,
-        'title': args.title,
-        'description': args.description,
-        'suggestion': args.suggestion,
-        'files': args.files,
-        'functions': args.functions,
-        'reason': args.reason,
-    }
+        field_map = {
+            'severity': args.severity,
+            'decision': args.decision,
+            'status': args.status,
+            'module': args.module,
+            'title': args.title,
+            'description': args.description,
+            'suggestion': args.suggestion,
+            'files': args.files,
+            'functions': args.functions,
+            'reason': args.reason,
+        }
 
-    for field, value in field_map.items():
-        if value is not None:
-            old_val = issue.get(field)
-            issue[field] = value
-            if old_val != issue.get(field):
-                changed.add(field)
+        for field, value in field_map.items():
+            if value is not None:
+                old_val = issue.get(field)
+                issue[field] = value
+                if old_val != issue.get(field):
+                    changed.add(field)
 
-    if args.plan_path is not None:
-        old_path = issue.get('plan_path')
-        issue['plan_path'] = args.plan_path or None
-        if args.plan_path:
-            _ensure_plan_dir(args.plan_path)
-        if old_path != issue.get('plan_path'):
-            changed.add('plan_path')
+        if args.plan_path is not None:
+            old_path = issue.get('plan_path')
+            issue['plan_path'] = args.plan_path or None
+            if args.plan_path:
+                _ensure_plan_dir(args.plan_path)
+            if old_path != issue.get('plan_path'):
+                changed.add('plan_path')
 
-    if changed:
-        issue['updated_at'] = now
-        _write(data)
-        print(f'Issue updated: {args.id}')
-        for f in sorted(changed):
-            print(f'  ~ {f}')
-    else:
-        print('No changes specified', file=sys.stderr)
+        if changed:
+            issue['updated_at'] = now
+            _write(data)
+            print(f'Issue updated: {args.id}')
+            for f in sorted(changed):
+                print(f'  ~ {f}')
+        else:
+            print('No changes specified', file=sys.stderr)
 
 
 def cmd_resolve(args):
     """Mark issue as resolved."""
-    data = _read()
-    issue = _get(args.id, data)
-    issue['status'] = 'resolved'
-    issue['reason'] = args.reason or issue.get('reason')
-    issue['updated_at'] = _now()
-    if args.plan_path:
-        issue['plan_path'] = args.plan_path
-    _write(data)
-    print(f'Issue resolved: {args.id}')
+    with _ledger_lock():
+        data = _read()
+        issue = _get(args.id, data)
+        issue['status'] = 'resolved'
+        issue['reason'] = args.reason or issue.get('reason')
+        issue['updated_at'] = _now()
+        if args.plan_path:
+            issue['plan_path'] = args.plan_path
+        _write(data)
+        print(f'Issue resolved: {args.id}')
 
 
 def cmd_reject(args):
     """Mark issue as rejected with a reason."""
-    if not args.reason:
-        print('Error: --reason is required for reject', file=sys.stderr)
-        sys.exit(1)
-    data = _read()
-    issue = _get(args.id, data)
-    issue['status'] = 'rejected'
-    issue['reason'] = args.reason
-    issue['updated_at'] = _now()
-    _write(data)
-    print(f'Issue rejected: {args.id}')
+    with _ledger_lock():
+        if not args.reason:
+            print('Error: --reason is required for reject', file=sys.stderr)
+            sys.exit(1)
+        data = _read()
+        issue = _get(args.id, data)
+        issue['status'] = 'rejected'
+        issue['reason'] = args.reason
+        issue['updated_at'] = _now()
+        _write(data)
+        print(f'Issue rejected: {args.id}')
 
 
 def cmd_acknowledge(args):
     """Mark issue as acknowledged (seen, deferred)."""
-    data = _read()
-    issue = _get(args.id, data)
-    issue['status'] = 'acknowledged'
-    issue['reason'] = args.reason or issue.get('reason')
-    issue['updated_at'] = _now()
-    _write(data)
-    print(f'Issue acknowledged: {args.id}')
+    with _ledger_lock():
+        data = _read()
+        issue = _get(args.id, data)
+        issue['status'] = 'acknowledged'
+        issue['reason'] = args.reason or issue.get('reason')
+        issue['updated_at'] = _now()
+        _write(data)
+        print(f'Issue acknowledged: {args.id}')
 
 
 def cmd_remove(args):
     """Delete an issue entirely."""
-    data = _read()
-    _get(args.id, data)
-    del data['issues'][args.id]
-    _write(data)
-    print(f'Issue removed: {args.id}')
+    with _ledger_lock():
+        data = _read()
+        _get(args.id, data)
+        del data['issues'][args.id]
+        _write(data)
+        print(f'Issue removed: {args.id}')
 
 
-ACTIONABLE_STATUSES = frozenset({'open', 'acknowledged', 'resolving'})
+# ── 池子对「哪些状态算在局里」的两句口径 ──────────────────────────────────────────
+# 两句都在这里，各自一个名字，别在别处再写一遍状态字面量：两句管的不是一件事。
+#: 还没结的条目：`weight` 与 `status` 数它。`resolving` 在里面 —— 已经有人在动它，但没结案，
+#: 这一条仍然算数。
+OWED = frozenset({'open', 'acknowledged', 'resolving'})
+#: 还挑得动的：`top`、`by_module`、`stale` 只列这些。`resolving` 不在里面 —— 那一条已经有人在
+#: 做，再挑一次就是两个人做同一件事。它仍算在 `OWED` 里，等它结案或退回 `open`。
+PICKABLE = frozenset({'open', 'acknowledged'})
 
 
 def cmd_status(args):
     """Show summary statistics across all issues.
 
-    By default only counts open/acknowledged/resolving issues (actionable).
+    By default only counts the issues the pool still owes (`OWED`).
     Use --verbose to include resolved/rejected and total count.
     """
     data = _read()
@@ -332,7 +384,7 @@ def cmd_status(args):
     if args.verbose:
         issues = all_issues
     else:
-        issues = [i for i in all_issues if i.get('status') in ACTIONABLE_STATUSES]
+        issues = [i for i in all_issues if i.get('status') in OWED]
 
     by_severity = {}
     by_status = {}
@@ -350,7 +402,7 @@ def cmd_status(args):
 
     stale_count = sum(
         1 for i in all_issues
-        if i.get('status') in ('open', 'acknowledged')
+        if i.get('status') in PICKABLE
         and i.get('check_count', 0) >= 3
     )
 
@@ -375,13 +427,13 @@ def cmd_weight(args):
     `issue_pool_weight_limit` 比。数由这个工具算出来 —— 池子是它的正本；会话报上来的
     数没人复核得了。
 
-    只算 actionable 的条目（`ACTIONABLE_STATUSES`，跟 `status` 一个口径），再排掉
+    只算还没结的条目（`OWED`，跟 `status` 一个口径），再排掉
     `decision == external`：那些的决定权不在 agent 手上（改架构、动模型、改体验），
     算进来就是一块谁也挪不动的底板，阈值永远回不到线下，维护节点会一轮一轮地插。
     """
     data = _read()
     actionable = [i for i in data['issues'].values()
-                  if i.get('status') in ACTIONABLE_STATUSES]
+                  if i.get('status') in OWED]
     payable = [i for i in actionable if (i.get('decision') or 'unknown') != 'external']
     weight = sum(SEVERITY_WEIGHTS.get(i.get('severity'), 0) for i in payable)
 
@@ -405,11 +457,11 @@ def cmd_weight(args):
 
 
 def cmd_top(args):
-    """Show top N open/acknowledged issues by priority."""
+    """Show the top N issues that are still pickable."""
     data = _read()
     issues = [
         i for i in data['issues'].values()
-        if i.get('status') in ('open', 'acknowledged')
+        if i.get('status') in PICKABLE
     ]
 
     sev_order = {s: i for i, s in enumerate(sorted(VALID_SEVERITIES))}
@@ -430,23 +482,23 @@ def cmd_top(args):
 
 
 def cmd_by_module(args):
-    """Group open/acknowledged issues by module."""
+    """Group pickable issues by module."""
     data = _read()
     modules = {}
     for issue in data['issues'].values():
-        if issue.get('status') in ('open', 'acknowledged'):
+        if issue.get('status') in PICKABLE:
             mod = issue.get('module', 'unknown')
             modules.setdefault(mod, []).append(issue)
     print(json.dumps(modules, indent=2, ensure_ascii=False))
 
 
 def cmd_stale(args):
-    """List stale open issues with high check_count."""
+    """List stale pickable issues with high check_count."""
     data = _read()
     threshold = args.threshold if args.threshold is not None else 3
     stale = [
         i for i in data['issues'].values()
-        if i.get('status') in ('open', 'acknowledged')
+        if i.get('status') in PICKABLE
         and i.get('check_count', 0) >= threshold
     ]
     stale.sort(key=lambda i: i.get('check_count', 0), reverse=True)
@@ -467,42 +519,43 @@ def cmd_mark(args):
     after the scan started are unmarked by definition. This command only
     bookkeeps and reports — it resolves nothing, by design.
     """
-    data = _read()
+    with _ledger_lock():
+        data = _read()
 
-    # Filter out empty strings from shell quoting pitfalls
-    wanted = {a for a in args.ids if a and a.strip()}
+        # Filter out empty strings from shell quoting pitfalls
+        wanted = {a for a in args.ids if a and a.strip()}
 
-    now = _now()
-    marked, unknown = [], []
-    for uid in sorted(wanted):
-        issue = data['issues'].get(uid)
-        if issue is None:
-            unknown.append(uid)
-            continue
-        issue['check_count'] = issue.get('check_count', 0) + 1
-        issue['updated_at'] = now
-        marked.append(uid)
+        now = _now()
+        marked, unknown = [], []
+        for uid in sorted(wanted):
+            issue = data['issues'].get(uid)
+            if issue is None:
+                unknown.append(uid)
+                continue
+            issue['check_count'] = issue.get('check_count', 0) + 1
+            issue['updated_at'] = now
+            marked.append(uid)
 
-    marked_set = set(marked)
-    candidates = sorted(
-        (i for i in data['issues'].values()
-         if i.get('status') == 'open' and i.get('id') not in marked_set),
-        key=lambda i: i.get('id', ''),
-    )
+        marked_set = set(marked)
+        candidates = sorted(
+            (i for i in data['issues'].values()
+             if i.get('status') == 'open' and i.get('id') not in marked_set),
+            key=lambda i: i.get('id', ''),
+        )
 
-    _write(data)
-    print(json.dumps({
-        'marked': marked,
-        'unknown_ids': unknown,
-        'candidates': [
-            {'id': i.get('id'), 'severity': i.get('severity'),
-             'title': i.get('title'), 'discovered': i.get('discovered')}
-            for i in candidates
-        ],
-        'note': ('candidates are advisory only: issues this scan did not '
-                 'confirm. Freshly added ones are unmarked by definition. '
-                 'Resolve individually and only with concrete evidence.'),
-    }, indent=2, ensure_ascii=False))
+        _write(data)
+        print(json.dumps({
+            'marked': marked,
+            'unknown_ids': unknown,
+            'candidates': [
+                {'id': i.get('id'), 'severity': i.get('severity'),
+                 'title': i.get('title'), 'discovered': i.get('discovered')}
+                for i in candidates
+            ],
+            'note': ('candidates are advisory only: issues this scan did not '
+                     'confirm. Freshly added ones are unmarked by definition. '
+                     'Resolve individually and only with concrete evidence.'),
+        }, indent=2, ensure_ascii=False))
 
 
 def cmd_open_plan(args):
@@ -517,11 +570,6 @@ def cmd_open_plan(args):
     if not resolved.is_absolute():
         resolved = Path.cwd() / resolved
     print(resolved.resolve())
-
-
-def cmd_help(args):
-    """Show full usage reference."""
-    print(__doc__)
 
 
 def cmd_search(args):

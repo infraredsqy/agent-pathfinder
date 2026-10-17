@@ -26,6 +26,9 @@ no session. It also leaves a readable middle state: a ticket on disk whose node 
 yet is how a chain that broke halfway shows up (the planner answers `wait` with the closing command).
 The worker never reads this program's output and never touches a state file.
 
+交条子这一拍只写条子、读一遍 `plan`（只读）、把答案里的收尾命令报给会话 —— 状态与下一格的
+prompt 都不由这一拍写。
+
 The one gate is the cycle's own hand: a ticket is accepted only while the cycle is holding the
 node, so a stale session reporting on a node that was closed and released long ago is refused
 before anything is written. A node being redone is claimed again (revive, `cycle retry --drop`,
@@ -39,19 +42,51 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-import os
 import sys
-import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+CONDUCT = HERE.parent                      # the conduct tool directory
+
+# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
+# loaded by path through `loader.py`. These two functions are that bootstrap, identical in every file
+# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+SHARED = CONDUCT.parent / 'shared'
+
+_LOADER = None
 
 
-def _load(name: str, filename: str):
-    spec = importlib.util.spec_from_file_location(name, HERE / filename)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+def _loader():
+    """`tools/shared/loader.py`: the one loader, for the modules this tree keeps outside `shared/`."""
+    global _LOADER
+    if _LOADER is None:
+        spec = importlib.util.spec_from_file_location('pf_shared_loader', SHARED / 'loader.py')
+        _LOADER = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_LOADER)
+    return _LOADER
+
+
+def _load(name: str, path):
+    """A neighbouring file, loaded by path: how every file in this tree reaches its neighbours."""
+    return _loader().load_by_path(name, path)
+
+
+_STORE = None
+
+
+def _store():
+    """`conduct_state.store`, loaded by path -- one module per process.
+
+    `signal.py` needs the same copy (it writes the signal through it), so it is asked for under one
+    name and handed back to both. A by-name import is what this avoids: it would need `tools/` on
+    `sys.path`.
+    """
+    global _STORE
+    if _STORE is None:
+        _STORE = _loader().load_by_path('pf_conduct_state_store',
+                                        CONDUCT / 'conduct_state' / 'store.py',
+                                        register=True, reuse=True)
+    return _STORE
 
 
 def _project_root(project: Path) -> Path:
@@ -61,56 +96,40 @@ def _project_root(project: Path) -> Path:
     `.pf/meta/`。判定与 `conduct_state.store._resolve_project_root` 是同一份约定，从这里借，
     不复制第四份。
     """
-    if str(HERE.parent) not in sys.path:
-        sys.path.insert(0, str(HERE.parent))
-    from conduct_state.store import _resolve_project_root
-    return _resolve_project_root(project)
+    return _store()._resolve_project_root(project)
+
+
+def _marker():
+    """`spawn/marker.py`: 断链降级标记的落点与记录形状，一处长成。
+
+    `spawn/` 与 `pipeline/` 是同簇的两半（spawner 那一层按同一份形状自己写，那条例外写在 `marker.py`
+    的说明里），加载方式与别的邻居一样走装载器。
+    """
+    return _loader().load_by_path('conduct_spawn_marker',
+                                  CONDUCT / 'spawn' / 'marker.py',
+                                  register=True, reuse=True)
 
 
 def _ledger_name() -> str:
     """`.pf` 的那一个名字。跟根判定一样从 store 借，不复制第二份。"""
-    if str(HERE.parent) not in sys.path:
-        sys.path.insert(0, str(HERE.parent))
-    from conduct_state.store import LEDGER_NAME
-    return LEDGER_NAME
+    return _store().LEDGER_NAME
 
 
-def _write_marker(project: Path, cycle: str, phase: str, reason: str, attempts: int = 0,
-                  note: str | None = None) -> None:
+def _write_marker(project: Path, cycle: str, phase: str, reason: str, attempts: int = 0) -> None:
     # Not part of the record: the marker is a "this chain broke" flag a human deletes once they
     # have taken over, so it must not travel with the project's history. It sits in `meta/`, which
     # `.pf/.gitignore` keeps out of both the project's history and the ledger's own. One file per
     # cycle: two lines run side by side under parallel=2, and a successful spawn on line B must not
     # erase line A's "chain broke here" flag (the spawners clear the marker of their OWN cycle on
     # success).
-    path = project / _ledger_name() / 'meta' / f'CONDUCT-CALLBACK-FAILED-{cycle}.json'
+    #
+    # 落点、记录形状与那句人话以 `spawn/marker.py` 为正本（spawner 那一层按同一份形状自己写：
+    # 见 `marker.py` 的说明），这里只交出这一拍知道的事：哪条线、断在哪一步、那一拍的原话。
+    marker = _marker()
+    path = marker.marker_path(project, cycle)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        record = {
-            'cycle_id': cycle,
-            'phase': phase,
-            'attempts': attempts,
-            'reason': reason,
-            'workspace': str(project),
-            'detected_at': __import__('datetime').datetime.now(
-                __import__('datetime').timezone.utc).isoformat(),
-            'note': note or ('链条断在这里：这一格的条子已经写下，但那个节点没有人收尾，管线不会自己'
-                             '往前走。手动跑 pf next --after <node_id> 接管；'
-                             '确认无碍后删掉本文件。'),
-        }
-        # temp file + os.replace：并发读者要么读到整份、要么读不到，永远不撞见半截 JSON。
-        # fdopen 走文本模式、缺省换行翻译，与 write_text 落的是同一份字节。
-        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + '.', suffix='.tmp')
-        try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as handle:
-                handle.write(json.dumps(record, ensure_ascii=False, indent=2))
-            os.replace(tmp, path)
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
+        marker.write(path, marker.record(cycle, phase, reason, attempts=attempts,
+                                         workspace=project))
         print(f'WARNING: conduct handoff failed; wrote {path}', file=sys.stderr)
     except OSError as e:  # never let the marker itself become the failure
         print(f'WARNING: could not write the handoff failure marker: {e}', file=sys.stderr)
@@ -130,7 +149,7 @@ def _print_form(project: Path, cycle_id: str, node: str | None) -> int:
     numeric policy asks for nothing, and a project on the `minimal` tier carries no test line, so
     its workers get a skeleton with no `reading` key at all.
     """
-    pipeline = _load('conduct_pipeline', 'conduct_pipeline.py')
+    pipeline = _load('conduct_pipeline', HERE / 'conduct_pipeline.py')
     cycle = pipeline.find_cycle(pipeline.load_state(project), cycle_id)
     if cycle is None:
         print(f'Error: no cycle named {cycle_id!r}.', file=sys.stderr)
@@ -192,8 +211,8 @@ def main(argv=None) -> int:
         print('Error: -o must be a JSON object', file=sys.stderr)
         return 1
 
-    signal_mod = _load('conduct_signal', 'signal.py')
-    pipeline = _load('conduct_pipeline', 'conduct_pipeline.py')
+    signal_mod = _load('conduct_signal', HERE / 'signal.py')
+    pipeline = _load('conduct_pipeline', HERE / 'conduct_pipeline.py')
 
     # The cycle must be holding this node. Which cycle is speaking is settled by the NODE, and this
     # is the one command where that is checked before writing: a ticket filed against a cycle that
@@ -219,10 +238,12 @@ def main(argv=None) -> int:
         return 1
 
     try:
-        action = pipeline.record(project, args.cycle)
+        # 只读的一问：条子刚写下，管线此刻的答案是「等收尾」加那一条收尾命令。`record` 那半（把线
+        # 推到下一个稳定动作、顺手给别的格补 prompt）留在收尾与派发那一拍，这里一个字节都不写。
+        action = pipeline.plan(project, args.cycle)
     except (RuntimeError, ValueError) as e:
-        _write_marker(project, args.cycle, 'advance', str(e))
-        print(f'Error: the pipeline could not be advanced: {e}', file=sys.stderr)
+        _write_marker(project, args.cycle, 'plan', str(e))
+        print(f'Error: the pipeline could not be read: {e}', file=sys.stderr)
         return 1
 
     kind = action.get('action')
@@ -230,24 +251,11 @@ def main(argv=None) -> int:
         # 这一格刚写下条子，还没被收尾。这里不 spawn 任何会话——收尾那一棒由调用方跑
         # `next --after <node_id> --json` 完成（它也不再拉会话：派发是提交推送之后的
         # 另一条命令 `dispatch <cycle>`），所以这里只报清楚别停得静悄悄。
-        print(f'handoff: {args.node} recorded; the node is not closed yet -- finish it '
+        print(f'handoff: {args.node} ticket written; the node is not closed yet -- finish it '
               f'with `{action["close_with"]}` (no session was spawned)')
     else:
-        print(f'handoff: {args.node} recorded; pipeline says {kind} '
+        print(f'handoff: {args.node} ticket written; the pipeline reads {kind} '
               f'({action.get("note") or action.get("reason") or ""})')
-        if kind == 'fail_hard':
-            # A chain that breaks leaves a loud mark and a non-zero exit. Without this the
-            # worker's session sees rc=0, no session is ever started, and the run stops with
-            # nobody told -- "the machine sat there quietly".
-            _write_marker(
-                project, args.cycle, 'bad-signal',
-                action.get('reason') or 'the pipeline refused the signal',
-                note=(f'这一步的条子被管线判坏（reason 里点名了原因）。清掉它重报：'
-                      f'pf cycle retry {args.cycle} {args.node}，再跑一次'
-                      f'handoff；确认无碍后删掉本文件。'))
-            print('Error: the pipeline refused this signal; see the marker file.',
-                  file=sys.stderr)
-            return 1
     return 0
 
 

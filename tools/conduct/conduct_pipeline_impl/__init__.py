@@ -2,7 +2,7 @@
 
 `conduct_pipeline.py` is the entry point: the module the CLI runs, the module `handoff.py`,
 `state-manage.py` and the test harness load by path -- fresh every time -- and the module that owns
-the child-process seam (`_cmd` / `_dag` / `_as_text` / `_run` / `CMD_TIMEOUT` / `SPAWN_PS1`),
+the child-process seam (`_cmd` / `_dag` / `_as_text` / `_run` / `CMD_TIMEOUT` / `SPAWNER_SCRIPT`),
 because those are what a caller patches. The machinery is here:
 
     seam.py      the live link back to the entry module's globals (see its docstring)
@@ -15,7 +15,7 @@ because those are what a caller patches. The machinery is here:
     prompts.py   what a dispatch prompt says (the invocation line, and the node's text)
     maintenance.py the maintenance channel: the reading, the lines it is measured
                  against, and the graph edit that puts a maintenance node in between
-    actions.py   state -> an action package (dispatch / wait / ask_user / stop / fail_hard)
+    actions.py   state -> an action package (dispatch / wait / ask_user / stop)
     planner.py   `plan()`: the pure decision, including the node's own close
     writer.py    `apply()` / `record()`: run the commands, and enforce the apply contract
 
@@ -41,13 +41,14 @@ from . import writer  # noqa: F401
 
 #: Everything `conduct_pipeline.py` re-exports: one flat surface, exactly what this module had at module
 #: scope before the split, minus the names the entry keeps for itself (its own paths, the seam
-#: functions, and the CLI: `ACTIONS`, `_render_contract`, `_render`, `main`).
+#: functions, and the CLI: `ACTIONS`, `_render_contract`, `main`). It is the only export list in this
+#: package -- the layers keep none of their own, so there is no second list to drift from this one.
 __all__ = [
     # the layers themselves, for a caller that wants to poke at one of them
     'seam', 'store', 'instruct', 'nodes', 'prompts', 'maintenance', 'actions', 'planner', 'writer',
 
     # store: the read layer, and the door to the session notes under `.pf/meta/sessions/`
-    'ledger_dir', 'meta_dir', '_read_json', 'load_state', 'load_signal', 'load_dag',
+    'ledger_dir', 'meta_dir', 'load_state', 'load_signal', 'load_dag',
     'load_instructions',
     'active_cycles', 'find_cycle', 'cycle_path',
     'POLICY_DEFAULTS', 'POLICY_VALUES', 'POLICY_NUMBERS', 'POLICY_COUNTS',
@@ -68,24 +69,25 @@ __all__ = [
     'tag_blocked_ready_nodes', 'holding_ready_nodes', 'blocked_reason', 'pick_node', 'node_spec_path',
 
     # prompts: what a dispatch prompt says
-    'prompt_for', 'write_prompt_file', 'build_prompt_text', 'mode_for', 'started_marker',
+    'write_prompt_file', 'build_prompt_text', 'mode_for', 'started_marker', 'launch_prompt_path',
 
     # maintenance: the maintenance channel
-    'POLICY_KEYS', 'READING_KEYS', 'MAINTENANCE_ACTION', 'METRICS', 'crossed', 'reading_of',
+    'READING_KEYS', 'MAINTENANCE_ACTION', 'METRICS', 'crossed', 'reading_of',
     'thresholds_for', 'asked_readings', 'pool_weight', 'insertion', 'read_new_node_id',
     'maintenance_spec', 'maintenance_title', 'substitute',
     'ISSUE_REPAIR_KEY', 'ISSUE_REPAIR_OFF', 'ISSUE_REPAIR_VALUES', 'ISSUE_REPAIR_DEFAULT',
     'issue_repair_on',
 
-    # actions: state -> an action package
-    '_ask', '_dispatch', '_dispatch_many', '_maintenance_due', 'attention_items', '_ticket_wait',
-    '_retry_wait', '_sessions_wait', '_close_commands', '_stop_action',
+    # actions: state -> an action package, and an action package as the caller reads it
+    '_ask', '_dispatch_many', '_maintenance_due', 'attention_items', '_ticket_wait',
+    '_retry_wait', '_sessions_wait', '_close_commands', '_stop_action', 'render_action',
 
     # planner: plan() and the node's own close
-    'stop_criterion', 'plan', 'node_mode', '_close_own_node', '_named_node_outside_scope',
+    'stop_criterion', 'plan', '_close_own_node', '_named_node_outside_scope',
 
     # writer: apply() / record()
-    'MAX_SETTLE_STEPS', '_snapshot', 'spawn_session', 'clean_launch_dir', 'apply', 'record',
+    'MAX_SETTLE_STEPS', '_snapshot', 'resolve_spawner', 'spawn_session', 'clean_launch_dir',
+    'apply', 'record',
 ]
 
 # One list, resolved here: every name above is taken from whichever layer defines it (the layer

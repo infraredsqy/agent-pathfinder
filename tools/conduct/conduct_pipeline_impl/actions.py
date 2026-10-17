@@ -1,44 +1,36 @@
 """The action builders: state -> one action package.
 
-`_ask`, `_dispatch`, the two `wait` answers, the close command list, and the stop package.
+`_ask`, `_dispatch_many`, the two `wait` answers, the close command list, and the stop package -- plus
+`render_action`, the other end of the same contract: an action package as the caller reads it.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from . import maintenance, seam
-from .nodes import mode_for, node_spec_path
-from .prompts import build_prompt_text
-from .store import DEFAULT_MODE, load_dag, load_signal, meta_dir
+from .nodes import mode_for, node_row, node_spec_path
+from .prompts import build_prompt_text, launch_dir, launch_prompt_path
+from .store import DEFAULT_MODE, load_dag
 
 
 def _ask(question: str, **extra) -> dict:
     return {'action': 'ask_user', 'cycle': None, 'question': question, 'commands': [], **extra}
 
 
-def _dispatch(project: Path, cycle: dict, node_id: str) -> dict:
-    dag = load_dag(project)
-    # A DAG node is stored under its own id (the id is the dict KEY), so the id has to be handed in
-    # rather than read back out of the row.
-    node = dict((dag.get('nodes') or {}).get(node_id) or {})
-    node['id'] = node_id
-    text = build_prompt_text(project, cycle, node)
-    target = (meta_dir(project) / 'launch' / cycle['id'] / node_id
-              / 'prompt.txt')
-    return {
-        'action': 'dispatch', 'cycle': cycle['id'],
-        'node_id': node_id, 'node_title': node.get('title', ''),
-        'nodes': [{'node_id': node_id, 'node_title': node.get('title', ''),
-                   'mode': mode_for(node_id, dag),
-                   'prompt': str(target), 'prompt_text': text}],
-        'mode': mode_for(node_id, dag),
-        'prompt': str(target), 'prompt_text': text,
-        'steps': [f'write prompt text to {target}',
-                  'DSH: spawn one session with prompt.txt (`dispatch <cycle>` does this; '
-                  '`next --spawn` is the one-shot spelling of the same call)'],
-        'commands': [],
-    }
+def _node_entry(project: Path, cycle: dict, row: dict, mode: str) -> dict:
+    """One node's entry inside a dispatch-shaped action.
+
+    The id, its title, its mode, where its prompt file lands and the text to write there -- one
+    builder, so the multi-node dispatch and the maintenance insert cannot spell their entries
+    differently. `row` is a graph row with its id in it (`nodes.node_row`); the maintenance node has
+    no row yet, so its caller hands over the id and the title it was generated with.
+    """
+    node_id = row['id']
+    return {'node_id': node_id, 'node_title': row.get('title', ''), 'mode': mode,
+            'prompt': str(launch_prompt_path(project, cycle['id'], node_id)),
+            'prompt_text': build_prompt_text(node_id)}
 
 
 def _dispatch_many(project: Path, cycle: dict, node_ids: list) -> dict:
@@ -49,16 +41,8 @@ def _dispatch_many(project: Path, cycle: dict, node_ids: list) -> dict:
     只是 `nodes` 里恰好有一项。
     """
     dag = load_dag(project)
-    nodes = []
-    root = meta_dir(project) / 'launch' / cycle['id']
-    for node_id in node_ids:
-        node = dict((dag.get('nodes') or {}).get(node_id) or {})
-        node['id'] = node_id
-        target = root / node_id / 'prompt.txt'
-        nodes.append({'node_id': node_id, 'node_title': node.get('title', ''),
-                      'mode': mode_for(node_id, dag),
-                      'prompt': str(target),
-                      'prompt_text': build_prompt_text(project, cycle, node)})
+    nodes = [_node_entry(project, cycle, node_row(dag, node_id), mode_for(node_id, dag))
+             for node_id in node_ids]
     head = nodes[0]
     return {
         'action': 'dispatch', 'cycle': cycle['id'],
@@ -70,7 +54,8 @@ def _dispatch_many(project: Path, cycle: dict, node_ids: list) -> dict:
         'mode': head['mode'],
         'prompt': head['prompt'] if len(nodes) == 1 else '',
         'prompt_text': head['prompt_text'] if len(nodes) == 1 else '',
-        'steps': [f'write each node\'s prompt text to its own prompt.txt under {root}',
+        'steps': [f'write each node\'s prompt text to its own prompt.txt under '
+                  f'{launch_dir(project, cycle["id"])}',
                   'DSH: spawn one session per node (`dispatch <cycle>` does all of them; '
                   '`next --spawn` is the one-shot spelling of the same call)'],
         'commands': [],
@@ -85,19 +70,14 @@ def _maintenance_due(project: Path, cycle: dict, closed: str, hit: dict, target:
     is there, create the maintenance node, wire the two edges, and pin the cycle on it. Nothing is
     written here -- `apply` is the only writer, and `plan` must stay byte-for-byte read-only.
 
-    It is shaped like `_dispatch` on purpose ("走法和 dispatch 一样"): the same `prompt` /
+    It is shaped like `_dispatch_many` on purpose ("走法和 dispatch 一样"): the same `prompt` /
     `prompt_text` / `mode` fields, so `dispatch <cycle>` and `next --spawn` need no second case. The
     difference is WHICH node is pinned -- the one just inserted, not the one the close had picked --
     and that the picked node is named in `deferred_node`, because it is still the next thing the
     line will do, just not yet.
     """
-    dag = load_dag(project)
     node_id = maintenance.NEW_NODE
-    node = {'id': node_id, 'title': hit['title'], 'description': hit['spec_of'](node_id),
-            'mode': DEFAULT_MODE}
-    text = build_prompt_text(project, cycle, node)
-    node_target = (meta_dir(project) / 'launch' / cycle['id'] / node_id
-                   / 'prompt.txt')
+    entry = _node_entry(project, cycle, {'id': node_id, 'title': hit['title']}, DEFAULT_MODE)
     shown = (f'{hit["value"]:g}{hit["unit"]}')
     line = (f'{hit["at"]:g}{hit["unit"]}')
     note = (f'{hit["subject"]} 读到 {shown}，达到这条线策略里的线 {line}'
@@ -110,16 +90,14 @@ def _maintenance_due(project: Path, cycle: dict, closed: str, hit: dict, target:
                                  spec_of=hit['spec_of'], close_commands=close_commands)
     return {
         'action': maintenance.MAINTENANCE_ACTION, 'cycle': cycle['id'],
-        'node_id': node_id, 'node_title': hit['title'],
-        'mode': node['mode'],
-        'prompt': str(node_target), 'prompt_text': text,
+        **entry,
         'metric': hit['reading'], 'reading': shown, 'line': line,
         'deferred_node': target['id'], 'deferred_title': target.get('title', ''),
         # `extra_note` is the line that would have ridden on the dispatch this action replaces (a
         # hand-named node outside the filter set, for one). It has to keep riding along: the caller
         # never sees the action it displaced.
         'note': f'{note}；{extra_note}' if extra_note else note,
-        'steps': [f'write prompt text to {node_target}',
+        'steps': [f'write prompt text to {entry["prompt"]}',
                   f'insert a maintenance node with the generated spec '
                   f'({node_spec_path(project, node_id)}), between {closed} and {target["id"]}',
                   'DSH: spawn one session with prompt.txt (`dispatch <cycle>` does this)'],
@@ -205,9 +183,8 @@ def _close_commands(project: Path, cycle: dict, node_id: str, outcome: str,
     that did not is `shelved` (out of play, waiting for a human), and a node being worked on is
     `todo`.
 
-    **停手就是转 inactive，一条写死的命令。** 以前这里要在 paused 和 completed 之间选一个（还
-    有没有活留着），那是把「这条线是不是还该往前走」押在了当时的图上：图后来会长出新节点，而
-    一条停下来的线该不该接着跑，是人说了算的事。工具永远不写 `active`。
+    **停手就是转 inactive，一条写死的命令。** 「这条线是不是还该往前走」不押在图上：图会长出新
+    节点，而一条停下来的线该不该接着跑，是人说了算的事。工具永远不写 `active`。
 
     一条没交付的节点被搁置，但它后面要不要接着挑人，走的还是同一条岔路（`when_shelved` 策略已经在
     那一步决定过了）：`shelved` 只说明这个节点出局等人，与线走不走是两件事。
@@ -230,7 +207,8 @@ def _close_commands(project: Path, cycle: dict, node_id: str, outcome: str,
 
 
 def _stop_action(project: Path, cycle: dict, reason: str, cmds: list,
-                 node_id: str | None = None, shelved_nodes=(), stop_line: bool = True) -> dict:
+                 node_id: str | None = None, shelved_nodes=(), stop_line: bool = True,
+                 dag: dict | None = None) -> dict:
     return {'action': 'stop_pipeline', 'cycle': cycle['id'], 'node_id': node_id,
             'reason': reason,
             'note': ('cycle parked; nothing more to do without a human' if stop_line else
@@ -238,11 +216,11 @@ def _stop_action(project: Path, cycle: dict, reason: str, cmds: list,
                      'own closes run'),
             # The run is ending, so this is the last place the human-facing loose ends can be
             # handed over. `attention: []` when there is nothing to look at.
-            'attention': attention_items(project, cycle, shelved_nodes),
+            'attention': attention_items(project, cycle, shelved_nodes, dag=dag),
             'commands': cmds}
 
 
-def attention_items(project: Path, cycle: dict, shelved_nodes=()) -> list:
+def attention_items(project: Path, cycle: dict, shelved_nodes=(), dag: dict | None = None) -> list:
     """The things a human has to look at, carried by the stop package.
 
     Two sources, collected in this order:
@@ -259,10 +237,10 @@ def attention_items(project: Path, cycle: dict, shelved_nodes=()) -> list:
 
     **`shelved` 是节点状态，`failed` 是条子上的判决**：一个会话报告 `failed`，说的是「我没交出东西」，
     收尾据此把这个节点搁置（标 `shelved`，出局等人）。所以这里说的是节点状态；而路径上的那一格、
-    以及 `signal.py` 的 `failed`，说的是判决，照旧。
+    以及 `signal.py` 的 `failed`，说的是判决。
     """
     out = []
-    nodes = load_dag(project).get('nodes') or {}
+    nodes = (dag if dag is not None else load_dag(project)).get('nodes') or {}
     shelved = list(dict.fromkeys(list(shelved_nodes) + [uid for uid, n in nodes.items()
                                                        if n.get('status') == 'shelved']))
     for uid in shelved:
@@ -275,3 +253,60 @@ def attention_items(project: Path, cycle: dict, shelved_nodes=()) -> list:
             'hint': f'dag-manage revive {uid} 放回 todo（shelved → todo），或人工处理后重开 cycle',
         })
     return out
+
+
+# ── an action as the caller reads it ─────────────────────────────────────────
+
+def render_action(action: dict, as_json: bool = False, preview: bool = False) -> str:
+    """One action as the caller reads it -- the ONE place both `next` front ends print from.
+
+    `preview` 是 `--plan` 那一趟：**预览不可执行**。一份还带着 `commands` 的计划停在半路（机械的那
+    几步还没跑），这种情况只报「还在落定」，绝不把命令交给调用方 —— 这是那道不变量在输出这一侧的
+    落点，两个前端（`conduct_pipeline.py` 与 `state-manage.py next`）共用它一份。
+
+    `as_json` 只是形状：JSON 给人以外的读者（`ensure_ascii=False`，中文原样），否则是人读的那一版。
+    """
+    if preview and action.pop('commands', None):
+        action['settling'] = True
+    return (json.dumps(action, ensure_ascii=False, indent=2) if as_json
+            else _action_lines(action))
+
+
+def _action_lines(action: dict) -> str:
+    """The human-facing rendering: what the action is, and everything a reader has to act on."""
+    lines = [f"action: {action['action']}"]
+    if action.get('cycle'):
+        lines.append(f"cycle:  {action['cycle']}")
+    # `hint` is where the way back lives (the command that puts a line back in service, or the
+    # one that pins the node a cycle with nothing in hand has to choose between): a reader who is
+    # not using --json is exactly the reader who needs it, so it is rendered, not just returned.
+    for key in ('note', 'reason', 'question', 'hint', 'blocked', 'close_with'):
+        if action.get(key):
+            lines.append(f"{key + ':':<9} {action[key]}")
+    if action.get('node_id'):
+        lines.append(f"node:   {action.get('node_title', '')}  ({action['node_id']})")
+    for item in action.get('nodes') or []:
+        if isinstance(item, dict) and item.get('node_id') != action.get('node_id'):
+            lines.append(f"node:   {item.get('node_title', '')}  ({item['node_id']})")
+    for step in action.get('steps', []):
+        lines.append(f"  - {step}")
+    if action.get('prompt'):
+        lines.append(f"prompt: {action['prompt']}")
+    if action.get('action') in ('dispatch', maintenance.MAINTENANCE_ACTION):
+        lines.append(f"mode:   {action.get('mode')}")
+    # The maintenance channel's own fields: which measurement crossed, what it read, where the line
+    # was, and the node the close had picked before this one was put in front of it. A reader who is
+    # not using --json is exactly the reader who needs to see why the graph grew a node.
+    if action.get('metric'):
+        lines.append(f"metric: {action['metric']} = {action.get('reading')} "
+                     f"(line {action.get('line')})")
+    if action.get('deferred_node'):
+        lines.append(f"after:  {action.get('deferred_title', '')}  ({action['deferred_node']})")
+    if 'applied' in action:
+        lines.append(f"applied: {action['applied']}")
+    for item in action.get('attention', []):
+        who = f"{item.get('node_title')} ({item.get('node_id')})" if item.get('node_id') else '?'
+        lines.append(f"attention: {item.get('kind')}  {who}")
+        if item.get('hint'):
+            lines.append(f"           {item['hint']}")
+    return '\n'.join(lines)

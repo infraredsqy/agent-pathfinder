@@ -7,36 +7,40 @@
 # `-PromptFile` 是**必填**：没有 prompt 就没有会话可开，不给就报错退出，绝不发任何手势。
 # 旧 session 一律不复活——每次都是新开一个会话。
 #
-# Usage: pwsh -File dsh-spawn.ps1 -CycleId <id> -PromptFile <path>
-#                                  [-WorkspacePath <dir>] [-WebUrl <url>] [-Token <t>]
+# 外壳（参数缺省、prompt 校验、降级标记的写与清）与 `zcode-spawn.ps1` 共用同一份：
+# `spawn-common.ps1`，本文件只留 DSH 这一半（鉴权、HTTP 调用、末行）。标记的形状与落点在
+# `marker.py`。
+#
+# Usage: pwsh -File dsh-spawn.ps1 -CycleId <id> -PromptFile <path> -MarkerPath <path>
+#                                  [-WorkspacePath <dir>] [-PythonExe <path>] [-WebUrl <url>] [-Token <t>]
 #   -CycleId       必填。cycle 标识（同 state-manage.py 的 cycle id）。
 #   -PromptFile    必填。节点 session 的 prompt 全文（第一行是 skill 调用行）；缺了直接报错退出。
+#   -MarkerPath    必填。降级标记的完整路径（`conduct_spawn.argv_for` 从 marker.py 取）。
 #   -WorkspacePath 可选。子会话的工作目录（cwd）；缺省用当前目录。
+#   -PythonExe     可选。共用参数面里的那一个（ZCode 那一半用它跑 zcode-dispatch.py）；写标记
+#                  不经过 python（见 `spawn-common.ps1` 头部），DSH 这一半拿到它也不用。
 #   -WebUrl        可选。DSH web 基址；缺省取 $env:DSH_BASE / $env:DSH_API / $env:DSH_WEB_URL，
 #                  再退到 http://127.0.0.1:3080。
 #   -Token         可选。显式进程 launch token（仅用于排障；正常路径不需要）。
 #
 # 依赖：pwsh 7+；DSH web 默认在 http://127.0.0.1:3080。
 #
-# 鉴权（2026-09-20 重做，原实现已失效）：
-#   旧实现从 ~/.dsh/web-run.log 抓进程 launch token，再走 GET /?token=… 换 cookie。
-#   两个问题：① launch token 每进程新生成，日志不随每次启动更新，重启后必然 401；
-#   ② /api 走的是 cookie 鉴权路径，launch token 只是换 cookie 的门票。
-#   现改为直接用**持久签名密钥**自签一个 browser-session cookie：
-#   密钥存在 ~/.dsh/.credentials.yaml 的 client-connection/browser-session 记录里，
-#   跨重启有效；cookie 有效期 30 天（与 dsh 默认 cookieMaxAgeDays 一致）。
-#   于是续跑不再依赖任何一次性的进程态，contribute 子会话也不再需要用户介入。
+# 鉴权：
+#   直接用**持久签名密钥**自签一个 browser-session cookie：密钥存在
+#   ~/.dsh/.credentials.yaml 的 client-connection/browser-session 记录里，跨重启有效；
+#   cookie 有效期 30 天（与 dsh 默认 cookieMaxAgeDays 一致）。/api 走的是 cookie 鉴权路径，
+#   所以续跑不依赖任何一次性的进程态，contribute 子会话不需要用户介入。
 #
-# —— 契约（2026-09 按 0.1.5-rc.2 实测校准，仍然成立）——
+# —— 契约（实测校准）——
 #   ① 端点用斜杠形式：session/create、session/prompt（点号写法回 not found）
 #   ② 信封：{type:"client-request", rpcId, method, payload:{args:{request:{…}}}}
 #      端点参数放在 args 下的具名键里（这两个端点都叫 request）
 #   ③ 无鉴权时回 401 "dsh web authentication required"；鉴权通过但方法名不存在回 404
 #
-# 链断了怎么办（2026-09-20 加固）：
+# 链断了怎么办：
 #   整条链的下一棒全押在这一段 POST 上：**一次 401 或网络抖动就足以让这条线静默躺下**，
-#   表面上还像在跑（旧实现没有重试）。所以每个 API 调用最多重试 3 次（指数退避 2s / 4s）；
-#   全部失败时把原因写进 .pf/meta/CONDUCT-CALLBACK-FAILED-<cycle>.json —— 一个显眼的降级标记，
+#   表面上还像在跑。所以每个 API 调用最多重试 3 次（指数退避 2s / 4s）；
+#   全部失败时写下降级标记（`spawn-common.ps1` + `marker.py`：一个显眼的、按线命名的文件），
 #   下一次人工 /pf-conduct 能看见"这里断过"。派发成功时该标记会被清掉（它存在 = 链现在是断的）。
 #   按线分文件：并行=2 时两条线并排跑，本线成功只清本线的标记，不抹别线的断链记号。
 # ============================================================================
@@ -44,12 +48,16 @@
 param(
     [Parameter(Mandatory = $true)][string]$CycleId,
     [Parameter(Mandatory = $true)][string]$PromptFile,
+    [string]$MarkerPath,
     [string]$WorkspacePath,
+    [string]$PythonExe,
     [string]$WebUrl,
     [string]$Token
 )
 
 $ErrorActionPreference = "Stop"
+
+. (Join-Path $PSScriptRoot 'spawn-common.ps1')
 
 # —— API 根：-WebUrl > DSH_BASE > DSH_API（剥掉结尾 /api） > DSH_WEB_URL > 默认 ——
 $base = if ($WebUrl) { $WebUrl.TrimEnd('/') }
@@ -59,50 +67,11 @@ $base = if ($WebUrl) { $WebUrl.TrimEnd('/') }
         else { "http://127.0.0.1:3080" }
 
 # —— 工作目录与降级标记：在任何网络调用之前先定下来，失败时才写得了盘 ——
-$target = if ($WorkspacePath) { $WorkspacePath } else { (Get-Location).Path }
-$script:MarkerPath = Join-Path $target ('.pf\meta\CONDUCT-CALLBACK-FAILED-' + $CycleId + '.json')
+Initialize-Spawner -CycleId $CycleId -PromptFile $PromptFile -WorkspacePath $WorkspacePath `
+                   -MarkerPath $MarkerPath -PythonExe $PythonExe -Extra "api_base=$base"
 
 $script:MaxAttempts = 3
 $script:RetryBaseDelaySec = 2
-$script:MarkerWritten = $false
-
-function Write-CallbackFailureMarker {
-    param(
-        [Parameter(Mandatory)][string]$Phase,
-        [Parameter(Mandatory)][string]$Reason,
-        [int]$Attempts = 0
-    )
-    if ($script:MarkerWritten) { return }
-    $script:MarkerWritten = $true
-    try {
-        $dir = Split-Path -Parent $script:MarkerPath
-        if (-not (Test-Path $dir)) { $null = New-Item -ItemType Directory -Force -Path $dir }
-        $record = [ordered]@{
-            cycle_id    = $CycleId
-            phase       = $Phase
-            attempts    = $Attempts
-            reason      = $Reason
-            workspace   = $target
-            api_base    = $base
-            detected_at = [DateTimeOffset]::UtcNow.ToString('o')
-            note        = ('conductor 的下一棒断在这里：子 session 已写完 signal，但没有新的 conduct ' +
-                           'session 被开起来，管线不会再自己往前走。手动跑 state-manage.py next ' +
-                           '接管；确认无碍后删掉本文件。')
-        }
-        # 不带 BOM 写出：这份 JSON 是要被工具读的，BOM 会让 json.load(encoding='utf-8') 炸。
-        # 落盘走临时文件 + 同卷改名：并发读者要么读到整份、要么读不到，不撞见半截 JSON。
-        $tmp = "$script:MarkerPath.tmp-$PID"
-        [System.IO.File]::WriteAllText(
-            $tmp,
-            ($record | ConvertTo-Json -Depth 5),
-            (New-Object System.Text.UTF8Encoding($false)))
-        Move-Item -Path $tmp -Destination $script:MarkerPath -Force
-        Write-Warning "conduct 派发失败，已写下降级标记：$script:MarkerPath"
-    }
-    catch {
-        Write-Warning "写降级标记失败（$script:MarkerPath）：$($_.Exception.Message)"
-    }
-}
 
 # —— 鉴权：自签 browser-session cookie（跨重启有效）——
 function ConvertTo-B64Url([byte[]]$Bytes) {
@@ -150,7 +119,14 @@ function New-BrowserSessionCookie {
     return "$name=v1.$body.$sig"
 }
 
-$authority = ([uri]$base).Authority
+try {
+    $authority = ([uri]$base).Authority
+}
+catch {
+    # 基址本身不成形：链在这一拍就断了，和签 cookie / POST 失败同一类事故 —— 一样留标记再退出。
+    Write-CallbackFailureMarker -Phase 'auth' -Reason $_.Exception.Message
+    throw
+}
 $cookieHeader = $null
 try {
     $cookieHeader = if ($Token) {
@@ -171,8 +147,8 @@ $script:RpcCounter = 0
 
 function Invoke-DshApi {
     param(
-        [Parameter(Mandatory)][string]$Method,
-        [Parameter(Mandatory)][AllowEmptyCollection()]$Request
+        [Parameter(Mandatory = $true)][string]$Method,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()]$Request
     )
     $script:RpcCounter++
     # 参数名避开 PowerShell 的自动变量 $Args；payload 必须恰好含一个普通对象 args，
@@ -216,20 +192,17 @@ function Invoke-DshApi {
 # 「未分组」区，用户看不到管线跑到哪了。所以先用 workspace/create（幂等：同一目录返回
 # 既有工作区）取 workspaceId，再只带它建会话——端点明确拒绝 workspaceId 与 cwd 同时出现，
 # 而只给 workspaceId 时，会话的 cwd 即该工作区绑定的目录。
-# （$target 已在前面按 -WorkspacePath / 当前目录定好，降级标记也用它。）
-$workspace = (Invoke-DshApi -Method "workspace/create" -Request @{ path = $target }).workspace
+# （$script:SpawnTarget 已在前面按 -WorkspacePath / 当前目录定好，降级标记也用它。）
+$workspace = (Invoke-DshApi -Method "workspace/create" -Request @{ path = $script:SpawnTarget }).workspace
 $created = Invoke-DshApi -Method "session/create" -Request @{ workspaceId = $workspace.workspaceId }
 $sid = $created.sessionId
 
 # —— 发送 prompt（mode:"queue"）——
 # 只发 -PromptFile 的全文（节点 session 的 prompt，第一行是 skill 调用）。没给就是调用方的缺陷：
 # 报错退出，不建任何手势（会话一律由 prompt 定义，没有第二种开法）。
-if (-not (Test-Path $PromptFile)) {
-    Write-CallbackFailureMarker -Phase 'read-prompt' -Reason "找不到 prompt 文件 $PromptFile"
-    throw "prompt file not found: $PromptFile (-PromptFile is required)"
-}
-$text = [System.IO.File]::ReadAllText($PromptFile, [System.Text.Encoding]::UTF8)
-$what = "node session (prompt=$PromptFile)"
+Assert-PromptFile
+$text = [System.IO.File]::ReadAllText($script:SpawnPromptFile, [System.Text.Encoding]::UTF8)
+$what = "node session (prompt=$($script:SpawnPromptFile))"
 Invoke-DshApi -Method "session/prompt" -Request @{
     requestId = [guid]::NewGuid().ToString()
     sessionId = $sid
@@ -237,16 +210,7 @@ Invoke-DshApi -Method "session/prompt" -Request @{
     content   = @(@{ type = "text"; text = $text })
 } | Out-Null
 
-# 派发成功：清掉上一次留下的降级标记（标记存在 = 链现在是断的；链一旦续上它就没有意义了，
-# 留着只会让下一次人工 /pf-conduct 读到一条早就修好的旧事故）。
-if (Test-Path $script:MarkerPath) {
-    # 清也先改名再删：标记从「在」到「不在」是一步同卷改名，并发读者撞不见中间态；改名失败
-    # （正被别的进程读着）就退回原地删——清不掉不许挡派发成功。
-    $stale = "$script:MarkerPath.clearing-$PID"
-    Move-Item -Path $script:MarkerPath -Destination $stale -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path $stale -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path $script:MarkerPath -Force -ErrorAction SilentlyContinue
-    Write-Output "cleared a stale callback failure marker: $script:MarkerPath"
-}
+# 派发成功：清掉上一次留下的降级标记（标记存在 = 链现在是断的）。
+Clear-CallbackFailureMarker
 
 Write-Output "spawned: session $sid ($what)"

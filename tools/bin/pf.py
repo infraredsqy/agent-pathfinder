@@ -1,23 +1,21 @@
 #!/usr/bin/env python3
 """`pf`: one command in front of the tools.
 
-Every skill used to spell out a full `python .../state-manage.py ...` path, which tied the prose to
-one machine's install layout. They now say `pf next`, `pf handoff`, `pf issue top` --
-where the tools live is resolved here, once, from this file's own location.
-
-Three verbs belong to `pf` itself:
-
-    pf doctor [--fix]   read the health of this checkout and this project; --fix runs the setup act
-    pf version          print where this checkout lives
+Every skill says `pf next`, `pf handoff`, `pf issue top`: where the tools live is resolved here, once,
+from this file's own location, so the prose reads the same on every machine.
 
 Everything else forwards to a tool, keeping the tool's own subcommand names so the docs stay
-greppable. `pf init` and `pf register` are forwards too: the registration logic lives next to the
-ledger it serves, in `conduct_state/initledger.py`.
+greppable. Which words those are is the table further down, and `--help` prints that same table. A
+forwarded verb's flags are its tool's: `pf <verb> --help` is where they are. `pf init` and
+`pf register` are forwards too: the registration logic lives next to the ledger it serves, in
+`conduct_state/initledger.py`.
 """
 
+import importlib.util
 import os
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 #: The tools this command fronts. `HERE` is `<repo>/tools/bin`, so the tool tree is one level up --
@@ -36,55 +34,147 @@ LEDGER_MERGE = CONDUCT / 'ledger-merge.py'
 #: why the doctor has to check it by name.
 SESSION_NOTE = TOOLS / 'shared' / 'session-note.py'
 
-LEDGER_NAME = '.pf'
-MARKERS = ('.gitignore', '.gitattributes')
+# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
+# loaded by path through `loader.py`.
+SHARED = TOOLS / 'shared'
 
-#: Everything that lives in `state-manage.py`, forwarded verbatim: each name is either a bare verb
-#: or a noun group carrying its own verbs, so `pf cycle list` reaches the tool as `cycle list`.
-STATE_ENTRIES = ('init', 'register', 'cycle', 'instruction', 'config', 'session', 'next',
-                 'dispatch', 'clean-temp', 'fork-worktree')
+_LOADER = None
 
-#: Groups whose remaining argv goes straight to one tool.
-GROUPS = {'dag': DAG, 'issue': ISSUE}
 
-USAGE = """\
+def _loader():
+    """`tools/shared/loader.py`: the one loader, for the modules this tree keeps outside `shared/`."""
+    global _LOADER
+    if _LOADER is None:
+        spec = importlib.util.spec_from_file_location('pf_shared_loader', SHARED / 'loader.py')
+        _LOADER = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_LOADER)
+    return _LOADER
+
+
+_STORE = None
+
+
+def _store():
+    """`conduct_state/store.py`, loaded by path: the one account of where a project's root is.
+
+    Every tool `pf` fronts resolves the root and the ledger through it -- `state-manage.py` and
+    `dag-manage.py` and the issue tool alike -- so the health check asks the same place instead of
+    carrying a reading of its own (`handoff.py` borrows from here the same way). `.pf/`'s name is
+    its too: a second copy of that word is a second answer to "which directory is the ledger".
+    """
+    global _STORE
+    if _STORE is None:
+        _STORE = _loader().load_by_path('pf_conduct_state_store',
+                                        CONDUCT / 'conduct_state' / 'store.py',
+                                        register=True, reuse=True)
+    return _STORE
+
+def _verb_version(rest: list[str]) -> int:
+    """`pf version`: where this checkout lives."""
+    print(f'pf at {HERE} (tools: {TOOLS})')
+    return 0
+
+
+def _verb_migrate(rest: list[str]) -> int:
+    """`pf migrate`: the door stays shut until this system itself needs migrating."""
+    print('migrate：这个口子现在关着 —— 没有要迁移的东西；等这套体系自己要迁移时再开。')
+    return 0
+
+
+def _verb_doctor(rest: list[str]) -> int:
+    """`pf doctor [--fix]`."""
+    return cmd_doctor(fix='--fix' in rest)
+
+
+#: The words `pf` itself runs. One row each: the name the router matches, the form `--help` prints,
+#: the one line of sense, and the function that answers it. Their flags are printed here because
+#: nothing else prints them.
+SELF_VERBS = (
+    ('doctor', 'doctor [--fix]',
+     'read the health of this checkout and this project', _verb_doctor),
+    ('version', 'version', 'print where this checkout lives', _verb_version),
+    ('migrate', 'migrate',
+     'inactive for now -- it reopens when this system itself needs migrating', _verb_migrate),
+)
+
+#: The words `pf` hands to a tool. One row each: the name, the file that answers it, whether the
+#: name goes along in the argv (`pf next` reaches `state-manage.py` as `next`, `pf dag add` reaches
+#: `dag-manage.py` as `add`), and the one line of sense `--help` prints.
+#:
+#: A forwarded verb's flags live in the tool's own parser, and `pf <verb> --help` prints them: that
+#: parser is the authority, so no flags are kept here.
+FORWARD_VERBS = (
+    ('init', STATE_MANAGE, True, 'put the ledger in place (run once per project)'),
+    ('register', STATE_MANAGE, True, "write the ledger's git merge driver into this project"),
+    ('next', STATE_MANAGE, True, 'show (or do) the next pipeline action'),
+    ('dispatch', STATE_MANAGE, True, 'start the session for the node the cycle holds'),
+    ('clean-temp', STATE_MANAGE, True, "list (or remove) every node's temp/ directory"),
+    ('fork-worktree', STATE_MANAGE, True, "fork one node's parallel-mode worktree"),
+    ('handoff', HANDOFF, False, "a worker's own closing call for the line it just ran"),
+    ('merge-ledger', LEDGER_MERGE, False, 'the three-way merge driver git calls'),
+)
+
+#: The groups: a word whose remaining argv names one of its own verbs. Which verbs those are is the
+#: parser behind the group -- `pf cycle --help`, `pf issue --help` -- never a list kept here.
+FORWARD_GROUPS = (
+    ('cycle', STATE_MANAGE, True, 'one line of work'),
+    ('dag', DAG, False, 'the graph'),
+    ('issue', ISSUE, False, 'the issue pool'),
+    ('config', STATE_MANAGE, True, "this machine's and this project's settings"),
+    ('instruction', STATE_MANAGE, True, 'standing user instructions'),
+    ('session', STATE_MANAGE, True, "a node's own conversations, which live on this machine only"),
+)
+
+#: The files no verb names: the pipeline entry every verb file loads, and the shared session note.
+#: `TOOL_FILES` checks these alongside everything the tables above point at.
+UNROUTED_TOOLS = (CONDUCT_PIPELINE, SESSION_NOTE)
+
+#: What `doctor` insists on finding: the tables' targets, once each, then the two above -- so a verb
+#: added to a table is checked by itself.
+TOOL_FILES = tuple(dict.fromkeys(
+    [row[1] for row in (*FORWARD_VERBS, *FORWARD_GROUPS)] + list(UNROUTED_TOOLS)))
+
+#: `main()`'s routing table: the names are the ones the three tables above carry, taken as they are.
+_SELF_HANDLERS = {row[0]: row[3] for row in SELF_VERBS}
+
+_USAGE_SHAPE = """\
 pf -- the agent pipeline's own command
 
   Level 2 is a verb: it acts on the project or on the pipeline itself. Level 3 is a noun -- a record
   with an identity -- plus the verb that acts on it. So `pf init` and `pf next` are verbs, and
   `pf cycle list`, `pf issue top`, `pf dag add` are a group's verbs.
 
-  verbs:    init                        put .pf/ in place (run once per project)
-            register                    write the ledger's git merge driver into this project
-            doctor [--fix]              report the health of this checkout and this project
-            migrate                     inactive for now -- it reopens when this system itself
-                                        needs migrating
-            version                     print where this checkout lives
-            next [--plan|--after <node>]
-                                        show (or do) the next pipeline action: `--plan` is the
-                                        read-only preview, `--after <node>` is the worker's own
-                                        closing call, and neither drives the pipeline to its next
-                                        stable action. `pf next --help` prints the action
-                                        vocabulary a caller branches on
-            dispatch <cycle>            start the session for the node the cycle holds
-            handoff <cycle> <node> <completed|failed|stopped> [-s ...] [-o ...]
-            clean-temp [--yes]          list (or remove) every node's temp/ directory
-            fork-worktree <node>        fork one node's parallel-mode worktree
-            merge-ledger <O> <A> <B> <P>   the three-way merge driver git calls
-
-  groups:   cycle <verb>                one line of work: create / start / rename / status /
-                                        policy / list / current / show / hold / close / retry
-            dag <verb>                  the graph: add / depend / list / status / open / revive ...
-            issue <verb>                the issue pool: add / top / weight / resolve ...
-            config <verb>               this machine's and this project's settings:
-                                        list / get / set / unset
-            instruction <verb>          standing user instructions: list / add / resolve / rm /
-                                        revive
-            session <verb>              a node's own conversations, which live on this machine only:
-                                        show / list / import
-
-Run `pf <verb> --help` for a verb's own flags, or `pf <group> --help` for a group's verbs.
 """
+
+
+def _usage_rows(pairs) -> str:
+    """The word column and the sense column, one row per pair; a long sense wraps under itself."""
+    left_margin, column, width = 12, 42, 100
+    out = []
+    for left, right in pairs:
+        body = textwrap.wrap(right, width - column) or ['']
+        out.append(f'{" " * left_margin}{left:<{column - left_margin}}{body[0]}')
+        out += [f'{" " * column}{line}' for line in body[1:]]
+    return '\n'.join(out)
+
+
+def usage() -> str:
+    """`pf --help`: the shape of the command, then the words the tables above carry.
+
+    The listing is grown from those tables, so a verb added to one shows up here by itself and the
+    router and this text cannot come apart.
+    """
+    own = _usage_rows([(display, blurb) for _n, display, blurb, _f in SELF_VERBS])
+    verbs = _usage_rows([(name, blurb) for name, _t, _k, blurb in FORWARD_VERBS])
+    groups = _usage_rows([(f'{name} <verb>', blurb) for name, _t, _k, blurb in FORWARD_GROUPS])
+    return (
+        _USAGE_SHAPE
+        + '\n  pf itself:\n' + own
+        + '\n\n  verbs:    (each one hands the rest of the line to a tool)\n' + verbs
+        + "\n\n  groups:   (a group's verbs are that tool's: `pf <group> --help`)\n" + groups
+        + '\n\n  Run `pf <verb> --help` for the verb\'s own flags and values, or `pf <group> --help`\n'
+          "  for a group's verbs.\n"
+    )
 
 
 def _run(*argv: str) -> int:
@@ -94,16 +184,14 @@ def _run(*argv: str) -> int:
 
 
 def _project_root(start: Path) -> Path:
-    """The nearest ancestor holding a `.git`; the start directory when there is none."""
-    current = start.resolve()
-    for _ in range(24):
-        if (current / '.git').is_dir():
-            return current
-        parent = current.parent
-        if parent == current:
-            break
-        current = parent
-    return start.resolve()
+    """This project's root, read the way every tool `pf` fronts reads it: `start` itself,
+    except inside a linked worktree, where it is the main tree the worktree was forked from."""
+    return _store()._resolve_project_root(start)
+
+
+def _ledger_name() -> str:
+    """`.pf/`, named once, in `store`."""
+    return _store().LEDGER_NAME
 
 
 def _git(project: Path, *args: str) -> subprocess.CompletedProcess:
@@ -112,11 +200,11 @@ def _git(project: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def _is_tracked(root: Path) -> bool:
-    return bool(_git(root, 'ls-files', '--', LEDGER_NAME).stdout.strip())
+    return bool(_git(root, 'ls-files', '--', _ledger_name()).stdout.strip())
 
 
 def _registered_driver(root: Path) -> str:
-    return _git(root, 'config', '--get', f'merge{LEDGER_NAME}.driver').stdout.strip()
+    return _git(root, 'config', '--get', f'merge{_ledger_name()}.driver').stdout.strip()
 
 
 def cmd_doctor(fix: bool = False) -> int:
@@ -124,7 +212,7 @@ def cmd_doctor(fix: bool = False) -> int:
     problems = 0
     print(f'pf 命令：{HERE / "pf.py"}')
     print(f'工具树：{TOOLS}')
-    for path in (STATE_MANAGE, HANDOFF, CONDUCT_PIPELINE, DAG, ISSUE, LEDGER_MERGE, SESSION_NOTE):
+    for path in TOOL_FILES:
         if not path.is_file():
             print(f'  ✗ 缺 {path}')
             problems += 1
@@ -133,18 +221,19 @@ def cmd_doctor(fix: bool = False) -> int:
         problems += 1
 
     root = _project_root(Path.cwd())
-    ledger = root / LEDGER_NAME
+    ledger = _store().ledger_dir_for(str(root))
     print(f'项目根：{root}')
     if not ledger.is_dir():
-        print(f'  · 这里还没有 {LEDGER_NAME}/（新项目跑 `pf init`）')
+        print(f'  · 这里还没有 {_ledger_name()}/（新项目跑 `pf init`）')
         return 1 if problems else 0
 
     gaps = []
-    missing = [m for m in MARKERS if not (ledger / m).is_file()]
+    markers = _store().INIT_MARKERS
+    missing = [m for m in markers if not (ledger / m).is_file()]
     if missing:
-        gaps.append(f'{LEDGER_NAME}/ 缺 {" 和 ".join(missing)}')
+        gaps.append(f'{_ledger_name()}/ 缺 {" 和 ".join(missing)}')
     if not (ledger / 'AGENTS.md').is_file():
-        gaps.append(f'{LEDGER_NAME}/AGENTS.md 不在')
+        gaps.append(f'{_ledger_name()}/AGENTS.md 不在')
 
     git_here = (root / '.git').exists()
     driver = _registered_driver(root) if git_here else ''
@@ -181,29 +270,19 @@ def main(argv: list[str]) -> int:
         if hasattr(stream, 'reconfigure'):
             stream.reconfigure(encoding='utf-8', errors='replace')
     if not argv or argv[0] in ('-h', '--help', 'help'):
-        print(USAGE)
+        print(usage())
         return 0
     verb, rest = argv[0], argv[1:]
 
-    if verb == 'version':
-        print(f'pf at {HERE} (tools: {TOOLS})')
-        return 0
-    if verb == 'doctor':
-        return cmd_doctor(fix='--fix' in rest)
-    if verb == 'migrate':
-        print('migrate：这个口子现在关着 —— 没有要迁移的东西；等这套体系自己要迁移时再开。')
-        return 0
-    if verb == 'merge-ledger':
-        return _run(str(LEDGER_MERGE), *rest)
-    if verb == 'handoff':
-        return _run(str(HANDOFF), *rest)
-    if verb in GROUPS:
-        return _run(str(GROUPS[verb]), *rest)
-    if verb in STATE_ENTRIES:
-        return _run(str(STATE_MANAGE), verb, *rest)
+    own = _SELF_HANDLERS.get(verb)
+    if own is not None:
+        return own(rest)
+    for name, target, keep_name, _blurb in (*FORWARD_VERBS, *FORWARD_GROUPS):
+        if name == verb:
+            return _run(str(target), *((verb, *rest) if keep_name else rest))
 
     print(f'pf: 不认识 `{verb}`。\n', file=sys.stderr)
-    print(USAGE, file=sys.stderr)
+    print(usage(), file=sys.stderr)
     return 2
 
 

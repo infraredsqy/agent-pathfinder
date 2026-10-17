@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 from pathlib import Path
@@ -33,7 +34,8 @@ from .store import (
 #: 覆盖层的文件名，两层同名。
 CONFIG_NAME = 'config.json'
 
-#: 三个键的唯一定义处：出厂默认、形状、一句话说明。`kind` 决定 `set` 怎么校验它。
+#: 三个键的唯一定义处：出厂默认、形状、一句话说明。`kind` 是 `parse_value` 唯一的分派依据 ——
+#: 加一个键就是加这一格。
 CONFIG_SPEC = {
     'max_agents': {
         'kind': 'count',
@@ -96,6 +98,38 @@ def project_root_of(project: str | None = None) -> Path:
 
 # ── 读一层 ────────────────────────────────────────────────────────────────────
 
+#: 每种 kind 一处规则：给它一个值（盘上读到的那个 JSON 值，或命令行给的那串字），合法就交出配置
+#: 域里的值，不合法给 None。读盘与写盘两侧都从这里过 —— 加一个 kind、改一个 kind 的边界，动的是
+#: 这一节；`CONFIG_SPEC` 每一格的 `kind` 是唯一的分派依据。
+def _parse_count(spec: dict, value):
+    """`count`：正整数。布尔不算数；命令行那串 `"3"` 与盘上那个 3 一样，都算出 3。"""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        try:
+            value = int(value.strip())
+        except ValueError:
+            return None
+    return value if isinstance(value, int) and value >= 1 else None
+
+
+def _parse_choice(spec: dict, value):
+    """`choice`：这一格自己的候选表里的词。"""
+    return value if value in spec['values'] else None
+
+
+_KINDS = {'count': _parse_count, 'choice': _parse_choice}
+
+
+def parse_value(spec: dict, value):
+    """这一个键的一个值：按 `spec['kind']` 的规则解析并校验，不合法给 None。
+
+    两侧共用同一份：`read_layer` 拿它校验盘上读到的值，`cmd_config_set` 拿它校验命令行给的值。
+    各写一份的下场是「写得进、读不出」（或反过来）—— 一个 kind 的边界只在这里定义一次。
+    """
+    return _KINDS[spec['kind']](spec, value)
+
+
 def _shape_error(key: str, value, where: Path) -> None:
     print(f'Error: {where} 的 {key} 不是一个合法的值：{value!r}', file=sys.stderr)
     sys.exit(1)
@@ -106,14 +140,10 @@ def _checked(key: str, value, where: Path):
 
     读不懂就当场停下：一个写坏的设置悄悄落回默认，等于这一项看起来"没配过"——而它其实配错了。
     """
-    spec = CONFIG_SPEC[key]
-    if spec['kind'] == 'count':
-        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-            _shape_error(key, value, where)
-        return value
-    if value not in spec['values']:
+    checked = parse_value(CONFIG_SPEC[key], value)
+    if checked is None:
         _shape_error(key, value, where)
-    return value
+    return checked
 
 
 def read_layer(layer: str, project: str | None = None) -> dict:
@@ -164,39 +194,27 @@ def config_sources(project: str | None = None) -> dict:
 # 会丢一笔。全局那一层没有共享锁可言（它不属于任何一个项目），照 `_atomic_write` 的原子替换走。
 
 def _parse_for_write(key: str, value: str):
+    """命令行那一侧的一个值：走同一个 kind 的规则，拒绝的话由这一侧说出来。"""
     spec = CONFIG_SPEC[key]
-    if spec['kind'] == 'count':
-        try:
-            parsed = int(str(value).strip())
-        except (TypeError, ValueError):
-            parsed = None
-        if parsed is None or parsed < 1:
+    stored = parse_value(spec, value)
+    if stored is None:
+        if spec['kind'] == 'count':
             print(f'Error: {key} 要一个正整数，读到的是 {value!r}', file=sys.stderr)
-            sys.exit(1)
-        return parsed
-    if value not in spec['values']:
-        print(f'Error: {key} 要 {list(spec["values"])} 里的一个，读到的是 {value!r}', file=sys.stderr)
+        else:
+            print(f'Error: {key} 要 {list(spec["values"])} 里的一个，读到的是 {value!r}',
+                  file=sys.stderr)
         sys.exit(1)
-    return value
-
-
-class _no_lock:
-    """全局那一层不属于任何项目，没有共享的锁可言：一句空上下文，让两条路写出同一个形状。"""
-
-    def __enter__(self):
-        return None
-
-    def __exit__(self, *exc):
-        return False
+    return stored
 
 
 def write_value(key: str, value, layer: str, project: str | None = None) -> None:
     """把一层的某一个键写进去（`value is None` ＝ 拿掉这一层的覆盖）。
 
-    项目那一层走 `_ledger_lock`，它自己就是那道闸：没 init 过的 `.pf/` 什么都不许写。
+    项目那一层走 `_ledger_lock`，它自己就是那道闸：没 init 过的 `.pf/` 什么都不许写。全局那一层
+    属于这台机器而不属于任何项目，没有共享的锁可言 —— `nullcontext` 让两条路写出同一个形状。
     """
     path = layer_path(layer, project)
-    with (_ledger_lock(project) if layer == 'project' else _no_lock()):
+    with (_ledger_lock(project) if layer == 'project' else contextlib.nullcontext()):
         data = _read_json(path, str(path)) if path.exists() else {}
         if not isinstance(data, dict):
             data = {}
@@ -241,20 +259,3 @@ def _report_effective(key: str, project: str | None) -> None:
     effective = resolve_config(project)[key]
     source = config_sources(project)[key]
     print(f'CONFIG: 有效值 {key} = {effective}（来自 {LAYER_LABELS[source]}）')
-
-
-def _dispatch_config(ns) -> None:
-    action = getattr(ns, 'config_command', None)
-    project = getattr(ns, 'project', None)
-    layer = 'global' if getattr(ns, 'global_', False) else 'project'
-    if action == 'list':
-        cmd_config_list(project)
-    elif action == 'get':
-        cmd_config_get(ns.key, project)
-    elif action == 'set':
-        cmd_config_set(ns.key, ns.value, layer, project)
-    elif action == 'unset':
-        cmd_config_unset(ns.key, layer, project)
-    else:
-        print('usage: state-manage.py config {list|get|set|unset} ...', file=sys.stderr)
-        sys.exit(1)

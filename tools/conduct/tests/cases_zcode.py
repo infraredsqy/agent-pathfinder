@@ -13,6 +13,7 @@ dispatcher at a sandbox database, which is the same knob a drill uses.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util as importlib_util
 import json
 import os
@@ -29,12 +30,44 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import pipeline
+from harness import _child_env, run_argv  # noqa: E402
 
 __all__ = ['TestSpawnerChoice', 'TestQueueDedup']
 
 CONDUCT_DIR = Path(pipeline.__file__).resolve().parent.parent
 DISPATCHER = CONDUCT_DIR / 'spawn' / 'zcode-dispatch.py'
 SPAWNER = CONDUCT_DIR / 'spawn' / 'zcode-spawn.ps1'
+
+
+def run_dispatcher(args, env):
+    """The ZCode dispatcher as a real process, against the sandbox database `env` names.
+
+    Through the suite's one child runner, so the decoding and the non-zero exit read like every
+    other tool call; the return code is the caller's to check (this one refuses in several places).
+    """
+    return run_argv([DISPATCHER, *map(str, args)], env=env, check=False)
+
+
+def _host():
+    """`spawn/host.py`, loaded by path -- where the host's own answer lives.
+
+    The probe is asked of THIS module: the two hosts, the two spawner paths and the process-tree walk
+    sit next to the scripts they name, and the entry keeps one seam name (`SPAWNER_SCRIPT`) out of it.
+    """
+    spec = importlib_util.spec_from_file_location('pf_spawn_host_case', CONDUCT_DIR / 'spawn' / 'host.py')
+    module = importlib_util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def marker_path(root, cycle):
+    """`spawn/marker.py` 算出的落点：测试跟着正本走，那条路径不在测试里再拼一遍。"""
+    spec = importlib_util.spec_from_file_location('pf_spawn_marker_case',
+                                                  CONDUCT_DIR / 'spawn' / 'marker.py')
+    module = importlib_util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.marker_path(root, cycle)
+
 
 # The two tables the dispatcher touches, as the desktop ships them. Spelled out rather than trimmed:
 # a column this row forgets is exactly the failure the DDL is here to catch.
@@ -72,38 +105,123 @@ CREATE TABLE tasks (
 """
 
 
+#: The node the queue-dedup cases queue a prompt for: a prompt under `launch/<node_id>/` is the
+#: shape the dispatcher reads an owning node out of. The spawner-choice cases keep theirs at the
+#: project root, which is what a hand-run prompt looks like.
+QUEUED_NODE = 'dddddddd-4444-4444-8444-dddddddddddd'
+
+
+def zcode_sandbox(test, node_id=None):
+    """A throwaway ZCode host: the desktop's two tables, one workspace, one prompt file.
+
+    `test` is the case the temp directory is registered with. Returns (the database, the workspace,
+    the prompt file, the child environment) -- the four things every dispatcher case hands on.
+    """
+    root = Path(tempfile.mkdtemp(prefix='conduct-zcode-'))
+    test.addCleanup(shutil.rmtree, root, ignore_errors=True)
+    (root / 'sandbox' / '.zcode' / 'v2').mkdir(parents=True)
+    db = root / 'sandbox' / '.zcode' / 'v2' / 'tasks-index.sqlite'
+    con = sqlite3.connect(str(db))
+    con.execute(AUTOMATIONS_DDL)
+    con.execute(TASKS_DDL)
+    con.commit()
+    con.close()
+    ws = root / 'ws'
+    (ws / '.pf').mkdir(parents=True)
+    prompt = (root / 'launch' / node_id / 'prompt.txt') if node_id else (root / 'prompt.txt')
+    prompt.parent.mkdir(parents=True, exist_ok=True)
+    prompt.write_text('# /pf-conduct drill\n', encoding='utf-8')
+    env = dict(_child_env(), ZCODE_DATA_BASE_DIR=str(root / 'sandbox'),
+               DSH_CONDUCT_SPAWN_AT='')
+    return db, ws, prompt, env
+
+
 class TestSpawnerChoice(unittest.TestCase):
     """两边各一份 spawner，而"用哪一份"只在一处回答。"""
 
     # ── 选路 ─────────────────────────────────────────────────────────────────
 
     def test_the_two_names_map_to_the_two_scripts(self):
-        self.assertEqual(pipeline.spawn_path('dsh').name, 'dsh-spawn.ps1')
-        self.assertEqual(pipeline.spawn_path('zcode').name, 'zcode-spawn.ps1')
-        self.assertEqual(pipeline.spawn_path('ZCODE').name, 'zcode-spawn.ps1')
-        self.assertEqual(pipeline.spawn_path(r'C:\tmp\mine.ps1').name, 'mine.ps1')
+        host = _host()
+        self.assertEqual(host.spawn_path('dsh').name, 'dsh-spawn.ps1')
+        self.assertEqual(host.spawn_path('zcode').name, 'zcode-spawn.ps1')
+        self.assertEqual(host.spawn_path('ZCODE').name, 'zcode-spawn.ps1')
+        self.assertEqual(host.spawn_path(r'C:\tmp\mine.ps1').name, 'mine.ps1')
 
     def test_an_explicit_setting_beats_the_host(self):
+        host = _host()
         with mock.patch.dict(os.environ, {'DSH_CONDUCT_SPAWNER': 'zcode'}, clear=True), \
-                mock.patch.object(pipeline, '_under_zcode', return_value=False):
-            self.assertEqual(pipeline._default_spawner().name, 'zcode-spawn.ps1')
+                mock.patch.object(host, 'under_zcode', return_value=False):
+            self.assertEqual(host.default_spawner().name, 'zcode-spawn.ps1')
 
     def test_dsh_answers_for_itself(self):
         """DSH injects `DSH_SESSION_ID` into every shell; that is its own answer, and it comes first."""
+        host = _host()
         with mock.patch.dict(os.environ, {'DSH_SESSION_ID': 'sess_x'}, clear=True), \
-                mock.patch.object(pipeline, '_under_zcode', return_value=True):
-            self.assertEqual(pipeline._default_spawner().name, 'dsh-spawn.ps1')
+                mock.patch.object(host, 'under_zcode', return_value=True):
+            self.assertEqual(host.default_spawner().name, 'dsh-spawn.ps1')
 
     def test_a_zcode_ancestor_picks_the_zcode_spawner(self):
+        host = _host()
         with mock.patch.dict(os.environ, {}, clear=True), \
-                mock.patch.object(pipeline, '_under_zcode', return_value=True):
-            self.assertEqual(pipeline._default_spawner().name, 'zcode-spawn.ps1')
+                mock.patch.object(host, 'under_zcode', return_value=True):
+            self.assertEqual(host.default_spawner().name, 'zcode-spawn.ps1')
 
     def test_the_default_stays_dsh(self):
         """No setting, no host marker: a human at a prompt keeps the behaviour DSH always had."""
+        host = _host()
         with mock.patch.dict(os.environ, {}, clear=True), \
-                mock.patch.object(pipeline, '_under_zcode', return_value=False):
-            self.assertEqual(pipeline._default_spawner().name, 'dsh-spawn.ps1')
+                mock.patch.object(host, 'under_zcode', return_value=False):
+            self.assertEqual(host.default_spawner().name, 'dsh-spawn.ps1')
+
+    def test_the_probe_lives_next_to_the_scripts_it_names(self):
+        """宿主探测只有 `spawn/host.py` 这一个家；链自跑的那一发走管线那道门。
+
+        接缝那个模块（`conduct_pipeline.py`）是调用方 patch 的那一个：探测与它分开住，任何一次探测
+        的改动都落在自己那份文件里。`chain-spawn.py` 只当 CLI 壳，开会话那一拍落在管线那道门上（会话
+        便条、标记的写与清都由它带着；claim 那一条拿不到 —— 那条链的 prompt 不在 launch 目录里，见
+        `chain-spawn.py` 的模块说明）。
+        """
+        entry = (CONDUCT_DIR / 'pipeline' / 'conduct_pipeline.py').read_text(encoding='utf-8')
+        imported = {alias.name for node in ast.walk(ast.parse(entry))
+                    if isinstance(node, (ast.Import, ast.ImportFrom)) for alias in node.names}
+        self.assertNotIn('ctypes', imported, '宿主探测住在接缝模块里')
+
+        tree = ast.parse((CONDUCT_DIR / 'spawn' / 'chain-spawn.py').read_text(encoding='utf-8'))
+        # 第二道门不许在这份文件里留下任何痕迹：别名、内联调用、模块名与路径字符串全算。
+        # 大小写敏感地找，`DSH_CONDUCT_SPAWNER` 那类环境变量名因此分得开。
+        texts = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+        texts |= {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+        texts |= {node.value for node in ast.walk(tree)
+                  if isinstance(node, ast.Constant) and isinstance(node.value, str)}
+        self.assertEqual([text for text in sorted(texts) if 'conduct_spawn' in text], [],
+                         '第二道门：chain-spawn.py 里又出现 conduct_spawn 了')
+
+        # 另一头钉住：开会话那一拍落在管线上。上面那条扫描管「没有再调别的门」，这一条管
+        # 「它调的是那道门」—— 别名换了目标，两条各拦一头。
+        bound = {}
+        for node in sorted((n for n in ast.walk(tree)
+                            if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)
+                            and isinstance(n.value, ast.Call)
+                            and isinstance(n.value.func, ast.Name)
+                            and n.value.func.id == '_loaded' and n.value.args),
+                           key=lambda n: n.lineno):
+            parts = sorted((part for part in ast.walk(node.value.args[0])
+                            if isinstance(part, ast.Constant) and isinstance(part.value, str)),
+                           key=lambda part: (part.lineno, part.col_offset))
+            bound[node.targets[0].id] = parts[-1].value if parts else ''
+        receivers = {node.func.value.id for node in ast.walk(tree)
+                     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                     and node.func.attr == 'spawn_session' and isinstance(node.func.value, ast.Name)}
+        self.assertTrue(receivers, 'chain-spawn 没有调 spawn_session')
+        for name in sorted(receivers):
+            self.assertEqual(bound.get(name), 'conduct_pipeline.py',
+                             f'{name}.spawn_session 那一头要绑在管线门上')
+
+        called = {node.func.attr for node in ast.walk(tree)
+                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
+        self.assertNotIn('default_spawner', called, '挑 spawner 的活归那道门')
+        self.assertNotIn('argv_for', called, 'spawner 的 argv 由 conduct_spawn 拼')
 
     # ── 线策略这一级 ─────────────────────────────────────────────────────────
     # `resolve_spawner` 的整条优先级：CLI 点名 > 这条线的 `spawner` 策略 > 环境变量 > 宿主 >
@@ -123,9 +241,10 @@ class TestSpawnerChoice(unittest.TestCase):
         return root
 
     def test_a_line_policy_beats_the_machine_and_the_host(self):
+        """线策略压过这台机器上的一切：环境变量与那道缝都说 zcode，线仍然走 dsh。"""
         root = self.policy_root({'spawner': 'dsh'})
         with mock.patch.dict(os.environ, {'DSH_CONDUCT_SPAWNER': 'zcode'}, clear=True), \
-                mock.patch.object(pipeline, '_under_zcode', return_value=True):
+                mock.patch.object(pipeline, 'SPAWNER_SCRIPT', _host().SPAWN_SCRIPTS['zcode']):
             self.assertEqual(pipeline.resolve_spawner(root, 'cyc').name, 'dsh-spawn.ps1')
 
     def test_the_per_call_flag_beats_the_line_policy(self):
@@ -137,13 +256,12 @@ class TestSpawnerChoice(unittest.TestCase):
     def test_a_line_without_the_policy_reaches_the_seam(self):
         """No policy on the line: the machine answers exactly as before the policy existed.
 
-        The seam (`SPAWN_PS1`), not a fresh `_default_spawner()`: that is the replacement point
+        The seam (`SPAWNER_SCRIPT`), not a fresh `default_spawner()`: that is the replacement point
         `writer.spawn_session` already honours, and replacing it must survive a line that never
         named a policy.
         """
         root = self.policy_root(None)
-        with mock.patch.object(pipeline, 'SPAWN_PS1',
-                               pipeline.SPAWN_SCRIPTS['zcode']), \
+        with mock.patch.object(pipeline, 'SPAWNER_SCRIPT', _host().SPAWN_SCRIPTS['zcode']), \
                 mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(pipeline.resolve_spawner(root, 'cyc').name, 'zcode-spawn.ps1')
 
@@ -151,11 +269,11 @@ class TestSpawnerChoice(unittest.TestCase):
         """A cycle id nothing holds (a caller's typo) must not decide: the seam answers.
 
         Compared against the seam itself, not a spelled-out script name: whichever host this
-        suite runs under computed `SPAWN_PS1`, and the point is only that the typo changed
+        suite runs under computed `SPAWNER_SCRIPT`, and the point is only that the typo changed
         nothing.
         """
         root = self.policy_root({'spawner': 'dsh'})
-        self.assertEqual(pipeline.resolve_spawner(root, 'no-such-cycle'), pipeline.SPAWN_PS1)
+        self.assertEqual(pipeline.resolve_spawner(root, 'no-such-cycle'), pipeline.SPAWNER_SCRIPT)
 
     def test_off_is_a_word_the_writer_side_clears(self):
         """`cycle policy <cycle> spawner off` removes the key; the read side then reports nothing."""
@@ -167,29 +285,6 @@ class TestSpawnerChoice(unittest.TestCase):
             pipeline.load_state(root2), 'cyc')).get('spawner'))
 
     # ── 那一行 ───────────────────────────────────────────────────────────────
-
-    def sandbox(self):
-        root = Path(tempfile.mkdtemp(prefix='conduct-zcode-'))
-        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
-        (root / 'sandbox' / '.zcode' / 'v2').mkdir(parents=True)
-        db = root / 'sandbox' / '.zcode' / 'v2' / 'tasks-index.sqlite'
-        con = sqlite3.connect(str(db))
-        con.execute(AUTOMATIONS_DDL)
-        con.execute(TASKS_DDL)
-        con.commit()
-        con.close()
-        ws = root / 'ws'
-        (ws / '.pf').mkdir(parents=True)
-        prompt = root / 'prompt.txt'
-        prompt.write_text('# /pf-conduct drill\n', encoding='utf-8')
-        env = {**os.environ, 'ZCODE_DATA_BASE_DIR': str(root / 'sandbox'),
-               'DSH_CONDUCT_SPAWN_AT': ''}
-        return db, ws, prompt, env
-
-    def run_dispatcher(self, args, env):
-        return subprocess.run([sys.executable, '-X', 'utf8', str(DISPATCHER), *map(str, args)],
-                              capture_output=True, text=True, encoding='utf-8', errors='replace',
-                              env=env)
 
     def dispatcher(self):
         """The dispatcher, imported -- for the constants a test should *follow*, not pin.
@@ -203,8 +298,8 @@ class TestSpawnerChoice(unittest.TestCase):
         return module
 
     def test_it_writes_one_row_that_means_one_session(self):
-        db, ws, prompt, env = self.sandbox()
-        proc = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        db, ws, prompt, env = zcode_sandbox(self)
+        proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         automation_id = proc.stdout.strip().splitlines()[0]
         self.assertTrue(automation_id.startswith('automation-'), proc.stdout)
@@ -239,9 +334,9 @@ class TestSpawnerChoice(unittest.TestCase):
 
     def test_the_model_can_be_pinned(self):
         """Naming the model is how a caller decides whose quota a background node spends."""
-        db, ws, prompt, env = self.sandbox()
-        proc = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
-                                    '--model', 'deepseek/deepseek-flash$max', '--no-verify'], env)
+        db, ws, prompt, env = zcode_sandbox(self)
+        proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
+                               '--model', 'deepseek/deepseek-flash$max', '--no-verify'], env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         con = sqlite3.connect(str(db))
         stored = con.execute('select model_selection from automations').fetchone()[0]
@@ -252,9 +347,9 @@ class TestSpawnerChoice(unittest.TestCase):
 
     def test_following_the_workspace_pick_is_still_available(self):
         """`workspace` is the one encoding that means "follow whatever model this workspace uses"."""
-        db, ws, prompt, env = self.sandbox()
-        proc = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
-                                    '--model', 'workspace', '--no-verify'], env)
+        db, ws, prompt, env = zcode_sandbox(self)
+        proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
+                               '--model', 'workspace', '--no-verify'], env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         con = sqlite3.connect(str(db))
         stored = con.execute('select model_selection from automations').fetchone()[0]
@@ -263,26 +358,26 @@ class TestSpawnerChoice(unittest.TestCase):
 
     def test_an_unreadable_model_is_refused(self):
         """The desktop refuses a column it cannot parse, three steps later and far from here."""
-        db, ws, prompt, env = self.sandbox()
+        db, ws, prompt, env = zcode_sandbox(self)
         for bad in ('deepseek', 'deepseek/', '/flash', '{"providerId":"x"}',
                     '{"providerId":"a","modelId":"b","extra":1}'):
-            proc = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
-                                        '--model', bad, '--no-verify'], env)
+            proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
+                                   '--model', bad, '--no-verify'], env)
             self.assertNotEqual(proc.returncode, 0, f'{bad!r} should have been refused')
             self.assertIn('--model', proc.stderr)
 
     def test_the_permission_mode_can_be_turned_down(self):
-        db, ws, prompt, env = self.sandbox()
-        proc = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
-                                    '--mode', 'plan', '--no-verify'], env)
+        db, ws, prompt, env = zcode_sandbox(self)
+        proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
+                               '--mode', 'plan', '--no-verify'], env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         con = sqlite3.connect(str(db))
         self.assertEqual(con.execute('select mode from automations').fetchone()[0], 'plan')
         con.close()
 
     def test_a_prompt_that_is_not_there_is_refused(self):
-        db, ws, prompt, env = self.sandbox()
-        proc = self.run_dispatcher(['--prompt-file', prompt.parent / 'nope.txt',
+        db, ws, prompt, env = zcode_sandbox(self)
+        proc = run_dispatcher(['--prompt-file', prompt.parent / 'nope.txt',
                                     '--workspace', ws, '--no-verify'], env)
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn('prompt file not found', proc.stderr)
@@ -292,16 +387,16 @@ class TestSpawnerChoice(unittest.TestCase):
 
     def test_a_time_too_far_past_is_refused(self):
         """The desktop drops a row more than five minutes overdue as a misfire, so refuse it here."""
-        db, ws, prompt, env = self.sandbox()
-        proc = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
-                                    '--at', '2020-01-01T00:00', '--no-verify'], env)
+        db, ws, prompt, env = zcode_sandbox(self)
+        proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
+                               '--at', '2020-01-01T00:00', '--no-verify'], env)
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn('misfire', proc.stderr)
 
     def test_a_time_in_the_future_is_not_waited_for(self):
-        db, ws, prompt, env = self.sandbox()
+        db, ws, prompt, env = zcode_sandbox(self)
         started = time.monotonic()
-        proc = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--at', '+30m'], env)
+        proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--at', '+30m'], env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertLess(time.monotonic() - started, 10,
                         'a row scheduled for later must not be waited on now')
@@ -321,18 +416,19 @@ class TestSpawnerChoice(unittest.TestCase):
         """
         if not shutil.which('pwsh'):
             self.skipTest('pwsh is not on PATH')
-        db, ws, prompt, env = self.sandbox()
+        db, ws, prompt, env = zcode_sandbox(self)
         env = {**env, 'DSH_CONDUCT_SPAWN_MODE': 'yolo',
                'DSH_CONDUCT_SPAWN_MODEL': 'deepseek/deepseek-flash$max'}
+        marker = marker_path(ws, 'cyc-case')
         proc = subprocess.run(['pwsh', '-NoProfile', '-File', str(SPAWNER),
                                '-CycleId', 'cyc-case', '-PromptFile', str(prompt),
-                               '-WorkspacePath', str(ws), '-NoVerify'],
+                               '-WorkspacePath', str(ws), '-MarkerPath', str(marker), '-NoVerify'],
                               capture_output=True, text=True, encoding='utf-8', errors='replace',
                               env=env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertTrue(proc.stdout.strip().splitlines()[-1].startswith('spawned: automation '),
                         proc.stdout)
-        self.assertFalse((ws / '.pf' / 'meta' / 'CONDUCT-CALLBACK-FAILED-cyc-case.json').exists())
+        self.assertFalse(marker.exists(), '派发成功之后旧的降级标记还躺在盘上')
         con = sqlite3.connect(str(db))
         mode, selection = con.execute('select mode, model_selection from automations').fetchone()
         con.close()
@@ -344,54 +440,52 @@ class TestSpawnerChoice(unittest.TestCase):
     def test_the_spawner_records_a_failure_the_way_the_pipeline_reads_it(self):
         if not shutil.which('pwsh'):
             self.skipTest('pwsh is not on PATH')
-        db, ws, prompt, env = self.sandbox()
+        db, ws, prompt, env = zcode_sandbox(self)
+        marker = marker_path(ws, 'cyc-case')
         proc = subprocess.run(['pwsh', '-NoProfile', '-File', str(SPAWNER),
                                '-CycleId', 'cyc-case', '-PromptFile', str(prompt.parent / 'nope.txt'),
-                               '-WorkspacePath', str(ws), '-NoVerify'],
+                               '-WorkspacePath', str(ws), '-MarkerPath', str(marker), '-NoVerify'],
                               capture_output=True, text=True, encoding='utf-8', errors='replace',
                               env=env)
         self.assertNotEqual(proc.returncode, 0)
-        marker = ws / '.pf' / 'meta' / 'CONDUCT-CALLBACK-FAILED-cyc-case.json'
         self.assertTrue(marker.is_file(), 'a failed spawn must leave the marker the pipeline reads')
         record = json.loads(marker.read_text(encoding='utf-8'))
         self.assertEqual(record['cycle_id'], 'cyc-case')
         self.assertEqual(record['phase'], 'read-prompt')
+        # 宿主自己的事实进 `extra` 一个槽：dsh 放 api_base，这里放它排队用的那个库。
+        self.assertEqual(record['extra'], {'db': str(db)})
         self.assertEqual(set(record), {'cycle_id', 'phase', 'attempts', 'reason', 'workspace',
-                                       'db', 'detected_at', 'note'})
+                                       'extra', 'detected_at', 'note'})
+
+    def test_a_host_with_no_python_still_leaves_the_marker(self):
+        """ZCode 那一半要 python 才能排队；找不到的那一拍也照契约②留下降级标记再退出。
+
+        标记由外壳自己写（不经过 python），所以这一拍盘上那份记录是写得出来的 —— 恢复 HEAD
+        那一版就有的保证。
+        """
+        if not shutil.which('pwsh'):
+            self.skipTest('pwsh is not on PATH')
+        _, ws, prompt, env = zcode_sandbox(self)
+        no_path = {key: value for key, value in env.items() if key.upper() != 'PATH'}
+        marker = marker_path(ws, 'cyc-case')
+        proc = subprocess.run(['pwsh', '-NoProfile', '-File', str(SPAWNER),
+                               '-CycleId', 'cyc-case', '-PromptFile', str(prompt),
+                               '-WorkspacePath', str(ws), '-MarkerPath', str(marker), '-NoVerify'],
+                              capture_output=True, text=True, encoding='utf-8', errors='replace',
+                              env=no_path)
+        self.assertNotEqual(proc.returncode, 0, '找不到 python 却当成功退出了')
+        self.assertTrue(marker.is_file(), '找不到 python 那一拍没留下降级标记')
+        self.assertEqual('find-python', json.loads(marker.read_text(encoding='utf-8'))['phase'])
 
 
 class TestQueueDedup(unittest.TestCase):
     """同一节点排第二行是两个会话上同一节点的路：在途的行、还热的会话都要挡。"""
 
-    def sandbox(self, node_id='dddddddd-4444-4444-8444-dddddddddddd'):
-        root = Path(tempfile.mkdtemp(prefix='conduct-zcode-dedup-'))
-        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
-        (root / 'sandbox' / '.zcode' / 'v2').mkdir(parents=True)
-        db = root / 'sandbox' / '.zcode' / 'v2' / 'tasks-index.sqlite'
-        con = sqlite3.connect(str(db))
-        con.execute(AUTOMATIONS_DDL)
-        con.execute(TASKS_DDL)
-        con.commit()
-        con.close()
-        ws = root / 'ws'
-        (ws / '.pf').mkdir(parents=True)
-        prompt = root / 'launch' / node_id / 'prompt.txt'
-        prompt.parent.mkdir(parents=True)
-        prompt.write_text('# /pf-conduct drill\n', encoding='utf-8')
-        env = {**os.environ, 'ZCODE_DATA_BASE_DIR': str(root / 'sandbox'),
-               'DSH_CONDUCT_SPAWN_AT': ''}
-        return db, ws, prompt, env
-
-    def run_dispatcher(self, args, env):
-        return subprocess.run([sys.executable, '-X', 'utf8', str(DISPATCHER), *map(str, args)],
-                              capture_output=True, text=True, encoding='utf-8', errors='replace',
-                              env=env)
-
     def test_a_second_row_for_the_same_node_is_refused(self):
-        db, ws, prompt, env = self.sandbox()
-        first = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
+        first = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(first.returncode, 0, first.stderr)
-        second = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        second = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertNotEqual(second.returncode, 0)
         self.assertIn('already queued', second.stderr)
         con = sqlite3.connect(str(db))
@@ -400,37 +494,37 @@ class TestQueueDedup(unittest.TestCase):
         self.assertEqual(count, 1, 'the refused queue must not leave a row behind')
 
     def test_an_explicit_override_queues_anyway(self):
-        db, ws, prompt, env = self.sandbox()
-        first = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
+        first = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(first.returncode, 0, first.stderr)
-        second = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify',
-                                      '--allow-existing'], env)
+        second = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify',
+                                 '--allow-existing'], env)
         self.assertEqual(second.returncode, 0, second.stderr)
 
     def test_a_claimed_row_is_no_longer_pending(self):
         """行被桌面认领、且认领已过新鲜窗口（会话也没写出来）之后，文档规定的抢救重排是合法的。"""
-        db, ws, prompt, env = self.sandbox()
-        first = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
+        first = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(first.returncode, 0, first.stderr)
         con = sqlite3.connect(str(db))
         con.execute('update automations set claimed_at=?, run_count=1, dispatch_status=?',
                     (int(time.time() * 1000) - 11 * 60 * 1000, 'dispatched'))
         con.commit()
         con.close()
-        again = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        again = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(again.returncode, 0, again.stderr)
 
     def test_a_claim_just_made_with_no_session_blocks(self):
         """认领到落库之间的窄缝：行刚被认领、会话还没写出来，第二个 queue 两个旧检查都落空。"""
-        db, ws, prompt, env = self.sandbox()
-        first = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
+        first = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(first.returncode, 0, first.stderr)
         con = sqlite3.connect(str(db))
         con.execute('update automations set claimed_at=?, run_count=1, dispatch_status=?',
                     (int(time.time() * 1000), 'dispatched'))
         con.commit()
         con.close()
-        second = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        second = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertNotEqual(second.returncode, 0)
         self.assertIn('was just claimed', second.stderr)
         con = sqlite3.connect(str(db))
@@ -440,8 +534,8 @@ class TestQueueDedup(unittest.TestCase):
 
     def test_a_fresh_session_blocks_and_an_old_one_does_not(self):
         """验证超时的竞态：会话其实建出来了——十 分钟内的会话挡住重排，再老的算死会话放行。"""
-        db, ws, prompt, env = self.sandbox()
-        first = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
+        first = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(first.returncode, 0, first.stderr)
         automation_id = first.stdout.strip().splitlines()[0]
         now = int(time.time() * 1000)
@@ -454,7 +548,7 @@ class TestQueueDedup(unittest.TestCase):
         con.commit()
         con.close()
 
-        blocked = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        blocked = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertNotEqual(blocked.returncode, 0)
         self.assertIn('already exists', blocked.stderr)
 
@@ -463,7 +557,7 @@ class TestQueueDedup(unittest.TestCase):
                     (now - 11 * 60 * 1000, 'sess_fresh'))
         con.commit()
         con.close()
-        allowed = self.run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        allowed = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(allowed.returncode, 0, allowed.stderr)
 
 
