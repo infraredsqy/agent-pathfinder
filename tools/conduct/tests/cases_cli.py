@@ -20,7 +20,7 @@ from harness import (  # noqa: E402
     run_state_manage,
     _dag_hook as harness_dag_hook,
 )
-from harness_env import _fresh_module  # noqa: E402
+from harness_env import _fresh_module, patched, run_argv  # noqa: E402
 
 __all__ = ['TestCLIEntryPoints', 'TestRobustness', 'TestOneSpawner', 'TestTheSpawnerShell']
 
@@ -56,17 +56,12 @@ class TestCLIEntryPoints(Base):
     """Tests whose subject is the shipped CLI itself: real processes, no shortcuts."""
 
     def cli(self, sb, *args):
-        # PYTHONIOENCODING, or the tool's Chinese output goes out in the console codepage and the
-        # parent loses the whole stream (see harness._child_env).
-        env = dict(os.environ, PYTHONIOENCODING='utf-8')
-        return subprocess.run([sys.executable, str(STATE_MANAGE), *args],
-                              cwd=str(sb.root), capture_output=True, text=True, encoding='utf-8',
-                              errors='replace', env=env)
+        """The shipped `state-manage.py`, as a real process against the sandbox."""
+        return run_argv([STATE_MANAGE, *args], cwd=sb.root, check=False)
 
     def pipeline_cli(self, sb, *args):
         """`conduct_pipeline.py` as a real process: the module's own entry, driven the shipped way."""
-        return subprocess.run([sys.executable, str(PIPELINE_PATH), *[str(a) for a in args]],
-                              capture_output=True, text=True, encoding='utf-8', errors='replace')
+        return run_argv([PIPELINE_PATH, *args], check=False)
 
     def test_bare_next_writes_and_plan_does_not(self):
         """`--plan` is read-only over the same decision; a bare `next` is what carries it out."""
@@ -197,8 +192,7 @@ class TestCLIEntryPoints(Base):
         self.assertIn('signal: completed', after.stdout)
 
     def test_next_help_documents_the_surface(self):
-        proc = subprocess.run([sys.executable, str(STATE_MANAGE), 'next', '--help'],
-                              capture_output=True, text=True, encoding='utf-8', errors='replace')
+        proc = run_argv([STATE_MANAGE, 'next', '--help'], check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         for flag in ('--plan', '--after', '--continue', '--stop', '--node', '--spawn'):
             self.assertIn(flag, proc.stdout)
@@ -212,8 +206,7 @@ class TestCLIEntryPoints(Base):
 
     def test_next_short_help_carries_the_contract_too(self):
         """`-h` 与 `--help` 是同一条动作：短的那条也要带上合同正文。"""
-        proc = subprocess.run([sys.executable, str(STATE_MANAGE), 'next', '-h'],
-                              capture_output=True, text=True, encoding='utf-8', errors='replace')
+        proc = run_argv([STATE_MANAGE, 'next', '-h'], check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn('action 全集', proc.stdout)
 
@@ -226,9 +219,7 @@ class TestCLIEntryPoints(Base):
         sb = self.make()
         sb.add_node(NODE, '界面设计', mode='auto')
         sb.start_cycle()
-        proc = subprocess.run([sys.executable, str(PIPELINE_PATH), 'plan', '--project', str(sb.root),
-                               '--json'], capture_output=True, text=True, encoding='utf-8',
-                              errors='replace')
+        proc = run_argv([PIPELINE_PATH, 'plan', '--project', sb.root, '--json'], check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         action = json.loads(proc.stdout)
         self.assertEqual(action['action'], 'dispatch')
@@ -237,8 +228,7 @@ class TestCLIEntryPoints(Base):
     def test_contract_subcommand_prints_the_action_vocabulary(self):
         """`conduct_pipeline.py contract` is the reference a downstream agent reads to learn the action
         names it must handle."""
-        proc = subprocess.run([sys.executable, str(PIPELINE_PATH), 'contract'],
-                              capture_output=True, text=True, encoding='utf-8')
+        proc = run_argv([PIPELINE_PATH, 'contract'], check=False)
         self.assertEqual(proc.returncode, 0,
                          f'conduct_pipeline.py contract failed:\n{proc.stdout}\n{proc.stderr}')
         for name in ('dispatch', 'open_node', 'maintenance_due', 'stop_pipeline', 'wait', 'no_cycle'):
@@ -344,7 +334,6 @@ class TestRobustness(Base):
 
         # Drive the close with the sandbox's own command runner, so the commands under test are the
         # real ones but no process is started per command.
-        real_run = pipeline._run
         failure = {'on': None, 'n': 0}
 
         def exploding(cmd, cwd):
@@ -353,14 +342,10 @@ class TestRobustness(Base):
                 raise RuntimeError('command failed: boom')
             return sb._run_tool_command(cmd, cwd)
 
-        with harness_dag_hook(sb.root):
-            pipeline._run = exploding
-            try:
-                failure['on'], failure['n'] = 2, 0     # `cycle close` landed; the DAG mark blew up
-                with self.assertRaises(RuntimeError) as caught:
-                    pipeline.apply(sb.root, 'cyc', self_verified=True)
-            finally:
-                pipeline._run = real_run
+        with harness_dag_hook(sb.root), patched(pipeline, '_run', exploding):
+            failure['on'], failure['n'] = 2, 0     # `cycle close` landed; the DAG mark blew up
+            with self.assertRaises(RuntimeError) as caught:
+                pipeline.apply(sb.root, 'cyc', self_verified=True)
         self.assertIn('command failed', str(caught.exception))
         self.assertIn('already ran', str(caught.exception))
         self.assertIn('half-applied', str(caught.exception))

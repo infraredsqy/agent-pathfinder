@@ -62,6 +62,17 @@ def _loaded(path: Path, name: str):
     return _loader().load_by_path(name, path)
 
 
+def _start(workspace: Path, cycle_id: str, prompt_file: Path, dry_run: bool) -> str:
+    """Start the session: the pipeline's own door, and nothing else.
+
+    A name rather than an inline call so that a caller can stand in front of it without patching
+    `subprocess` process-wide: what a chain hands on is the workspace, the cycle and the prompt, and
+    which script the door ends up running is answered below it, by the module that owns that argv.
+    """
+    pipeline = _loaded(CONDUCT / 'pipeline' / 'conduct_pipeline.py', 'conduct_pipeline')
+    return pipeline.spawn_session(workspace, cycle_id, str(prompt_file), dry_run=dry_run)
+
+
 def main(argv=None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, 'reconfigure'):
@@ -83,13 +94,11 @@ def main(argv=None) -> int:
     prompt_file = Path(args.prompt_file).resolve()
     workspace = Path(args.workspace).resolve()
     cycle_id = args.cycle_id or prompt_file.stem
-    pipeline = _loaded(CONDUCT / 'pipeline' / 'conduct_pipeline.py', 'conduct_pipeline')
     try:
         # 管线那一道门：开会的口只此一个（`writer.spawn_session`）。spawner 由它的末档回答
         # （入口算好的宿主自认），会话便条与标记的写、清都在那一道门里；claim 认领的只是落在
         # launch 目录里的 prompt，这条链拿不到它（见模块说明）。
-        output = pipeline.spawn_session(workspace, cycle_id, str(prompt_file),
-                                        dry_run=args.dry_run)
+        output = _start(workspace, cycle_id, prompt_file, args.dry_run)
     except (OSError, RuntimeError, ValueError) as error:
         marker = _loaded(HERE / 'marker.py', 'pf_spawn_marker').marker_path(workspace, cycle_id)
         print(f'没开起来：{error}\n'

@@ -21,7 +21,9 @@ import traceback
 import types
 from pathlib import Path
 
-from cases_base import NODE, NODE2, NODE3, Base, added, pipeline, skill_of
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from cases_base import NODE, NODE2, NODE3, Base, added, pipeline, skill_of  # noqa: E402
 from harness import (Closer, DAG_MANAGE, Driver, STATE_MANAGE, WorkerSession, _dag_hook,
                      finish_node, run_dag, stop_after)
 from harness_env import CONDUCT_DIR, _fresh_module

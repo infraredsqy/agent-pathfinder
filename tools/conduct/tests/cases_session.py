@@ -30,7 +30,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from cases_base import NODE, NODE2, Base, added
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from cases_base import NODE, NODE2, Base, added  # noqa: E402
 from harness import CONDUCT_DIR, TOOLS_DIR, run_dag, run_state_manage
 from harness_env import _fresh_module
 
@@ -127,14 +129,12 @@ class TestTheRunNoteAtDispatch(Base):
 
     def stub(self, sb, line='spawned: session session-run-1 (node session (prompt=x))'):
         """A spawner that prints the contract line and opens nothing."""
-        path = sb.root / 'stub-spawner.ps1'
-        path.write_text(f'Write-Output "{line}"\n', encoding='utf-8')
-        return path
+        return sb.fake_spawner('stub-spawner.ps1', line=line)
 
     def test_a_real_dispatch_notes_the_session_it_opened(self):
         sb, _action = self.pinned()
 
-        proc = sb._tool('dispatch', 'cyc', '--spawner', str(self.stub(sb)), cli=True)
+        proc = sb.dispatch(spawner=self.stub(sb), dry_run=False)
 
         self.assertEqual(0, proc.returncode, proc.stderr)
         note = note_of(sb)
@@ -150,19 +150,18 @@ class TestTheRunNoteAtDispatch(Base):
             run_dag(sb.root, 'add', '另一格')           # a note for a DIFFERENT node
         self.assertTrue((sb.root / '.pf' / 'meta' / 'sessions').is_dir())
 
-        sb._tool('dispatch', 'cyc', '--spawner', str(self.stub(sb)), cli=True)
+        sb.dispatch(spawner=self.stub(sb), dry_run=False)
 
         note = note_of(sb)
         self.assertEqual([], ids_of(note, 'discussion'))
         self.assertEqual(['session-run-1'], ids_of(note, 'run'))
 
     def test_a_dry_run_notes_nothing(self):
-        """The drill stays a drill: `DSH_CONDUCT_SPAWN_DRY_RUN=1` opens nothing, so there is no id
-        to note -- and the launch dir stays where a human can retry it."""
+        """The drill stays a drill: the harness's switch opens nothing, so there is no id to note --
+        and the launch dir stays where a human can retry it."""
         sb, _action = self.pinned()
 
-        with mock.patch.dict(os.environ, {'DSH_CONDUCT_SPAWN_DRY_RUN': '1'}):
-            proc = sb._tool('dispatch', 'cyc', cli=True)
+        proc = sb.dispatch(cli=True)
 
         self.assertEqual(0, proc.returncode, proc.stderr)
         self.assertFalse((sb.root / '.pf' / 'meta' / 'sessions').exists(),
