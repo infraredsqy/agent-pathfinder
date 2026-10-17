@@ -301,6 +301,20 @@ class Sandbox:
             args += ['--' + key.replace('_', '-'), str(value)]
         return self._tool(*args, check=check)
 
+    def instruct_rm(self, ins_id, check=True, cli=None, **extra):
+        """`instruction rm`: the owner takes one entry off the account, text and all."""
+        args = ['instruction', 'rm', ins_id]
+        for key, value in extra.items():
+            args += ['--' + key.replace('_', '-'), str(value)]
+        return self._tool(*args, check=check, cli=cli)
+
+    def instruct_revive(self, ins_id, check=True, cli=None, **extra):
+        """`instruction revive`: the owner puts an archived entry back in force."""
+        args = ['instruction', 'revive', ins_id]
+        for key, value in extra.items():
+            args += ['--' + key.replace('_', '-'), str(value)]
+        return self._tool(*args, check=check, cli=cli)
+
     # ── a worker's report ────────────────────────────────────────────────────
     def signal_path(self, cycle_id, node_id):
         return self.root / '.pf' / 'signals' / cycle_id / f'{node_id}.json'

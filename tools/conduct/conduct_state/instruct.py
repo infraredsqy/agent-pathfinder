@@ -2,7 +2,7 @@
 
 Owns the account's vocabulary and read/write helpers, the position rules that decide which
 entries a reader sees from where the pipeline stands, and the `instruction` subcommands
-(add / list / resolve) with their CLI dispatcher.
+(add / list / resolve / rm / revive) with their CLI dispatcher.
 """
 import json
 import sys
@@ -13,9 +13,11 @@ from .pipeline_loader import _load_pipeline
 
 
 # ── Standing instructions ────────────────────────────────────────────────────
-# One append-only account, one writer (this CLI). Any session may ADD one; the visibility of what it
-# added is decided by the entry's own `scope`, and the session that closes a node may RESOLVE one.
-# Three scopes; the defaults lean the "noisy" way on purpose (see the module notes below).
+# One account, one writer (this CLI). Any session may ADD one; the visibility of what it added is
+# decided by the entry's own `scope`, and the session that closes a node may RESOLVE one. The two
+# moves that take an entry OFF the account -- archiving it, and taking it away text and all -- are
+# the owner's alone. Three scopes; the defaults lean the "noisy" way on purpose (see the module notes
+# below).
 
 #: The vocabulary `scope` is written in. `entry_scope()` over in conduct_pipeline.py is the one reader
 #: of an entry's scope, and this module loads it lazily (`_scope_rules`): two copies of that
@@ -28,8 +30,15 @@ VALID_TARGETS = ('stage', 'boundary')
 #: it can be seen from is derived on every read from its scope and the bound node/cycle, so a scoped
 #: entry goes out of sight on its own (`_visible_from_here`). A record an older tool left carrying
 #: another word in `state` is not one of these; it is read as archived, and nothing writes it back
-#: (`_retired`).
+#: (`_retired`). Taking an entry off the account is NOT a third state: the entry is not in the list
+#: at all, and the trace it leaves carries no `state` (`cmd_instruction_rm`).
 VALID_INSTRUCTION_STATES = ('live', 'withdrawn')
+
+#: Where the account keeps the traces a removal leaves: one `id` and the moment, no text. They are
+#: what holds a removal against a pull from a machine that still has the entry (`tools/conduct/
+#: ledger-merge.py`) and what keeps the id from being handed out again (`_next_instruction_id`). No
+#: view of the account shows them -- archiving is for the reader, this is bookkeeping.
+REMOVED_KEY = 'removed'
 
 _SCOPE_RULES = None
 
@@ -91,6 +100,57 @@ def _retired(entry: dict) -> bool:
 
 def _is_live(entry: dict) -> bool:
     return entry.get('state', 'live') == 'live'
+
+
+def _removed(data: dict) -> list:
+    """The removal traces on this account: one pair of `id` + moment per entry taken off it.
+
+    No key at all reads as none, and an account that never had a removal is written back with the
+    key absent -- a file gains it the first time something is actually removed, and not before.
+    """
+    traces = data.get(REMOVED_KEY)
+    return traces if isinstance(traces, list) else []
+
+
+def _locate(data: dict, ins_id: str) -> tuple:
+    """`(the entry, its removal trace)` for one id: at most one of the two is not None.
+
+    Both None means the account never had this id -- which is a different refusal from an id whose
+    entry was removed, and the difference is worth saying out loud (`_unknown_id_error`).
+    """
+    for item in data['instructions']:
+        if item.get('id') == ins_id:
+            return item, None
+    for trace in _removed(data):
+        if isinstance(trace, dict) and trace.get('id') == ins_id:
+            return None, trace
+    return None, None
+
+
+def _unknown_id_error(ins_id: str, trace: dict | None, cannot: str) -> None:
+    """The one refusal for an id that is not on the account, in its two shapes."""
+    if trace is None:
+        print(f'Error: no instruction {ins_id!r}', file=sys.stderr)
+    else:
+        print(f'Error: instruction {ins_id!r} was removed at {trace.get("at")}; {cannot}',
+              file=sys.stderr)
+    sys.exit(1)
+
+
+def _next_instruction_id(data: dict) -> str:
+    """The next id: one past the highest one ever handed out, removal traces included.
+
+    Counting the list (`len(items) + 1`) was enough while nothing ever left it. A removal makes the
+    count go BACK, and the id would be minted a second time -- on a ledger two machines pull from
+    each other, the id is the only thing that tells "that entry came back" from "another entry with
+    the same number". The traces are what the high-water mark survives on.
+    """
+    highest = 0
+    for record in list(data.get('instructions') or []) + _removed(data):
+        value = record.get('id') if isinstance(record, dict) else None
+        if isinstance(value, str) and value.startswith('i-') and value[2:].isdigit():
+            highest = max(highest, int(value[2:]))
+    return f'i-{highest + 1:04d}'
 
 
 # ── where the pipeline stands, and what is visible from there ──
@@ -392,7 +452,7 @@ def cmd_instruction_add(text: str, scope: str, target: str, said_by: str,
         sys.exit(1)
 
     # 读-追加-整份写回必须在锁里：两个会话并发 add 时，后写者会整份覆盖、先写的条目无声消失
-    # （顺带各得一个同号 id）。id 按 `len(items)+1` 取，也只有在锁里才是无歧义的。
+    # （顺带各得一个同号 id）。id 按「已经发到过的最大号 + 1」取，也只有在锁里才是无歧义的。
     with _ledger_lock():
         state = _read_state()
         cycle_id, node_id = _new_entry_binding(scope, cycle, node, state)
@@ -400,7 +460,7 @@ def cmd_instruction_add(text: str, scope: str, target: str, said_by: str,
         data = _read_instructions()
         items = data['instructions']
         entry = {
-            'id': f'i-{len(items) + 1:04d}',
+            'id': _next_instruction_id(data),
             'text': text,
             'scope': scope,
             'target': target,
@@ -410,7 +470,6 @@ def cmd_instruction_add(text: str, scope: str, target: str, said_by: str,
             'said_by': said_by,
             'at': _now(),
             'resolved_at': None,
-            'resolved_by': None,
             'note': note,
         }
         if stop_after_nodes is not None:
@@ -504,7 +563,7 @@ def cmd_instruction_list(as_json: bool, live_only: bool, project: str | None = N
 
 def cmd_instruction_resolve(ins_id: str, state: str, note: str | None,
                          project: str | None = None) -> None:
-    """Take one instruction off the account: the owner's one lever, `withdrawn`.
+    """Archive one instruction: the owner putting an entry out of force without losing its sentence.
 
     Visibility is not this command's business, and neither is the ending of a `cycle` / `node`
     entry's life: `scope` decides where an entry can be seen from, and that is derived on every read
@@ -512,6 +571,9 @@ def cmd_instruction_resolve(ins_id: str, state: str, note: str | None,
     all -- it goes out of sight on its own. The account has two states, and the only move here is
     archiving a live entry; a record an older tool left with another word in `state` is read as
     archived already (`_retired`) and nothing writes those words back.
+
+    The archive is the state and the moment, and nothing else: only the owner archives an entry, so
+    there is no second hand for a field to name (`cmd_instruction_revive` clears the same two).
     """
     allowed = ('withdrawn',)
     if state not in allowed:
@@ -532,11 +594,67 @@ def cmd_instruction_resolve(ins_id: str, state: str, note: str | None,
 
         hit['state'] = state
         hit['resolved_at'] = _now()
-        hit['resolved_by'] = 'boundary'
         if note:
             hit['note'] = note
         _write_instructions(data, project)
     print(f'INSTRUCTION {ins_id} → {state}')
+
+
+def cmd_instruction_rm(ins_id: str, project: str | None = None) -> None:
+    """Take one instruction off the account, text and all: the owner's other hand.
+
+    `resolve` archives -- the sentence stays on the account and stops being read. This one takes the
+    entry away, because a sentence that is wrong, or that should never have been recorded, is not
+    something an archive makes right: it would still be read out by `--all` and by anyone looking at
+    the record. What is left is the id and the moment (`REMOVED_KEY`), which is what
+    `tools/conduct/ledger-merge.py` holds the removal on -- a pull from a machine that still has the
+    entry does not bring it back -- and what keeps the id from being minted again.
+
+    The sentence is printed first: the one reading that proves the caller and the tool meant the same
+    entry, since after the write there is nothing on the account to compare against.
+    """
+    with _ledger_lock(project):
+        data = _read_instructions(project)
+        hit, trace = _locate(data, ins_id)
+        if hit is None:
+            _unknown_id_error(ins_id, trace, 'its text is already off the account')
+        print(f'INSTRUCTION {hit["id"]}: [{_scope_rules().entry_scope(hit)}/{hit.get("target")}] '
+              f'{hit.get("text", "")}')
+        data['instructions'].remove(hit)
+        data.setdefault(REMOVED_KEY, []).append({'id': ins_id, 'at': _now()})
+        _write_instructions(data, project)
+    print(f'REMOVED {ins_id}')
+
+
+def cmd_instruction_revive(ins_id: str, project: str | None = None) -> None:
+    """Put an archived entry back in force: the owner undoing their own archive.
+
+    Only the state moves: `live`, and the moment the archive wrote is cleared back to the shape an
+    added entry has, because an entry in force has no moment for a withdrawal. Those two fields are
+    one act of one code path, so the merge driver resolves them as a unit (see the NOTES in
+    `tools/conduct/ledger-merge.py`): a revive on one machine is not torn apart by a pull on another.
+
+    A field an older tool left on the record (it used to note which hand archived the entry) is
+    ordinary data now, and reviving does not rewrite it: this command writes the state and its one
+    stamp, and nothing else.
+
+    An entry that is already live is refused, and so is an id the account does not have. Neither is
+    putting something back, and a quiet success would be a lie about what is in force.
+    """
+    with _ledger_lock(project):
+        data = _read_instructions(project)
+        hit, trace = _locate(data, ins_id)
+        if hit is None:
+            _unknown_id_error(ins_id, trace, 'its text went with it, and putting an entry back is '
+                                             'not how a removal is undone')
+        if _is_live(hit):
+            print(f'Error: instruction {ins_id!r} is already live: there is nothing to put back',
+                  file=sys.stderr)
+            sys.exit(1)
+        hit['state'] = 'live'
+        hit['resolved_at'] = None
+        _write_instructions(data, project)
+    print(f'INSTRUCTION {ins_id} → live')
 
 
 def _dispatch_instruction(args) -> None:
@@ -553,6 +671,10 @@ def _dispatch_instruction(args) -> None:
                              getattr(args, 'node', None))
     elif sub == 'resolve':
         cmd_instruction_resolve(args.ins_id, args.state, args.note, project)
+    elif sub == 'rm':
+        cmd_instruction_rm(args.ins_id, project)
+    elif sub == 'revive':
+        cmd_instruction_revive(args.ins_id, project)
     else:
-        print('Usage: pf instruction {add|list|resolve} ...', file=sys.stderr)
+        print('Usage: pf instruction {add|list|resolve|rm|revive} ...', file=sys.stderr)
         sys.exit(1)

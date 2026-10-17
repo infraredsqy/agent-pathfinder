@@ -68,7 +68,8 @@ Usage:
         retry <cycle> <node> [--drop]             Overwrite a node's signal as pending (retries);
                                                   --drop leaves no ticket at all
 
-    state-manage.py instruction add|list|resolve  Standing user instructions (scope x target)
+    state-manage.py instruction add|list|resolve|rm|revive
+                                                  Standing user instructions (scope x target)
                                                   `list` defaults to the constraints view: the
                                                   global ones still in force, as plain sentences
                                                   `list --node <id>`: 同项目并行两条 active cycle
@@ -241,7 +242,7 @@ def main() -> None:
                             'dispatched')
 
     p_ins = sub.add_parser(
-        'instruction', help='Standing user instructions (append-only account)',
+        'instruction', help='Standing user instructions (one account, two states)',
         description='Three scopes. Whether an entry can be read is decided by WHERE it was recorded, '
                     'not by anyone remembering to resolve it: global = readable anywhere, by every '
                     'session and in every cycle; cycle = readable while the cycle it was recorded in '
@@ -253,8 +254,10 @@ def main() -> None:
                     'out of sight. Nothing is injected into a dispatch prompt: `list` is how a '
                     'session reads the account, and running it among its first commands is what '
                     'makes an instruction reach it. The account has two states -- in force and '
-                    'archived -- and `resolve` is the owner archiving one; an entry whose scope '
-                    'has run out goes out of sight on its own, with nothing to write.')
+                    'archived -- and only the owner moves an entry off it: `resolve` archives one '
+                    '(the sentence stays on the account and stops being read), `rm` takes one away '
+                    'text and all, and `revive` puts an archived one back. An entry whose scope has '
+                    'run out goes out of sight on its own, with nothing to write.')
     ins_sub = p_ins.add_subparsers(dest='instruction_command')
     p_ia = ins_sub.add_parser('add', help='Append one instruction, verbatim')
     p_ia.add_argument('--text', required=True, help='The sentence, EXACTLY as the user said it')
@@ -308,15 +311,36 @@ def main() -> None:
                       help='The DAG node you are working on: with two active cycles side by side it '
                            'is how this read knows which line you stand on (`cycle` entries go to '
                            'their own line only). Default: not asked')
-    p_ir = ins_sub.add_parser('resolve', help='Archive one instruction (the owner takes it off)')
+    p_ir = ins_sub.add_parser(
+        'resolve', help='Archive one instruction (only the owner puts it out of force)')
     p_ir.add_argument('ins_id')
     p_ir.add_argument('--state', required=True, choices=['withdrawn'],
                       help='withdrawn = the entry is archived: it stays on the account and stops '
-                           'being read. It is the only move, and the only one the owner makes -- a '
-                           'live entry is not marked with an outcome, and a cycle/node entry goes '
+                           'being read, and the archive writes the state and the moment, nothing '
+                           'else. It is the only move `resolve` has, and only the owner makes it -- '
+                           'a live entry is not marked with an outcome, and a cycle/node entry goes '
                            'out of sight on its own when its node is completed or its cycle ends')
     p_ir.add_argument('--note', default=None)
     p_ir.add_argument('--project', default=None, help='Project root (default: current directory)')
+    p_irm = ins_sub.add_parser(
+        'rm', help='Take one instruction off the account, text and all (only the owner removes one)',
+        description='The owner takes an entry away: the sentence is printed first, then the entry and '
+                    'its text leave the account. What stays is the id and the moment -- the trace the '
+                    'ledger merge holds the removal on, so a pull from a machine that still has the '
+                    'entry does not bring it back, and so the id is never handed out again. No view '
+                    'of the account shows a trace, and this is not a third state. `resolve` is the '
+                    'other move: an archived entry keeps its sentence and stops being read.')
+    p_irm.add_argument('ins_id')
+    p_irm.add_argument('--project', default=None, help='Project root (default: current directory)')
+    p_irv = ins_sub.add_parser(
+        'revive', help='Put an archived instruction back in force (only the owner puts one back)',
+        description='The owner undoes an archive: the entry goes back to `live`, and the moment the '
+                    'archive wrote is cleared back to the shape an added entry has, so the merged '
+                    'record stays one act. An entry that is already live is refused, and so is an id '
+                    'the account does not have: a removed entry is off the account for good, and '
+                    'putting one back is not how a removal is undone.')
+    p_irv.add_argument('ins_id')
+    p_irv.add_argument('--project', default=None, help='Project root (default: current directory)')
 
     p_cfg = sub.add_parser(
         'config',

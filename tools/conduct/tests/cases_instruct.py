@@ -1,8 +1,8 @@
-"""The standing-instruction account: one append-only file, three scopes, two targets.
+"""The standing-instruction account: one account file, three scopes, two targets, two states.
 
 Nothing is injected into a dispatch prompt any more, so `instruction list` IS the instruction channel
 -- a session runs it among its first commands and reads where it stands. Everything here is about
-that account: what it keeps verbatim, which entries a reader can see from where, and what a human
+that account: what it keeps verbatim, which entries a reader can see from where, and what the owner
 can take back.
 """
 
@@ -17,7 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cases_base import Base, NODE, NODE2  # noqa: E402
 from harness import run_state_manage  # noqa: E402
 
-__all__ = ['TestInstructionScope', 'TestInstructionTargets', 'TestInstructionAuthority']
+__all__ = ['TestInstructionScope', 'TestInstructionTargets', 'TestInstructionAuthority',
+           'TestInstructionRemoval', 'TestInstructionRevival']
 
 
 class TestInstructionScope(Base):
@@ -201,6 +202,19 @@ class TestInstructionAuthority(Base):
         self.assertEqual(rows[0]['state'], 'withdrawn')
         self.assertEqual(rows[0]['text'], '全局的约束')
 
+    def test_the_archive_is_the_state_and_the_moment_and_no_hand(self):
+        """Only the owner archives an entry, so the record names no hand for it: the archive writes
+        the state and the moment, and a recorded entry never carries the field at all."""
+        sb, ins_id = self.seeded()
+        self.assertNotIn('resolved_by', sb.instruct_list()[0])
+
+        sb.instruct_resolve(ins_id, 'withdrawn')
+
+        entry = sb.instruct_list()[0]
+        self.assertEqual('withdrawn', entry['state'])
+        self.assertTrue(entry['resolved_at'])
+        self.assertNotIn('resolved_by', entry)
+
     def test_a_withdrawn_entry_is_still_readable_and_out_of_force(self):
         """Archiving is not deleting: the row stays on the account and stops being read.
 
@@ -268,3 +282,159 @@ class TestInstructionAuthority(Base):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn('全局的约束', proc.stdout)
         self.assertTrue((sb.root / '.pf' / 'instructions.json').exists())
+
+
+class TestInstructionRemoval(Base):
+    """Taking an entry off the account: gone from every reading, and a trace the merge holds on."""
+
+    def seeded(self, count=2):
+        sb = self.make()
+        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.start_cycle()
+        for i in range(count):
+            sb.instruct(f'第 {i + 1} 条约束')
+        return sb, [e['id'] for e in sb.instruct_list()]
+
+    def account_bytes(self, sb) -> str:
+        return (sb.root / '.pf' / 'instructions.json').read_text(encoding='utf-8')
+
+    def test_the_entry_and_its_text_are_gone_from_every_reading(self):
+        """Archiving hides an entry from the default view; removal has to leave nothing at all --
+        not in the account view, not in its machine twin, not on disk."""
+        sb, ids = self.seeded()
+        sb.instruct_rm(ids[0])
+
+        self.assertEqual([e['id'] for e in sb.instruct_list()], [ids[1]])
+        self.assertEqual([e['id'] for e in sb.instruct_list_cli()], [ids[1]])       # --all --json
+        self.assertEqual([e['id'] for e in sb.instruct_visible_cli()], [ids[1]])    # the default view
+        human_all = sb._tool('instruction', 'list', '--all', cli=True).stdout
+        self.assertNotIn(ids[0], human_all)
+        self.assertNotIn('第 1 条约束', human_all)
+        self.assertNotIn('第 1 条约束', self.account_bytes(sb))
+
+    def test_what_stays_is_the_id_and_the_moment_and_no_state_word(self):
+        """A removal is not a third state: the trace is bookkeeping, and the account's own
+        vocabulary is untouched by it."""
+        sb, ids = self.seeded()
+        sb.instruct_rm(ids[0])
+
+        traces = sb.read_instructions()['removed']
+        self.assertEqual([{'id': ids[0], 'at': traces[0]['at']}], traces)
+        self.assertTrue(traces[0]['at'])
+        self.assertEqual('live', [e for e in sb.instruct_list() if e['id'] == ids[1]][0]['state'])
+
+    def test_the_id_of_a_removed_entry_is_not_minted_again(self):
+        """The id is what tells one machine's account from another's across a merge. Counting the
+        list would hand the number that just went away to the next entry added."""
+        sb, ids = self.seeded()
+        sb.instruct_rm(ids[1])
+
+        sb.instruct('接着记的')
+
+        self.assertEqual([e['id'] for e in sb.instruct_list()], [ids[0], 'i-0003'])
+
+    def test_the_sentence_is_printed_before_it_goes(self):
+        """After the write there is nothing left to compare against: the one reading that proves
+        the caller and the tool meant the same entry has to come first."""
+        sb, ids = self.seeded()
+
+        proc = sb.instruct_rm(ids[0], cli=True)
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(ids[0], proc.stdout)
+        self.assertIn('第 1 条约束', proc.stdout)
+
+    def test_an_archived_entry_can_still_be_taken_off(self):
+        """The two owner moves are independent: an archive that turned out to be the wrong call is
+        not a reason to keep the sentence on the account."""
+        sb, ids = self.seeded()
+        sb.instruct_resolve(ids[0], 'withdrawn')
+
+        sb.instruct_rm(ids[0], cli=True)
+
+        self.assertEqual([e['id'] for e in sb.instruct_list()], [ids[1]])
+        self.assertNotIn('第 1 条约束', self.account_bytes(sb))
+
+    def test_an_id_the_account_never_had_is_refused(self):
+        sb, ids = self.seeded()
+
+        proc = sb.instruct_rm('i-9999', check=False, cli=True)
+
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn('no instruction', proc.stderr)
+        self.assertIn('i-9999', proc.stderr)
+        self.assertEqual([e['id'] for e in sb.instruct_list()], ids)
+
+    def test_removing_one_that_is_already_off_names_the_trace(self):
+        """A second removal is not "no such entry": the id is known, and the answer says which
+        move already happened to it."""
+        sb, ids = self.seeded()
+        sb.instruct_rm(ids[0], cli=True)
+        before = sb.read_instructions()
+
+        proc = sb.instruct_rm(ids[0], check=False, cli=True)
+
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn('was removed', proc.stderr)
+        self.assertIn(ids[0], proc.stderr)
+        self.assertEqual(before, sb.read_instructions())
+
+
+class TestInstructionRevival(Base):
+    """Putting an archived entry back in force: the state moves, the record's shape does not."""
+
+    def archived(self, text='全局的约束'):
+        sb = self.make()
+        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.start_cycle()
+        sb.instruct(text)
+        ins_id = sb.instruct_list()[0]['id']
+        sb.instruct_resolve(ins_id, 'withdrawn', note='当时先收起来')
+        return sb, ins_id
+
+    def test_reviving_puts_an_archived_entry_back_in_force(self):
+        sb, ins_id = self.archived()
+
+        proc = sb.instruct_revive(ins_id, cli=True)
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        entry = sb.instruct_list()[0]
+        self.assertEqual('live', entry['state'])
+        self.assertIsNone(entry['resolved_at'])
+        self.assertNotIn('resolved_by', entry)
+        self.assertEqual([ins_id], [i['id'] for i in sb.instruct_visible_cli()])
+        self.assertIn('全局的约束', sb._tool('instruction', 'list', cli=True).stdout)
+
+    def test_an_entry_that_is_already_live_is_refused(self):
+        sb, ins_id = self.archived()
+        sb.instruct_revive(ins_id, cli=True)
+        before = sb.read_instructions()
+
+        proc = sb.instruct_revive(ins_id, check=False, cli=True)
+
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn('already live', proc.stderr)
+        self.assertEqual(before, sb.read_instructions())
+
+    def test_an_id_the_account_never_had_is_refused(self):
+        sb, ins_id = self.archived()
+
+        proc = sb.instruct_revive('i-9999', check=False, cli=True)
+
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn('no instruction', proc.stderr)
+        self.assertEqual('withdrawn', sb.instruct_list()[0]['state'])
+
+    def test_a_removed_entry_is_not_brought_back_by_putting_it_back(self):
+        """Removal is off the account, not archived on it: the trace has no sentence left, and
+        reviving must not invent one."""
+        sb, ins_id = self.archived()
+        sb.instruct_rm(ins_id, cli=True)
+
+        proc = sb.instruct_revive(ins_id, check=False, cli=True)
+
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn('was removed', proc.stderr)
+        self.assertEqual(sb.instruct_list(), [])
+        self.assertNotIn('全局的约束',
+                         (sb.root / '.pf' / 'instructions.json').read_text(encoding='utf-8'))
