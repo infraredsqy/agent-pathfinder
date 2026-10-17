@@ -52,6 +52,12 @@ CONFIG_SPEC = {
         'default': None,
         'summary': '一个节点要不要另开一棵 worktree：git 项目缺省 fork，其余缺省 off',
     },
+    'issue_repair': {
+        'kind': 'choice',
+        'values': ('on', 'off'),
+        'default': 'on',
+        'summary': '一条线越过它自己的维护阈值时，要不要自动插一个还债的节点',
+    },
 }
 
 #: 覆盖层的名字，从低到高：先出厂默认，再全局，最后项目。

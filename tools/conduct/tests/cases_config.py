@@ -101,6 +101,9 @@ class TestConfig(unittest.TestCase):
         self.assertEqual('full', values['test_tier'][0])
         # The sandbox is not a git checkout, so the conditional default lands on `off`.
         self.assertEqual('off', values['worktree_mode'][0])
+        # A channel nobody has written anything about stays on: that is the regression this key lives
+        # around -- a project that never wrote it behaves exactly as it did before the key existed.
+        self.assertEqual('on', values['issue_repair'][0])
         self.assertEqual({'出厂默认'}, {layer for _, layer in values.values()},
                          'with no file anywhere, every value must be reported as the built-in one')
 
@@ -178,6 +181,16 @@ class TestConfig(unittest.TestCase):
         self.assertNotEqual(0, proc.returncode)
         self.assertIn('max_agents', proc.stderr)
         self.assertIn('config.json', proc.stderr, 'the complaint must name the file to go fix')
+
+    def test_a_refusal_names_the_words_this_key_takes(self):
+        """拒绝要说清可用取值：报错里点得出这个词表，人才知道该把它改成什么。"""
+        proc = self.set_('issue_repair', 'maybe')
+
+        self.assertNotEqual(0, proc.returncode)
+        self.assertIn('issue_repair', proc.stderr)
+        self.assertIn("['on', 'off']", proc.stderr)
+        self.assertFalse((self.ledger / 'config.json').exists(),
+                         'a refused write leaves no file behind')
 
     def test_a_key_this_tool_does_not_own_survives_a_write(self):
         self.write_project('{"something_else": 1}')

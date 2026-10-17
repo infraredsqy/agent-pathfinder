@@ -2,10 +2,12 @@
 
 State, signals, the DAG, the instructions and each node's own text all live in `<project>/.pf/`,
 and they are read here. A project either commits that directory or keeps it to itself; nothing in
-this module cares which. What is not part of the record is the dispatch plumbing -- `meta/launch/`,
-the session notes, the claim/started markers, the broken-chain marker -- which is why `meta_dir()`
-is the other door this module offers. One loader per file, each returning what is on disk, or an
-empty shape when the file is absent.
+this module cares which. The settings file is read here as well, and it is the one thing on this
+page that is not this tool's own record: `pf config` owns it, and `load_config` merges its two
+layers for the judgement that needs one key. What is not part of the record is the dispatch
+plumbing -- `meta/launch/`, the session notes, the claim/started markers, the broken-chain marker
+-- which is why `meta_dir()` is the other door this module offers. One loader per file, each
+returning what is on disk, or an empty shape when the file is absent.
 
 A cycle record in `state.json` is the whole of a cycle -- its identity, where it is now, and the
 path it has walked:
@@ -32,6 +34,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 
@@ -112,6 +115,44 @@ def meta_dir(project: Path) -> Path:
     `.pf/.gitignore` keeps `meta/` out of both the project's history and the ledger's own.
     """
     return ledger_dir(project) / 'meta'
+
+
+# ── the settings: this project's, and the machine's underneath it ─────────────
+# 一个项目与一台机器的设置（`pf config` 管的那几格）。与记录不同，设置**不属于这条管线**：它是别的
+# 工具的正本，管线只读其中一格（维护通道那个开关）。所以这里只读、只交出两层：出厂默认与词表留在
+# 写那一侧（`conduct_state/config.py`），读的那一格自己说它认什么词。
+
+#: 设置文件的名字，两层同名：`<项目>/.pf/config.json` 与 `~/.pf/config.json`。
+CONFIG_NAME = 'config.json'
+
+
+def global_config_path() -> Path:
+    """这台机器那一层设置，`~/.pf/config.json` —— `pf config set --global` 写的同一份。
+
+    `PF_HOME_DIR` 把它指到沙箱（与写那一侧同一枚环境变量），否则它是谁的就是谁的。
+    """
+    home = os.environ.get('PF_HOME_DIR') or str(Path.home())
+    # 家目录被当作"一个项目"来算那层落点：两层同名同形，拼法也走同一个 `ledger_dir`。
+    return ledger_dir(Path(home).expanduser()) / CONFIG_NAME
+
+
+def project_config_path(project: Path) -> Path:
+    return ledger_dir(project) / CONFIG_NAME
+
+
+def load_config(project: Path) -> dict:
+    """这个项目的设置：机器那一层，上面盖着项目那一层 —— 后写的那层赢。
+
+    两层都可以不在（读作"没改过出厂默认"），也可以带着这个管线不认识的键（别人管它们）。这里
+    只交出写下来的东西：**每一格的词表与出厂默认由读它的那个判断自己说**（维护通道的
+    `maintenance.issue_repair_on`），一份设置里的一格跑到别处去解释，就是同一个词长出两种读法。
+    """
+    out = {}
+    for path in (global_config_path(), project_config_path(project)):
+        layer = _read_json(path)
+        if isinstance(layer, dict):
+            out.update(layer)
+    return out
 
 
 # ── session notes: which conversation produced a node, which ones ran it ──────
