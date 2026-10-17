@@ -80,7 +80,7 @@ class TestCLIEntryPoints(Base):
 
     def test_the_close_flags_reach_the_planner(self):
         """The closing call's levers are the CLI's `--after` plus the decision flags; driven as a
-        process, since the flags are the subject. A flag the tool no longer has is refused before
+        process, since the flags are the subject. A flag the tool does not have is refused before
         anything is written.
         """
         sb = self.make(cli=True)
@@ -352,10 +352,8 @@ class TestRobustness(Base):
 class TestOneSpawner(Base):
     """One file builds `dsh-spawn.ps1`'s argv: every caller goes through it.
 
-    That argv used to be spelled out in more than one place, and the copies had already separated:
-    two ceilings (180s and 300s) and two shapes of dry-run line. What is pinned here is the
-    *absence* of a second spelling, because a second argv reads perfectly well on its own; that is
-    exactly what is wrong with it.
+    What is pinned here is that there is one spelling of that argv, because a second spelling reads
+    perfectly well on its own; that is exactly what is wrong with it.
 
     Behaviour first (the file that would have to hold a spawn call), then one unambiguous fingerprint
     over every shipped source file -- not a list of words that also turn up in prose, and not the
@@ -365,11 +363,10 @@ class TestOneSpawner(Base):
     ARGV_FINGERPRINT = '-CycleId'
 
     def test_handoff_cannot_spawn(self):
-        """`handoff.py` writes a ticket and stops there: no spawner, no call, no argv.
-
-        It used to carry a `dispatch` branch for a case the planner never produces (a terminal ticket
-        makes `record` answer `wait`), so the branch could only ever have fired the wrong way: a
-        session started before the node that closed it was committed and pushed.
+        """`handoff.py` writes a ticket and stops there: no spawner, no call, no argv. A session
+        started before the node that closed it was committed and pushed is the failure this rules
+        out; the planner produces no case that asks for one (a terminal ticket makes `record` answer
+        `wait`).
         """
         source = (CONDUCT_DIR / 'pipeline' / 'handoff.py').read_text(encoding='utf-8')
         for gone in ('SPAWNER_SCRIPT', 'spawner_script', 'spawn_session', self.ARGV_FINGERPRINT):
@@ -386,9 +383,9 @@ class TestOneSpawner(Base):
 class TestTheSpawnerShell(Base):
     """`spawn/spawn-common.ps1`: the half both spawners share, driven as a real process.
 
-    The shell holds the three contracts the two scripts used to copy row by row -- the named
-    parameters both declare, the prompt check that refuses before anything is queued, and the
-    failure marker's write and clear. Two copies of that shell had already drifted apart.
+    The shell holds the three contracts both spawner scripts share -- the named parameters both
+    declare, the prompt check that refuses before anything is queued, and the failure marker's write
+    and clear.
 
     What is pinned here is that the shared half does its work on its own: pwsh starts, the shell is
     dot-sourced, and the only thing it can reach is a marker file under the sandbox -- no spawner
@@ -525,7 +522,7 @@ class TestTheSpawnerShell(Base):
         """改名重试耗尽时盘上不留残渣：临时文件只在这一拍里有意义。
 
         读者此刻正开着目标文件（Windows 上普通 `open()` 不带 FILE_SHARE_DELETE），改名会一直被拒 ——
-        四次退避用尽后这一拍只警告一声，标记还是原来那份，标记目录里不许剩下 `.tmp-<pid>`。
+        四次退避用尽后这一拍只警告一声，标记仍是落盘的那一份，标记目录里不许剩下 `.tmp-<pid>`。
         """
         self.pwsh_or_skip()
         sb = self.make()

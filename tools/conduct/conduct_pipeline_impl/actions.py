@@ -177,9 +177,8 @@ def _close_commands(project: Path, cycle: dict, node_id: str, outcome: str,
     that did not is `shelved` (out of play, waiting for a human), and a node being worked on is
     `todo`.
 
-    **停手就是转 inactive，一条写死的命令。** 以前这里要在 paused 和 completed 之间选一个（还
-    有没有活留着），那是把「这条线是不是还该往前走」押在了当时的图上：图后来会长出新节点，而
-    一条停下来的线该不该接着跑，是人说了算的事。工具永远不写 `active`。
+    **停手就是转 inactive，一条写死的命令。** 「这条线是不是还该往前走」不押在图上：图会长出新
+    节点，而一条停下来的线该不该接着跑，是人说了算的事。工具永远不写 `active`。
 
     一条没交付的节点被搁置，但它后面要不要接着挑人，走的还是同一条岔路（`when_shelved` 策略已经在
     那一步决定过了）：`shelved` 只说明这个节点出局等人，与线走不走是两件事。
@@ -232,7 +231,7 @@ def attention_items(project: Path, cycle: dict, shelved_nodes=(), dag: dict | No
 
     **`shelved` 是节点状态，`failed` 是条子上的判决**：一个会话报告 `failed`，说的是「我没交出东西」，
     收尾据此把这个节点搁置（标 `shelved`，出局等人）。所以这里说的是节点状态；而路径上的那一格、
-    以及 `signal.py` 的 `failed`，说的是判决，照旧。
+    以及 `signal.py` 的 `failed`，说的是判决。
     """
     out = []
     nodes = (dag if dag is not None else load_dag(project)).get('nodes') or {}

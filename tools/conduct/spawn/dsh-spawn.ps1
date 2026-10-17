@@ -25,24 +25,21 @@
 #
 # 依赖：pwsh 7+；DSH web 默认在 http://127.0.0.1:3080。
 #
-# 鉴权（2026-09-20 重做，原实现已失效）：
-#   旧实现从 ~/.dsh/web-run.log 抓进程 launch token，再走 GET /?token=… 换 cookie。
-#   两个问题：① launch token 每进程新生成，日志不随每次启动更新，重启后必然 401；
-#   ② /api 走的是 cookie 鉴权路径，launch token 只是换 cookie 的门票。
-#   现改为直接用**持久签名密钥**自签一个 browser-session cookie：
-#   密钥存在 ~/.dsh/.credentials.yaml 的 client-connection/browser-session 记录里，
-#   跨重启有效；cookie 有效期 30 天（与 dsh 默认 cookieMaxAgeDays 一致）。
-#   于是续跑不再依赖任何一次性的进程态，contribute 子会话也不再需要用户介入。
+# 鉴权：
+#   直接用**持久签名密钥**自签一个 browser-session cookie：密钥存在
+#   ~/.dsh/.credentials.yaml 的 client-connection/browser-session 记录里，跨重启有效；
+#   cookie 有效期 30 天（与 dsh 默认 cookieMaxAgeDays 一致）。/api 走的是 cookie 鉴权路径，
+#   所以续跑不依赖任何一次性的进程态，contribute 子会话不需要用户介入。
 #
-# —— 契约（2026-09 按 0.1.5-rc.2 实测校准，仍然成立）——
+# —— 契约（实测校准）——
 #   ① 端点用斜杠形式：session/create、session/prompt（点号写法回 not found）
 #   ② 信封：{type:"client-request", rpcId, method, payload:{args:{request:{…}}}}
 #      端点参数放在 args 下的具名键里（这两个端点都叫 request）
 #   ③ 无鉴权时回 401 "dsh web authentication required"；鉴权通过但方法名不存在回 404
 #
-# 链断了怎么办（2026-09-20 加固）：
+# 链断了怎么办：
 #   整条链的下一棒全押在这一段 POST 上：**一次 401 或网络抖动就足以让这条线静默躺下**，
-#   表面上还像在跑（旧实现没有重试）。所以每个 API 调用最多重试 3 次（指数退避 2s / 4s）；
+#   表面上还像在跑。所以每个 API 调用最多重试 3 次（指数退避 2s / 4s）；
 #   全部失败时写下降级标记（`spawn-common.ps1` + `marker.py`：一个显眼的、按线命名的文件），
 #   下一次人工 /pf-conduct 能看见"这里断过"。派发成功时该标记会被清掉（它存在 = 链现在是断的）。
 #   按线分文件：并行=2 时两条线并排跑，本线成功只清本线的标记，不抹别线的断链记号。

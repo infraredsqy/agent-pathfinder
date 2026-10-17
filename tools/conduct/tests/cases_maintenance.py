@@ -120,13 +120,13 @@ class SelfHealingWorker(ReadingWorker):
 
 
 class TestMaintenanceChannel(Base):
-    """The channel itself: nothing configured (byte-for-byte the old close), a crossed line, and a
-    reading under its line."""
+    """The channel itself: a project with nothing configured, a crossed line, and a reading under
+    its line."""
 
-    # ── 回归底线：一个数都不配，收尾与这个通道出现之前逐字节相同 ──────────────
+    # ── 回归底线：一个数都不配时，收尾一个字都不多带 ──────────────
 
     def test_without_a_threshold_the_close_and_the_graph_are_untouched(self):
-        """项目一个数都不配时，这条通道整个不生效：返回值、图、记录与今天逐字节相同。
+        """项目一个数都不配时，这条通道整个不生效：返回值、图、记录与不配它时逐字节相同。
 
         两个项目跑同一条线，唯一的差别是其中一个在 cycle 上多配了一根线。多配的那一个照样**不插**
         （读数没越线），于是两份记录必须一字不差 —— 配置那一格除外（它本来就该不同），剩下的口径照

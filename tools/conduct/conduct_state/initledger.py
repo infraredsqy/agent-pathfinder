@@ -59,6 +59,7 @@ signals/** merge=pf
 LEDGER_AGENTS_BODY = """\
 # .pf 使用约定
 
+> 本文件（`.pf/AGENTS.md`）不得超过 100 行。
 > 本文件由这套工具在 `init` 时写入并维护。**要改它，先问用户**——他说了「可以」，再动手。
 
 本目录是 pf 管线的记录库：`ideas.json`、`state.json`、`instructions.json`、
@@ -165,7 +166,7 @@ def _write_exclude(path: Path, pattern: str | None) -> str:
 def _untrack(project: Path, ledger: Path) -> str:
     """本地档：已经进了项目仓库的 `.pf/` 要从 index 里退出来，文件留在盘上。
 
-    不退的话档位会撒谎——盘上看着是本地档（忽略行在、下一发不带它），而项目仓库照旧把整个
+    不退的话档位会撒谎——盘上看着是本地档（忽略行在、下一发不带它），而项目仓库仍把整个
     目录带走。忽略行管不了已经 track 的文件，这一条只有 index 说了算。
     """
     if _git(project, 'ls-files', '--', LEDGER_NAME).stdout.strip() == '':

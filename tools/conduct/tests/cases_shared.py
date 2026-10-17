@@ -568,7 +568,7 @@ class TestOneWriterPerRecord(Base):
                          '显式落点那一笔写进了绑定指向的项目')
         self.assertEqual(store.LEDGER_DIR, sb.root / '.pf', '这一笔把本拷贝的绑定挪走了')
 
-        # 绑定还在原处：不点名落点的那一笔照旧落在绑定指向的项目里。
+        # 绑定还在原处：不点名落点的那一笔落在绑定指向的项目里。
         store._write_signal('cyc', NODE, 'failed', 'A', {})
         landed = json.loads((sb.root / '.pf' / 'signals' / 'cyc' / f'{NODE}.json')
                             .read_text(encoding='utf-8'))

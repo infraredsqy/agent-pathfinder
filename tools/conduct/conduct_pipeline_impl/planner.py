@@ -449,7 +449,7 @@ def _close_last_node(project: Path, cycle: dict, node_id: str, sig: dict,
             reason = f'这个节点没有交付（{outcome}）：{slipped}'
         elif stop_why:
             reason = f'{stop_why}（{note}）' if note else stop_why
-            # 中间那一档停下来是等人说「继续」—— 停手照旧把线转成 inactive，所以要把放回服务与
+            # 中间那一档停下来是等人说「继续」—— 停手把线转成 inactive，所以要把放回服务与
             # 接着走的那两条命令一起给他，否则「继续」得自己猜怎么继续。
             if mode_for(node_id, dag) == 'checkpoint':
                 reason += (f'；要接着走：pf cycle status {cycle["id"]} active，'

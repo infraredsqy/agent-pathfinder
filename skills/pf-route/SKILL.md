@@ -166,7 +166,7 @@ issue 池；给还没落笔的节点做一次选型对比，结论回填它的 s
 
 **现在就做（不进图）：**
 
-派 subagent 去做，可以并行派几个（先按 [`../shared/pf/agents.md`](../shared/pf/agents.md) 数一遍在飞的），**它们只改文件，不提交**；做完向用户报告，提交在第五步一起做。
+派 subagent 去做，可以并行派几个（先按 [`../shared/pf/subagents.md`](../shared/pf/subagents.md) 数一遍在飞的），**它们只改文件，不提交**；做完向用户报告，提交在第五步一起做。
 三样东西归这条：
 
 - **文档、设计说明追上现状**：照 `doc-update` 走，只写已经实现的东西——docs/ 只装 ground truth 是这套系统的地基

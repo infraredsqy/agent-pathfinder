@@ -55,7 +55,7 @@ POLICY_COUNTS = ('parallel',)
 #: 所以跟着 cycle 记录走 —— 一条不碰代码的线（`art` / `writing`）身上根本没有这两个键。
 POLICY_NUMBERS = ('test_seconds_limit', 'issue_pool_weight_limit')
 #: 词表型策略：值必须在候选表里，`off` 是清除；没有默认值 —— 没配的线落在调用链的下一级，
-#: 行为与这条策略存在之前一字不变。`spawner` 住在这里：这条线的会话由哪份 spawner 开
+#: 行为不变。`spawner` 住在这里：这条线的会话由哪份 spawner 开
 #: （`dsh` / `zcode`）。只收词、不收路径：cycle 记录随 `.pf/` 跨机器合并，机器本地的路径
 #: 落进状态文件就是另一台机器上的死值；要路径的场合走单发 `--spawner <路径>`。
 POLICY_WORDS = ('spawner',)
@@ -358,8 +358,7 @@ def cmd_cycle_current() -> None:
     """现在要紧的那几条线：每一条 `active` 的，**以及每一条手上有节点的**。
 
     第二条是这里存在的原因：一条不在服务中的线照样握着它没收尾的节点 —— 那正是人必须看见的
-    状态（活停在半路，而这条线不会自己往前走）。以前只列 active，于是停住的线在这份读数里根本
-    不存在。
+    状态（活停在半路，而这条线不会自己往前走；只列 active 的读数里没有它）。
 
     一条线可以同时握着多个节点（`parallel` 策略）：这份读数把每一个都列出来，各自的认领时刻也
     就在每一行上。
@@ -420,7 +419,7 @@ def cmd_cycle_hold(cycle_id: str, node_id: str) -> None:
     one atomic step.
 
     一条线同时可以握多个节点（`parallel` 策略），所以往已经有节点的这条线上再 pin 一个不是错误
-    —— 这一笔就是「再开一格」；同一个 id 重 pin 照旧放行（重启语义）。
+    —— 这一笔就是「再开一格」；同一个 id 重 pin 放行（重启语义）。
     """
     with _ledger_lock():
         state = _read_state()

@@ -78,7 +78,7 @@ def _resolve_project_root(cwd: Path) -> Path:
     落在陈旧快照上，两条线互相看不见对方的认领。worktree 根的 `.git` 是一个**文件**
     （`gitdir: <主树>/.git/worktrees/<名字>`），主树里是目录：顺着指针走，`worktrees` 的
     上三级就是主树根。submodule 的 `.git` 文件指向 `.git/modules/...`，不是 worktree，
-    照旧留在 cwd。主树没有 `.pf/` 时（不是管线项目）不挪，让后面的错误照老样子响。
+    留在 cwd 不动。主树没有 `.pf/` 时（不是管线项目）不挪，让后面的错误当场响。
 
     dag-manage.py 与 issue/storage.py 各有一份同样的函数：三个工具没有共同的包可以放，
     这是一份摆在三处的约定。

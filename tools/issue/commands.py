@@ -367,7 +367,7 @@ def cmd_remove(args):
 #: 这一条仍然算数。
 OWED = frozenset({'open', 'acknowledged', 'resolving'})
 #: 还挑得动的：`top`、`by_module`、`stale` 只列这些。`resolving` 不在里面 —— 那一条已经有人在
-#: 做，再挑一次就是两个人做同一件事。它照旧算在 `OWED` 里，等它结案或退回 `open`。
+#: 做，再挑一次就是两个人做同一件事。它仍算在 `OWED` 里，等它结案或退回 `open`。
 PICKABLE = frozenset({'open', 'acknowledged'})
 
 

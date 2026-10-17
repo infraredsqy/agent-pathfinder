@@ -93,7 +93,7 @@ class TestMarkBookkeeping(PoolCase):
         self.assertEqual(['never-filed'], report['unknown_ids'])
 
     def test_a_skipped_scan_leaves_every_status_alone(self):
-        """mark 不动状态：open 的照旧 open，等 resolve 那条路来结案。"""
+        """mark 不动状态：`open` 的仍是 `open`，等 resolve 那条路来结案。"""
         self.add('a')
 
         self.mark('a')

@@ -56,7 +56,7 @@ def _resolve_project_root(cwd: Path) -> Path:
     与 `conduct_state.store._resolve_project_root`、dag-manage 侧同名函数是同一份约定摆在
     三处（三个工具没有共同的包），判定一致：worktree 根的 `.git` 是文件，指向
     `<主树>/.git/worktrees/<名字>`，`worktrees` 上三级即主树根；`.git/modules/...` 是
-    submodule，不算。主树没有 `.pf/` 时不挪，让老错误照老样子响。
+    submodule，不算。主树没有 `.pf/` 时不挪，让后面的错误当场响。
     """
     dot_git = cwd / '.git'
     if not dot_git.is_file():

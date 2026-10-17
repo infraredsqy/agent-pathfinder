@@ -178,9 +178,9 @@ class TestSpawnerChoice(unittest.TestCase):
         """宿主探测只有 `spawn/host.py` 这一个家；链自跑的那一发走管线那道门。
 
         接缝那个模块（`conduct_pipeline.py`）是调用方 patch 的那一个：探测与它分开住，任何一次探测
-        的改动都落在自己那份文件里。`chain-spawn.py` 以前自己问宿主、自己调 `conduct_spawn`；现在它
-        只当 CLI 壳，开会话那一拍落在管线那道门上（会话便条、标记的写与清都由它带着；claim 那一条
-        拿不到 —— 那条链的 prompt 不在 launch 目录里，见 `chain-spawn.py` 的模块说明）。
+        的改动都落在自己那份文件里。`chain-spawn.py` 只当 CLI 壳，开会话那一拍落在管线那道门上（会话
+        便条、标记的写与清都由它带着；claim 那一条拿不到 —— 那条链的 prompt 不在 launch 目录里，见
+        `chain-spawn.py` 的模块说明）。
         """
         entry = (CONDUCT_DIR / 'pipeline' / 'conduct_pipeline.py').read_text(encoding='utf-8')
         imported = {alias.name for node in ast.walk(ast.parse(entry))

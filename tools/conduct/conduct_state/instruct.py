@@ -18,15 +18,15 @@ from .pipeline_loader import _load_pipeline
 
 VALID_TARGETS = ('stage', 'boundary')
 
-#: `state` 缺省读作的那个词：一个字段都没有的旧条目照旧算数。读侧（`conduct_pipeline_impl/instruct.py`）
+#: `state` 缺省读作的那个词：一个没有 `state` 字段的条目按这个词算数。读侧（`conduct_pipeline_impl/instruct.py`）
 #: 经装载器借这个名字，不抄第二遍。
 LIVE_STATE = 'live'
 #: The account has two states, and one of them is written by the owner alone: `live` (in force) and
 #: `withdrawn` (archived -- still on the account, no longer read). Nothing else ends an entry: where
 #: it can be seen from is derived on every read from its scope and the bound node/cycle (impl 的
-#: `instruction_in_scope`), so a scoped entry goes out of sight on its own. A record an older tool
-#: left carrying another word in `state` is not one of these; it is read as archived, and nothing
-#: writes it back (`_retired`).
+#: `instruction_in_scope`), so a scoped entry goes out of sight on its own. A record carrying any
+#: other word in `state` is not one of these; it is read as archived, and nothing writes it back
+#: (`_retired`).
 VALID_INSTRUCTION_STATES = (LIVE_STATE, 'withdrawn')
 
 _SCOPE_RULES = None

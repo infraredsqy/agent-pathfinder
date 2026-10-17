@@ -53,8 +53,8 @@ class TestEndToEnd(Base):
         finished = None
         for _ in range(8):
             action = sb.next_cli()[0]
-            # The walk is over when the line's last close takes it out of service: the next bare
-            # `next` no longer drives it, it names the command that puts it back in.
+            # The walk is over when the line's last close takes it out of service: a bare `next`
+            # leaves it alone and names the command that puts it back in.
             if action['action'] in ('stop_pipeline', 'ask_user', 'no_cycle'):
                 finished = action['action']
                 break

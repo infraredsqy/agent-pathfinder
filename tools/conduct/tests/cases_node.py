@@ -4,11 +4,6 @@ Everything here is about the surviving shape, in the terms the model is stated i
 holds the whole cycle (there is no per-round file and no second pointer), one node's work is done
 when its terminal signal is on disk, the DAG's node status is the single source of truth for "did
 it succeed", and the only thing that ends a step is the worker's own `next --after <node>`.
-
-Deleted concepts have no cases here, on purpose: a stage index, a pointer move, `advance`,
-`catch-up`, `rewind`, `open-round` / `close-round`, `migrate` / `migrate-v3`, legacy layouts and
-the artifact-key validation are all gone, so a test for any of them would be testing a sentence
-that no longer exists.
 """
 
 from __future__ import annotations
@@ -162,8 +157,8 @@ class TestSettleAndClose(Base):
         self.assertEqual(sb.path_nodes(), [NODE])
 
     def test_a_stop_on_the_last_node_writes_the_same_status(self):
-        """停手只有一句话可写：`inactive`。以前这里要在 paused 和 completed 之间按「图上还剩没剩
-        活」选一个，而那问的是当时的图 —— 图会长大，停下来的线该不该接着跑是人说了算的事。"""
+        """停手只有一句话可写：`inactive`。「图上还剩没剩活」问的是当时的图，而图会长大，停下来的
+        线该不该接着跑是人说了算的事。"""
         sb = self.pinned(extra_nodes=0)
         sb.write_signal('cyc', NODE, 'completed', 'done')
         action = sb.close_round(NODE, decision='stop')
@@ -240,8 +235,7 @@ class TestStopRule(Base):
 
     **要不要接着走，只看节点自己的 mode**：`checkpoint` 在收尾那一拍停下交人；`manual` 的人闸
     在格子的会话里（整格与用户来回推进，条子上的 completed 就是用户那句「标成完成，继续」），
-    收尾后照 `auto` 接着走。以前还有一层「这条线是什么 launch mode」的天花板，那个天花板已经
-    删掉了：同一个判断只该有一个出处。
+    收尾后照 `auto` 接着走；同一个判断只有这一处出处。
     """
 
     def test_auto_carries_on_to_the_node_behind_it(self):
@@ -287,7 +281,7 @@ class TestStopRule(Base):
         self.assertEqual(sb.dag_status(NODE2), 'todo')
         self.assertIn('checkpoint', final['reason'])
         self.assertEqual(sb.cycle()['status'], 'inactive',
-                         '停手照旧把线转成 inactive；放回服务的那条命令在 reason 里')
+                         '停手把线转成 inactive；放回服务的那条命令在 reason 里')
         self.assertIn('cycle status cyc active', final['reason'])
 
     def test_a_continue_cannot_loosen_the_stop_rule(self):
@@ -458,7 +452,7 @@ class TestShelvedPolicy(Base):
         self.assertEqual([i['kind'] for i in action['attention']], ['node_shelved'])
 
     def test_continue_does_not_unblock_the_dependents_of_a_shelved_node(self):
-        """shelved 的节点一个依赖都没满足：它在局外等人，等它的活照旧跑不了 —— `continue` 说的是这
+        """shelved 的节点一个依赖都没满足：它在局外等人，等它的活跑不了 —— `continue` 说的是这
         条线接着走，没说这个节点算交付了。"""
         sb = self.pair()
         sb.set_policy('cyc', 'when_shelved', 'continue')
@@ -820,7 +814,7 @@ class TestTheCloseReadsTheGraphOnce(Base):
 class TestTheReadySetIsWhole(Base):
     """`ranked_ready_nodes` 不问就给整份就绪集：一次拿几格是线自己的事（`parallel`）。
 
-    这两条直接调读取端，不经过沙箱的规划入口，所以自己套一层 `_dag_hook`：排序照旧由 dag-manage
+    这两条直接调读取端，不经过沙箱的规划入口，所以自己套一层 `_dag_hook`：排序由 dag-manage
     自己的 `cmd_list` 回答（同一份实现），省掉的只是一次次进程启动。
     """
 

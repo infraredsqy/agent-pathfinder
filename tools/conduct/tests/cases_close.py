@@ -27,10 +27,9 @@ __all__ = ['TestWorkerClosesItsOwnNode', 'TestCloseGuards']
 class TestWorkerClosesItsOwnNode(Base):
     """`next --after <node_id>`: the worker closes the node it just ran.
 
-    A boundary session used to be the only actor that could turn a finished step into a verdict.
-    The outcome is read off the signal the worker already wrote, so what is left is one call that
-    says "the node I just finished is done; carry on or stop" -- and a node that has not finished
-    answers `wait` rather than being taken as delivered.
+    The outcome is read off the signal the worker already wrote, so closing is one call that says
+    "the node I just finished is done; carry on or stop" -- and a node that has not finished answers
+    `wait` rather than being taken as delivered.
     """
 
     def finished_node(self, sb, cli=False):
