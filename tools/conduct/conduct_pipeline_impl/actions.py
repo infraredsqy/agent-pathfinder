@@ -10,13 +10,27 @@ import json
 from pathlib import Path
 
 from . import maintenance, seam
-from .nodes import mode_for, node_spec_path
+from .nodes import mode_for, node_row, node_spec_path
 from .prompts import build_prompt_text, launch_dir, launch_prompt_path
 from .store import DEFAULT_MODE, load_dag
 
 
 def _ask(question: str, **extra) -> dict:
     return {'action': 'ask_user', 'cycle': None, 'question': question, 'commands': [], **extra}
+
+
+def _node_entry(project: Path, cycle: dict, row: dict, mode: str) -> dict:
+    """One node's entry inside a dispatch-shaped action.
+
+    The id, its title, its mode, where its prompt file lands and the text to write there -- one
+    builder, so the multi-node dispatch and the maintenance insert cannot spell their entries
+    differently. `row` is a graph row with its id in it (`nodes.node_row`); the maintenance node has
+    no row yet, so its caller hands over the id and the title it was generated with.
+    """
+    node_id = row['id']
+    return {'node_id': node_id, 'node_title': row.get('title', ''), 'mode': mode,
+            'prompt': str(launch_prompt_path(project, cycle['id'], node_id)),
+            'prompt_text': build_prompt_text(node_id)}
 
 
 def _dispatch_many(project: Path, cycle: dict, node_ids: list) -> dict:
@@ -27,13 +41,8 @@ def _dispatch_many(project: Path, cycle: dict, node_ids: list) -> dict:
     只是 `nodes` 里恰好有一项。
     """
     dag = load_dag(project)
-    nodes = []
-    for node_id in node_ids:
-        row = (dag.get('nodes') or {}).get(node_id) or {}
-        nodes.append({'node_id': node_id, 'node_title': row.get('title', ''),
-                      'mode': mode_for(node_id, dag),
-                      'prompt': str(launch_prompt_path(project, cycle['id'], node_id)),
-                      'prompt_text': build_prompt_text(node_id)})
+    nodes = [_node_entry(project, cycle, node_row(dag, node_id), mode_for(node_id, dag))
+             for node_id in node_ids]
     head = nodes[0]
     return {
         'action': 'dispatch', 'cycle': cycle['id'],
@@ -68,8 +77,7 @@ def _maintenance_due(project: Path, cycle: dict, closed: str, hit: dict, target:
     line will do, just not yet.
     """
     node_id = maintenance.NEW_NODE
-    text = build_prompt_text(node_id)
-    node_target = launch_prompt_path(project, cycle['id'], node_id)
+    entry = _node_entry(project, cycle, {'id': node_id, 'title': hit['title']}, DEFAULT_MODE)
     shown = (f'{hit["value"]:g}{hit["unit"]}')
     line = (f'{hit["at"]:g}{hit["unit"]}')
     note = (f'{hit["subject"]} 读到 {shown}，达到这条线策略里的线 {line}'
@@ -82,16 +90,14 @@ def _maintenance_due(project: Path, cycle: dict, closed: str, hit: dict, target:
                                  spec_of=hit['spec_of'], close_commands=close_commands)
     return {
         'action': maintenance.MAINTENANCE_ACTION, 'cycle': cycle['id'],
-        'node_id': node_id, 'node_title': hit['title'],
-        'mode': DEFAULT_MODE,
-        'prompt': str(node_target), 'prompt_text': text,
+        **entry,
         'metric': hit['reading'], 'reading': shown, 'line': line,
         'deferred_node': target['id'], 'deferred_title': target.get('title', ''),
         # `extra_note` is the line that would have ridden on the dispatch this action replaces (a
         # hand-named node outside the filter set, for one). It has to keep riding along: the caller
         # never sees the action it displaced.
         'note': f'{note}；{extra_note}' if extra_note else note,
-        'steps': [f'write prompt text to {node_target}',
+        'steps': [f'write prompt text to {entry["prompt"]}',
                   f'insert a maintenance node with the generated spec '
                   f'({node_spec_path(project, node_id)}), between {closed} and {target["id"]}',
                   'DSH: spawn one session with prompt.txt (`dispatch <cycle>` does this)'],

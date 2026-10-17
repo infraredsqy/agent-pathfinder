@@ -99,7 +99,19 @@ METRICS = (
 #: narrows this to the lines a given cycle actually carries.
 READING_KEYS = tuple(metric['reading'] for metric in METRICS if metric['source'] == 'ticket')
 
-#: `dag-manage` prints its own uuid; nothing on this side can know it before the child has run.
+#: `dag-manage` prints its own uuid; nothing on this side can know it before the child has run, so the
+#: maintenance node starts life under this placeholder name. The chain from here to the sweep, and it
+#: is this long on purpose:
+#:
+#:   1. `insertion` writes the graph edit in terms of it (`depend` / `undepend` / `cycle hold`), and
+#:      `actions._maintenance_due` builds the action around it -- `node_id`, the prompt file's path
+#:      (`meta/launch/<cycle>/%DUID%/prompt.txt`) and the invocation line all name the placeholder.
+#:   2. `writer.apply` writes that placeholder prompt, then runs `add` in the slot `ADD_MARKER` marks.
+#:      `_capture_new_node` reads the uuid off its stdout and rebinds `node_id` / `prompt` to it.
+#:   3. The action is a maintenance_due, which `apply` re-plans into the dispatch behind it: that
+#:      recursion is what writes the REAL node's prompt file (`meta/launch/<cycle>/<uuid>/prompt.txt`).
+#:   4. The placeholder's launch directory stays behind. `writer._prune_launch_dirs` sweeps the launch
+#:      dirs of the nodes a cycle no longer holds, on the next successful spawn.
 NEW_NODE = '%DUID%'
 #: The slot marker `insertion` leaves where `add` belongs in the command list.
 ADD_MARKER = '%ADD%'

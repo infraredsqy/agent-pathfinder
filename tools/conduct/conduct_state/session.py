@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 from .pipeline_loader import _load_pipeline
-from .store import _read_dag, ledger_dir_for, meta_dir_for, nodes_dir_for, require_initialized
+from .store import _read_dag, ledger_dir_for, meta_dir_for, require_initialized
 
 #: The header an older routing session left in a node's `spec.md`:
 #: `> discussion: dsh-session:session-…[, dsh-session:…]`. Read only in the first lines of the file,
@@ -123,9 +123,13 @@ def cmd_session_list(project=None, as_json: bool = False) -> None:
               f'{_title(root, uid)}'.rstrip())
 
 
-def _spec_discussion_ids(project, node_id: str) -> list:
-    """The discussion session ids an older spec header names, in file order (usually none)."""
-    spec = nodes_dir_for(project) / node_id / 'spec.md'
+def _spec_discussion_ids(pipeline, root: Path, node_id: str) -> list:
+    """The discussion session ids an older spec header names, in file order (usually none).
+
+    The spec's landing is `nodes.node_spec_path` -- the one algorithm for that path -- and `pipeline`
+    is the module the caller has already loaded, so this reads exactly the file that door names.
+    """
+    spec = Path(pipeline.node_spec_path(root, node_id))
     try:
         head = spec.read_text(encoding='utf-8', errors='replace').splitlines()[:SPEC_HEAD_LINES]
     except OSError:
@@ -157,7 +161,7 @@ def cmd_session_import(project=None, dry_run: bool = False) -> None:
         node = nodes[uid]
         legacy = node.get('dsh_session')
         ids = [legacy] if isinstance(legacy, str) and legacy else []
-        for found in _spec_discussion_ids(project, uid):
+        for found in _spec_discussion_ids(pipeline, root, uid):
             if found not in ids:
                 ids.append(found)
                 from_spec += 1

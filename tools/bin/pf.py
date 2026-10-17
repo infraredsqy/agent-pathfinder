@@ -104,7 +104,7 @@ SELF_VERBS = (
 #: A forwarded verb's flags live in the tool's own parser, and `pf <verb> --help` prints them: that
 #: parser is the authority, so no flags are kept here.
 FORWARD_VERBS = (
-    ('init', STATE_MANAGE, True, 'put .pf/ in place (run once per project)'),
+    ('init', STATE_MANAGE, True, 'put the ledger in place (run once per project)'),
     ('register', STATE_MANAGE, True, "write the ledger's git merge driver into this project"),
     ('next', STATE_MANAGE, True, 'show (or do) the next pipeline action'),
     ('dispatch', STATE_MANAGE, True, 'start the session for the node the cycle holds'),
@@ -124,6 +124,15 @@ FORWARD_GROUPS = (
     ('instruction', STATE_MANAGE, True, 'standing user instructions'),
     ('session', STATE_MANAGE, True, "a node's own conversations, which live on this machine only"),
 )
+
+#: The files no verb names: the pipeline entry every verb file loads, and the shared session note.
+#: `TOOL_FILES` checks these alongside everything the tables above point at.
+UNROUTED_TOOLS = (CONDUCT_PIPELINE, SESSION_NOTE)
+
+#: What `doctor` insists on finding: the tables' targets, once each, then the two above -- so a verb
+#: added to a table is checked by itself.
+TOOL_FILES = tuple(dict.fromkeys(
+    [row[1] for row in (*FORWARD_VERBS, *FORWARD_GROUPS)] + list(UNROUTED_TOOLS)))
 
 #: `main()`'s routing table: the names are the ones the three tables above carry, taken as they are.
 _SELF_HANDLERS = {row[0]: row[3] for row in SELF_VERBS}
@@ -202,7 +211,7 @@ def cmd_doctor(fix: bool = False) -> int:
     problems = 0
     print(f'pf 命令：{HERE / "pf.py"}')
     print(f'工具树：{TOOLS}')
-    for path in (STATE_MANAGE, HANDOFF, CONDUCT_PIPELINE, DAG, ISSUE, LEDGER_MERGE, SESSION_NOTE):
+    for path in TOOL_FILES:
         if not path.is_file():
             print(f'  ✗ 缺 {path}')
             problems += 1

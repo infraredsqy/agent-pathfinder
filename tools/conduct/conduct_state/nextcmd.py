@@ -240,13 +240,14 @@ def cmd_dispatch(args) -> None:
     prompts = []
     already = []
     for node_id in holding:
-        directory = pipeline.meta_dir(root) / 'launch' / cycle_id / node_id
+        # prompt 的落点与 started 记号都由管线那一侧算（`prompts.launch_prompt_path` /
+        # `started_marker`）：这一侧只交出「哪条线、哪一格」。
         if pipeline.started_marker(root, cycle_id, node_id).is_file():
             # 这一格的会话已经开过了（started 记号是上一次成功派发留下的）。再交给 spawner 一次
             # 就是在同一个节点上开第二个会话 —— 跳过它，绝不重开。
             already.append(node_id)
             continue
-        prompt = directory / 'prompt.txt'
+        prompt = pipeline.launch_prompt_path(root, cycle_id, node_id)
         if not prompt.is_file():
             print(f'Error: no prompt file at {prompt}. That file is written by the closing call '
                   f'that settled this node: `pf next --after {node_id} --json`.',

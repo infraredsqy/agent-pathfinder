@@ -3,13 +3,13 @@
 
 一次失败意味着这条链不会再自己往前走。**标记存在 = 链现在是断的** —— 它是人工进来接管的
 唯一入口，所以它必须显眼：写不进盘、静默降级都是这条判据失效的形态，也正是这个模块存在的
-理由。调用点收成两处：python 侧（`pipeline/handoff.py` 的坏条子那一拍等）直接用下面这三个函数；
-两份 spawner 共用的那一层（`spawn/spawn-common.ps1`）按同一份形状自己写 —— 那条例外与它的理由
-写在 `写法` 那一条里。
+理由。调用点收成两处：python 侧（`pipeline/handoff.py` 的条子写不下去那一拍）直接用下面这三个
+函数；两份 spawner 共用的那一层（`spawn/spawn-common.ps1`）按同一份形状自己写 —— 那条例外与它的
+理由写在 `写法` 那一条里。
 
     落点    marker_path(project, cycle) —— `<project>/.pf/meta/CONDUCT-CALLBACK-FAILED-<cycle>.json`
             按线分文件：并行=2 时两条线并排跑，本线成功只清本线的标记，不抹别线的断链记号。
-    形状    record(cycle, phase, reason, attempts=, workspace=, extra=, note=) —— 一份，写它的
+    形状    record(cycle, phase, reason, attempts=, workspace=, extra=) —— 一份，写它的
             每一条路都长出同一个形状；宿主自己的事实（dsh 的 api_base、zcode 的 db）走 `extra`
             那一个槽，漂移不再落在字段上。
     写法    write(path, payload) —— `tools/shared/jsonio.py` 的原子写：临时文件 + 同卷改名 +
@@ -19,7 +19,7 @@
             没法 import 这个模块，这条写入又恰恰是链断掉之后唯一留给人的入口。两份实现的形状由
             `conduct/tests/cases_cli.py` 的 `TestTheSpawnerShell` 钉住（同一组键、同一句人话）。
     谁写    失败的那一拍自己：spawner 在自己的失败点上写（`spawn/spawn-common.ps1` 那一层自己写盘，
-            形状照这份），条子写不下去、管线拒收的收尾拍由 `pipeline/handoff.py` 写。
+            形状照这份），条子写不下去的那一拍由 `pipeline/handoff.py` 写。
             **一处失败只落一条**：第一次的那条是根因，后面的不再覆盖它。
     谁清    spawner 成功路径（`spawn/spawn-common.ps1`）：删文件没有形状可言，而成功那一拍不该
             因为清不掉而失败（清不掉不许挡派发成功），所以清不经过这里。
@@ -54,8 +54,8 @@ SHARED = CONDUCT.parent / 'shared'
 #: 标记文件名的唯一拼法。一条线一个文件，`{cycle}` 就是 spawner 递过来的那个 cycle id。
 MARKER_NAME = 'CONDUCT-CALLBACK-FAILED-{cycle}.json'
 
-#: 标记自己写下的那句人话：链断在哪、怎么接管、什么时候可以删。调用方有更具体的走法时说那一句
-#: （`handoff.py` 的坏条子那一拍），其余一律用这条 —— 同一件事只有一份说法。
+#: 标记自己写下的那句人话：链断在哪、怎么接管、什么时候可以删。写它的每一条路都用这一条 ——
+#: 同一件事只有一份说法。
 DEFAULT_NOTE = ('链条断在这里：本拍没能把下一棒开起来，管线不会再自己往前走。手动接管是 '
                 '`pf next --after <node_id>`（收尾那一拍）或 `pf dispatch <cycle>`（派发那一拍）；'
                 '确认无碍后删掉本文件。')
@@ -99,13 +99,13 @@ def marker_path(project, cycle: str) -> Path:
 
 
 def record(cycle: str, phase: str, reason: str, *, attempts: int = 0, workspace='',
-           extra=None, note: str | None = None) -> dict:
+           extra=None) -> dict:
     """标记在盘上的那份记录，一处长成。
 
     `phase` 是断在哪一步（spawner 自己的步骤名），`reason` 是那一拍的原话，`attempts` 是那一步
     数过的尝试次数（没数就是 0），`workspace` 是这条线的项目根，`extra` 是宿主自己的事实
     （dsh 的 api_base、zcode 的 db）：它们对一个来排障的人是线索，所以留一个槽，而不是让两份
-    spawner 各长一套字段。
+    spawner 各长一套字段。`note` 是这份形状固定的那句话（`DEFAULT_NOTE`）。
     """
     return {
         'cycle_id': str(cycle),
@@ -115,7 +115,7 @@ def record(cycle: str, phase: str, reason: str, *, attempts: int = 0, workspace=
         'workspace': str(workspace),
         'extra': dict(extra or {}),
         'detected_at': datetime.now(timezone.utc).isoformat(),
-        'note': note or DEFAULT_NOTE,
+        'note': DEFAULT_NOTE,
     }
 
 

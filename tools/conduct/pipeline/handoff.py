@@ -26,10 +26,8 @@ no session. It also leaves a readable middle state: a ticket on disk whose node 
 yet is how a chain that broke halfway shows up (the planner answers `wait` with the closing command).
 The worker never reads this program's output and never touches a state file.
 
-**交条子这一拍不驱动管线。** 写下条子之后它只读一遍下一步（`plan`，只读），把那个答案里的收尾
-命令报给会话；把线推到下一个稳定动作 —— 收格、挑下一格、给下一格落 `prompt.txt` —— 全是收尾那一
-拍（`next --after <node_id>`）与派发的事。所以这个命令一个字节的状态都不写，下一格的 prompt 也不
-可能由报条子的会话写下。
+交条子这一拍只写条子、读一遍 `plan`（只读）、把答案里的收尾命令报给会话 —— 状态与下一格的
+prompt 都不由这一拍写。
 
 The one gate is the cycle's own hand: a ticket is accepted only while the cycle is holding the
 node, so a stale session reporting on a node that was closed and released long ago is refused
@@ -117,8 +115,7 @@ def _ledger_name() -> str:
     return _store().LEDGER_NAME
 
 
-def _write_marker(project: Path, cycle: str, phase: str, reason: str, attempts: int = 0,
-                  note: str | None = None) -> None:
+def _write_marker(project: Path, cycle: str, phase: str, reason: str, attempts: int = 0) -> None:
     # Not part of the record: the marker is a "this chain broke" flag a human deletes once they
     # have taken over, so it must not travel with the project's history. It sits in `meta/`, which
     # `.pf/.gitignore` keeps out of both the project's history and the ledger's own. One file per
@@ -132,7 +129,7 @@ def _write_marker(project: Path, cycle: str, phase: str, reason: str, attempts: 
     path = marker.marker_path(project, cycle)
     try:
         marker.write(path, marker.record(cycle, phase, reason, attempts=attempts,
-                                         workspace=project, note=note))
+                                         workspace=project))
         print(f'WARNING: conduct handoff failed; wrote {path}', file=sys.stderr)
     except OSError as e:  # never let the marker itself become the failure
         print(f'WARNING: could not write the handoff failure marker: {e}', file=sys.stderr)
@@ -259,19 +256,6 @@ def main(argv=None) -> int:
     else:
         print(f'handoff: {args.node} ticket written; the pipeline reads {kind} '
               f'({action.get("note") or action.get("reason") or ""})')
-        if kind == 'fail_hard':
-            # A chain that breaks leaves a loud mark and a non-zero exit. Without this the
-            # worker's session sees rc=0, no session is ever started, and the run stops with
-            # nobody told -- "the machine sat there quietly".
-            _write_marker(
-                project, args.cycle, 'bad-signal',
-                action.get('reason') or 'the pipeline refused the signal',
-                note=(f'这一步的条子被管线判坏（reason 里点名了原因）。清掉它重报：'
-                      f'pf cycle retry {args.cycle} {args.node}，再跑一次'
-                      f'handoff；确认无碍后删掉本文件。'))
-            print('Error: the pipeline refused this signal; see the marker file.',
-                  file=sys.stderr)
-            return 1
     return 0
 
 

@@ -309,3 +309,14 @@ def mode_for(node_id: str | None, dag: dict) -> str:
     """
     node = ((dag.get('nodes') or {}).get(node_id) or {}) if node_id else {}
     return normalize_mode(node.get('mode'))
+
+
+def node_row(dag: dict, node_id: str) -> dict:
+    """图里那一格，并把 id 交进去 —— id 是记录的键，行里没有它。
+
+    取一格节点记录的形状只有这一处：停手判据读的就是这一份，派发与维护那两条路各自的条目也从它
+    长出来。图里没有这一格时给的是一份只有 id 的空行（调用方按 `.get()` 读，缺什么都读作默认）。
+    """
+    row = dict((dag.get('nodes') or {}).get(node_id) or {})
+    row['id'] = node_id
+    return row

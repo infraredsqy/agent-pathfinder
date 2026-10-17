@@ -32,7 +32,7 @@ NODE3 = 'cccccccc-3333-4333-8333-cccccccccccc'
 # maintenance node and pins the cycle on it, then `apply` re-plans into its dispatch. No caller ever
 # receives either of them.
 ACTION_VOCABULARY = {'dispatch', 'open_node', 'maintenance_due', 'stop_pipeline', 'wait', 'ask_user',
-                     'no_cycle', 'fail_hard'}
+                     'no_cycle'}
 
 
 def skill_of(action):

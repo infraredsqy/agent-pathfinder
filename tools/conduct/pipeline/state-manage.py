@@ -109,31 +109,25 @@ class _NextHelp(argparse.Action):
 
 def _layer(args) -> str:
     """`--global` 说的是哪一层：没有它就是项目那一层。"""
-    return 'global' if getattr(args, 'global_', False) else 'project'
+    return 'global' if args.global_ else 'project'
 
 
 #: 唯一的路由表：解析好的 args 变成一次调用，全在这里。键是 `(顶层动词, 子动词)` —— 叶子动词的
 #: 子动词是 None。加一个动词就是加一行，叶子动词与三组子动词看的是同一张表。
+#:
+#: 每一行只读解析器交出来的那一份字段：缺省值住在 parser 上（哪一条命令的哪一面旗标，`--help`
+#: 就是它），这里不再替它重说一遍 —— 重说等于同一件事有两个来源，改一个忘一个就是那条命令的
+#: 行为与 `--help` 分叉。
 _ROUTES = {
-    ('init', None): lambda a: cmd_init(getattr(a, 'project', None),
-                                       getattr(a, 'mode', None) or 'local',
-                                       getattr(a, 'own_repo', True)),
-    ('register', None): lambda a: cmd_register(getattr(a, 'project', None)),
-    ('clean-temp', None): lambda a: cmd_clean_temp(getattr(a, 'project', None),
-                                                   getattr(a, 'node', None),
-                                                   getattr(a, 'yes', False),
-                                                   getattr(a, 'force', False)),
+    ('init', None): lambda a: cmd_init(a.project, a.mode, a.own_repo),
+    ('register', None): lambda a: cmd_register(a.project),
+    ('clean-temp', None): lambda a: cmd_clean_temp(a.project, a.node, a.yes, a.force),
     ('fork-worktree', None): lambda a: cmd_fork_worktree(a.node),
     ('next', None): cmd_next,
     ('dispatch', None): cmd_dispatch,
 
-    ('cycle', 'create'): lambda a: cmd_cycle_create(a.id, a.title,
-                                                    getattr(a, 'force', False),
-                                                    getattr(a, 'tags', None)),
-    ('cycle', 'start'): lambda a: cmd_cycle_start(a.id, a.title,
-                                                  getattr(a, 'force', False),
-                                                  getattr(a, 'tags', None),
-                                                  getattr(a, 'parallel', None)),
+    ('cycle', 'create'): lambda a: cmd_cycle_create(a.id, a.title, a.force, a.tags),
+    ('cycle', 'start'): lambda a: cmd_cycle_start(a.id, a.title, a.force, a.tags, a.parallel),
     ('cycle', 'rename'): lambda a: cmd_cycle_rename(a.id, a.title),
     ('cycle', 'status'): lambda a: cmd_cycle_status(a.id, a.status),
     ('cycle', 'policy'): lambda a: cmd_cycle_policy(a.id, a.key, a.value),
@@ -142,38 +136,24 @@ _ROUTES = {
     ('cycle', 'show'): lambda a: cmd_cycle_show(a.id, a.node),
     ('cycle', 'hold'): lambda a: cmd_cycle_hold(a.id, a.node),
     ('cycle', 'close'): lambda a: cmd_cycle_close(a.id, a.node, a.result),
-    ('cycle', 'retry'): lambda a: cmd_cycle_retry(a.id, a.node, getattr(a, 'summary', None),
-                                                  getattr(a, 'drop', False)),
+    ('cycle', 'retry'): lambda a: cmd_cycle_retry(a.id, a.node, a.summary, a.drop),
 
-    ('instruction', 'add'): lambda a: cmd_instruction_add(a.text, a.scope, a.target,
-                                                          getattr(a, 'said_by', 'user'),
-                                                          getattr(a, 'note', None),
-                                                          getattr(a, 'stop_after_nodes', None),
-                                                          getattr(a, 'cycle', None),
-                                                          getattr(a, 'node', None)),
-    ('instruction', 'list'): lambda a: cmd_instruction_list(getattr(a, 'json', False),
-                                                            getattr(a, 'live', False),
-                                                            getattr(a, 'project', None),
-                                                            getattr(a, 'scope', None),
-                                                            getattr(a, 'all_entries', False),
-                                                            getattr(a, 'node', None)),
-    ('instruction', 'resolve'): lambda a: cmd_instruction_resolve(a.ins_id, a.state,
-                                                                  getattr(a, 'note', None),
-                                                                  getattr(a, 'project', None)),
+    ('instruction', 'add'): lambda a: cmd_instruction_add(a.text, a.scope, a.target, a.said_by,
+                                                          a.note, a.stop_after_nodes, a.cycle,
+                                                          a.node),
+    ('instruction', 'list'): lambda a: cmd_instruction_list(a.json, a.live, a.project, a.scope,
+                                                            a.all_entries, a.node),
+    ('instruction', 'resolve'): lambda a: cmd_instruction_resolve(a.ins_id, a.state, a.note,
+                                                                  a.project),
 
-    ('config', 'list'): lambda a: cmd_config_list(getattr(a, 'project', None)),
-    ('config', 'get'): lambda a: cmd_config_get(a.key, getattr(a, 'project', None)),
-    ('config', 'set'): lambda a: cmd_config_set(a.key, a.value, _layer(a),
-                                                getattr(a, 'project', None)),
-    ('config', 'unset'): lambda a: cmd_config_unset(a.key, _layer(a),
-                                                    getattr(a, 'project', None)),
+    ('config', 'list'): lambda a: cmd_config_list(a.project),
+    ('config', 'get'): lambda a: cmd_config_get(a.key, a.project),
+    ('config', 'set'): lambda a: cmd_config_set(a.key, a.value, _layer(a), a.project),
+    ('config', 'unset'): lambda a: cmd_config_unset(a.key, _layer(a), a.project),
 
-    ('session', 'show'): lambda a: cmd_session_show(a.node, getattr(a, 'project', None),
-                                                    getattr(a, 'json', False)),
-    ('session', 'list'): lambda a: cmd_session_list(getattr(a, 'project', None),
-                                                    getattr(a, 'json', False)),
-    ('session', 'import'): lambda a: cmd_session_import(getattr(a, 'project', None),
-                                                        getattr(a, 'dry_run', False)),
+    ('session', 'show'): lambda a: cmd_session_show(a.node, a.project, a.json),
+    ('session', 'list'): lambda a: cmd_session_list(a.project, a.json),
+    ('session', 'import'): lambda a: cmd_session_import(a.project, a.dry_run),
 }
 
 
@@ -312,6 +292,12 @@ def main(argv=None) -> None:
                             'waits on it forever, so dropping it is what lets the retry be '
                             'dispatched')
 
+    # `--scope` 的候选集与判定同源：`SCOPES` 住在管线那一侧，取它要把那个模块按路径读一遍。
+    # 这笔装载税推迟不了 —— argparse 在 `add_argument` 那一步就迭代 `choices` 去拼 metavar，
+    # 于是每条命令都付一次（十几毫秒）。换来的是 `--help` 印出来的值清单不会与判定漂开；
+    # 两个 `--scope`（`instruction add` 与 `list`）共用这一份。
+    scope_choices = list(valid_scopes())
+
     p_ins = sub.add_parser(
         'instruction', help='Standing user instructions (append-only account)',
         description='Three scopes. Whether an entry can be read is decided by WHERE it was recorded, '
@@ -330,7 +316,7 @@ def main(argv=None) -> None:
     ins_sub = p_ins.add_subparsers(dest='instruction_command')
     p_ia = ins_sub.add_parser('add', help='Append one instruction, verbatim')
     p_ia.add_argument('--text', required=True, help='The sentence, EXACTLY as the user said it')
-    p_ia.add_argument('--scope', dest='scope', default='global', choices=list(valid_scopes()),
+    p_ia.add_argument('--scope', dest='scope', default='global', choices=scope_choices,
                       help='Where this instruction is visible from (`instruction --help`): global = '
                            'everywhere; cycle = the cycle it is recorded in, out of sight once that '
                            'cycle ends; node = the node it is recorded in, out of sight once that '
@@ -369,7 +355,7 @@ def main(argv=None) -> None:
                       help='Account view: only the entries whose state is live')
     p_il.add_argument('--all', dest='all_entries', action='store_true',
                       help='Account view: the whole account, retired entries included')
-    p_il.add_argument('--scope', dest='scope', default=None, choices=list(valid_scopes()),
+    p_il.add_argument('--scope', dest='scope', default=None, choices=scope_choices,
                       help='Account view narrowed to one scope. `--scope global` reads out the '
                            'global entries')
     p_il.add_argument('--project', default=None,
@@ -406,9 +392,11 @@ def main(argv=None) -> None:
                     '`set` / `unset` write the project layer unless --global says otherwise.',
         formatter_class=argparse.RawDescriptionHelpFormatter)
     cfg_sub = p_cfg.add_subparsers(dest='config_command')
-    cfg_sub.add_parser('list', help='Every effective value, and the layer it came from')
+    p_cfg_list = cfg_sub.add_parser('list', help='Every effective value, and the layer it came from')
+    p_cfg_list.add_argument('--project', default=None, help='Project root (default: current directory)')
     p_cfg_get = cfg_sub.add_parser('get', help='Print one effective value, and nothing else')
     p_cfg_get.add_argument('key', choices=sorted(CONFIG_SPEC))
+    p_cfg_get.add_argument('--project', default=None, help='Project root (default: current directory)')
     p_cfg_set = cfg_sub.add_parser('set', help='Write one override (the project layer by default)')
     p_cfg_set.add_argument('key', choices=sorted(CONFIG_SPEC))
     p_cfg_set.add_argument('value')
@@ -521,7 +509,7 @@ def main(argv=None) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     p_init.add_argument('--project', default=None, help='Project root (default: current directory)')
     p_mode = p_init.add_mutually_exclusive_group()
-    p_mode.add_argument('--local', dest='mode', action='store_const', const='local',
+    p_mode.add_argument('--local', dest='mode', action='store_const', const='local', default='local',
                         help='Keep `.pf/` out of the project\'s repository (the default)')
     p_mode.add_argument('--commit', dest='mode', action='store_const', const='commit',
                         help='Let `.pf/` go into the project\'s repository')

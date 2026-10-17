@@ -15,7 +15,7 @@ because those are what a caller patches. The machinery is here:
     prompts.py   what a dispatch prompt says (the invocation line, and the node's text)
     maintenance.py the maintenance channel: the reading, the lines it is measured
                  against, and the graph edit that puts a maintenance node in between
-    actions.py   state -> an action package (dispatch / wait / ask_user / stop / fail_hard)
+    actions.py   state -> an action package (dispatch / wait / ask_user / stop)
     planner.py   `plan()`: the pure decision, including the node's own close
     writer.py    `apply()` / `record()`: run the commands, and enforce the apply contract
 
@@ -41,8 +41,8 @@ from . import writer  # noqa: F401
 
 #: Everything `conduct_pipeline.py` re-exports: one flat surface, exactly what this module had at module
 #: scope before the split, minus the names the entry keeps for itself (its own paths, the seam
-#: functions, and the CLI: `ACTIONS`, `_render_contract`, `main`). It is the tree's only export list --
-#: the layers keep none of their own, so there is no second list to drift from this one.
+#: functions, and the CLI: `ACTIONS`, `_render_contract`, `main`). It is the only export list in this
+#: package -- the layers keep none of their own, so there is no second list to drift from this one.
 __all__ = [
     # the layers themselves, for a caller that wants to poke at one of them
     'seam', 'store', 'instruct', 'nodes', 'prompts', 'maintenance', 'actions', 'planner', 'writer',
@@ -66,7 +66,7 @@ __all__ = [
     'tag_blocked_ready_nodes', 'holding_ready_nodes', 'blocked_reason', 'pick_node', 'node_spec_path',
 
     # prompts: what a dispatch prompt says
-    'write_prompt_file', 'build_prompt_text', 'mode_for', 'started_marker',
+    'write_prompt_file', 'build_prompt_text', 'mode_for', 'started_marker', 'launch_prompt_path',
 
     # maintenance: the maintenance channel
     'READING_KEYS', 'MAINTENANCE_ACTION', 'METRICS', 'crossed', 'reading_of',

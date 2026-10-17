@@ -56,7 +56,7 @@ Invariants this module owns, each of which cost a bug to learn
 
 Usage:
     python conduct_pipeline.py plan   [--cycle ID] [--project DIR]
-    python conduct_pipeline.py apply  [--cycle ID] [--project DIR]
+    python conduct_pipeline.py apply  [--cycle ID] [--project DIR] [--after NODE_ID]
     python conduct_pipeline.py record [--cycle ID] [--project DIR]
     python conduct_pipeline.py contract
 
@@ -246,8 +246,7 @@ globals().update({name: getattr(_impl, name) for name in _impl.__all__})
 
 # The action vocabulary, printable with `conduct_pipeline.py contract`. Kept as data so the doc and
 # the code cannot drift: the same list answers "what can `next` hand me". This dict is the single
-# source of the names -- a name added to the code without a line here, or a line here with no
-# producer, fails the suite.
+# source of the names.
 ACTIONS = {
     'dispatch':      '一个节点已钉住、prompt 已落盘 —— 把它派出去（`dispatch <cycle>` 就是干这个；'
                      '`next --spawn` 是一次到位的同一次调用）',
@@ -259,7 +258,6 @@ ACTIONS = {
     'wait':          '还没到能动手的时候 —— 读 note / close_with，绝不轮询',
     'ask_user':      '状态有歧义 —— 问人',
     'no_cycle':      '还没有 cycle —— 开 cycle 要人的意图',
-    'fail_hard':     '状态坏了 / 链走不下去 —— 把 reason 和 options 摆给用户',
 }
 
 
@@ -281,12 +279,15 @@ def main(argv=None) -> int:
     `actions.render_action`'s, the same one `pf next` prints through, so the two spellings of the
     pipeline's front door cannot drift apart in what they show.
 
-    The closing call's answers (`--continue` / `--stop` / `--node` / `--note`) are refused without
-    `--plan`, exactly as `pf next` refuses them without `--after` or `--plan`: with nothing being
-    settled, there is no question for them to answer, and a quiet no-op would read as if that answer
-    had been taken. `apply` is this module's spelling of `pf next --after <node>` -- the settle that
-    reads the ticket -- so it makes that call with the same `self_verified` and `decision_given` the
-    CLI does; the reason text a human reads is therefore the same on both.
+    The closing call's answers (`--continue` / `--stop` / `--node` / `--note`) are refused unless
+    something is being settled or previewed, exactly as `pf next` refuses them without `--after` or
+    `--plan`: with nothing being settled, there is no question for them to answer, and a quiet no-op
+    would read as if that answer had been taken. `apply` is this module's spelling of
+    `pf next --after <node>` -- the settle that reads the ticket -- so `--after` names the node it is
+    about (one line can hold several at once) and the closing answers ride with it; the reason text a
+    human reads is the same on both entries, `self_verified` and `decision_given` included. `--after`
+    is refused where nothing is settled (`plan` / `record`): the preview spelling of a closing call is
+    `plan` with the same answers.
     """
     # 中文 everywhere：reason、options、contract 全是人话。两个流都按 UTF-8 走，否则控制台代码页
     # （这台机器默认 GBK）把字节写歪，按 UTF-8 解码的父进程直接炸在读线程上（stdout 变 None）。
@@ -304,6 +305,9 @@ def main(argv=None) -> int:
     parser.add_argument('--stop', dest='stop', action='store_true',
                         help="the closing call's answer: stop here (parks the cycle)")
     parser.add_argument('--node', help="the closing call's override: which node to run next")
+    parser.add_argument('--after', dest='after', default=None, metavar='NODE_ID',
+                        help='apply: settle THIS node -- how a line holding more than one node says '
+                             'which close this is')
     parser.add_argument('--note', default='', help='why the closing call decided that')
     parser.add_argument('--json', action='store_true')
     args = parser.parse_args(argv)
@@ -314,16 +318,22 @@ def main(argv=None) -> int:
 
     decision = 'continue' if args.cont else 'stop' if args.stop else None
     decision_given = bool(args.cont or args.stop)
-    if (decision or args.node or args.note) and args.command != 'plan':
+    if args.after and args.command != 'apply':
+        print('Error: --after names the node `apply` settles, and nothing is settled by '
+              f'`{args.command}`. Nothing was changed.', file=sys.stderr)
+        return 2
+    if (decision or args.node or args.note) and args.command != 'plan' and not args.after:
         print("Error: --continue/--stop/--node/--note are the closing call's answers and need "
-              '`plan` (preview that call). Nothing was changed.', file=sys.stderr)
+              '`plan` (preview that call) or `apply --after <node_id>` (settle that node). '
+              'Nothing was changed.', file=sys.stderr)
         return 2
     try:
         if args.command == 'record':
             action = record(args.project, args.cycle)
         elif args.command == 'apply':
             action = apply(args.project, args.cycle, decision=decision, node=args.node,
-                           note=args.note, self_verified=True, decision_given=decision_given)
+                           note=args.note, self_verified=True, after=args.after,
+                           decision_given=decision_given)
         else:
             action = plan(args.project, args.cycle, decision=decision, node=args.node,
                           note=args.note, decision_given=decision_given)

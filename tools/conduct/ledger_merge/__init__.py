@@ -34,8 +34,9 @@ every line. `git merge` would then stop on a conflict that is not one, or worse,
 produce a nonsense mixture of the two files. So the merge is done on the parsed records, and the
 result is written back through the tools' OWN writers, byte for byte the way `state-manage.py` /
 `dag-manage.py` would have written it: this module asks each file's owner for the record's bytes
-(`conduct_state.store.record_bytes`, `dag-manage.py`'s `ideas_bytes`) and lands them through the one
-atomic writer (`tools/shared/jsonio.py`), so the two formats can never drift apart.
+(`conduct_state.store.record_bytes`, `dag-manage.py`'s `ideas_bytes`) and hands them back to that
+same owner to land (`write_record_bytes` / `write_ideas_bytes`), so a merge's judgement and its bytes
+come from one tree and the two formats can never drift apart.
 
 One record per entry, and what identifies it
 --------------------------------------------
@@ -230,7 +231,7 @@ def _read(path: Path, label: str):
         raise
 
 
-def _write(path: Path, payload: bytes) -> bool:
+def _write(kind: str, path: Path, payload: bytes) -> bool:
     """Land the merged bytes under the project's ledger lock; False when the lock never came free.
 
     `.pf/meta/ledger.lock` is what makes this driver exclude the mutating commands (conduct / dag /
@@ -240,19 +241,21 @@ def _write(path: Path, payload: bytes) -> bool:
     maps to the main tree by the store's own rule, which is where the lock (and the ledger) live. A
     lock that stays busy is a write that could not be made exclusively: the driver exits 1, git marks
     the conflict, and a human reruns the merge.
+
+    The bytes go down through `_owner_write`, the same owner `_owner_bytes` computed them in, so the
+    judgement and the landing are never two trees' answers.
     """
-    jsonio = _shared('pf_shared_jsonio', 'jsonio.py')
     lock = _shared('pf_shared_ledgerlock', 'ledgerlock.py')
     try:
         with lock.ledger_lock(store().ledger_dir_for(), gate=store().require_initialized):
-            jsonio.atomic_write_bytes(path, payload)
+            _owner_write(kind, path, payload)
     except TimeoutError as e:
         print(f'Error: {e}', file=sys.stderr)
         return False
     return True
 
 
-def _serialize(kind: str, data) -> bytes:
+def _owner_bytes(kind: str, data) -> bytes:
     """The bytes the file's OWNER would leave -- for "did this merge change anything at all".
 
     `ideas.json` is dag-manage's file and `state.json` / `instructions.json` / a ticket are the
@@ -262,6 +265,19 @@ def _serialize(kind: str, data) -> bytes:
     if kind == KIND_IDEAS:
         return dag_manage().ideas_bytes(data)
     return store().record_bytes(data)
+
+
+def _owner_write(kind: str, path: Path, payload: bytes) -> None:
+    """Those same bytes, landed by the same owner that computed them.
+
+    The landing primitive is `tools/shared/jsonio.py` in the OWNER's tree, not this module's:
+    `DSH_CONDUCT_STATE_DIR` / `DSH_CONDUCT_DAG_MANAGE` can point a draft copy at another tree, and a
+    file judged by one tree's format and written by another's writer is two answers to one question.
+    """
+    if kind == KIND_IDEAS:
+        dag_manage().write_ideas_bytes(path, payload)
+    else:
+        store().write_record_bytes(path, payload)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -354,7 +370,7 @@ def run(args) -> int:
         return EXIT_CONFLICT
 
     try:
-        payload = _serialize(kind, merged)
+        payload = _owner_bytes(kind, merged)
     except (TypeError, ValueError) as e:
         print(f'ledger-merge [{rep.path}]: 合出来的结果不是合法 JSON：{e}', file=sys.stderr)
         return EXIT_USAGE
@@ -367,7 +383,7 @@ def run(args) -> int:
     if current == payload:
         return EXIT_OK                    # nothing to change: do not touch the file at all
     try:
-        wrote = _write(ours_path, payload)
+        wrote = _write(kind, ours_path, payload)
     except FileNotFoundError as e:
         return _no_such_tool(e)
     return EXIT_OK if wrote else EXIT_CONFLICT

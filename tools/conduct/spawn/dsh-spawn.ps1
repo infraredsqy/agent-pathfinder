@@ -119,7 +119,14 @@ function New-BrowserSessionCookie {
     return "$name=v1.$body.$sig"
 }
 
-$authority = ([uri]$base).Authority
+try {
+    $authority = ([uri]$base).Authority
+}
+catch {
+    # 基址本身不成形：链在这一拍就断了，和签 cookie / POST 失败同一类事故 —— 一样留标记再退出。
+    Write-CallbackFailureMarker -Phase 'auth' -Reason $_.Exception.Message
+    throw
+}
 $cookieHeader = $null
 try {
     $cookieHeader = if ($Token) {

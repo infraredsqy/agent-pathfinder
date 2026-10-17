@@ -12,7 +12,7 @@ from pathlib import Path
 from .store import (CYCLE_VALID_STATUSES, PARALLEL_DEFAULT, VALID_NODE_RESULTS,
                     _find_cycle, _holding_ids, _holding_of, _ledger_lock, _now, _read_signal,
                     _read_state, _resolve_project_root, _set_holding, _signal_path, _shared,
-                    _write_signal, _write_state, meta_dir_for)
+                    _write_signal, _write_state, ledger_dir_for)
 from .pipeline_loader import _load_pipeline
 
 
@@ -453,6 +453,9 @@ def cmd_cycle_retry(cycle_id: str, node_id: str, summary: str | None,
     起步的那一步 —— 只要还有一张 `pending` 条子，`next` 就永远答 `wait`，一个字节都推不动
     （这条卡住过一条线）。
     """
+    if drop:
+        # 装载放在锁外面：它不是这次读-改-写的一部分。
+        pipeline = _load_pipeline()
     with _ledger_lock():
         state = _read_state()
         _find_cycle(state, cycle_id)
@@ -462,7 +465,9 @@ def cmd_cycle_retry(cycle_id: str, node_id: str, summary: str | None,
             if sp.exists():
                 remove(sp)
             # 会话那条记号也一并抹掉：留着它，重试根本派不出去（派发会把这一格跳过，见 nextcmd）。
-            remove(_launch_dir(cycle_id, node_id) / 'started')
+            # 这枚记号与 prompt / claim 同住一处（`prompts.started_marker`），这里只交出「哪条线、
+            # 哪一格」，落点算法不在这边再拼一份。
+            remove(pipeline.started_marker(ledger_dir_for(None).parent, cycle_id, node_id))
             print(f'Signal dropped (no ticket left): {sp}')
             return
         if sp.exists():
@@ -536,11 +541,4 @@ def cmd_cycle_rename(cycle_id: str, title: str) -> None:
         cycle['updated_at'] = _now()
         _write_state(state)
     print(f'RENAMED: "{cycle_id}" → "{title}"')
-
-
-# ── the launch dir ───────────────────────────────────────────────────────────
-
-def _launch_dir(cycle_id: str, node_id: str) -> Path:
-    """`.pf/meta/launch/<cycle>/<node>/` —— 派发那一格的落点（prompt / claim / started 都在里面）。"""
-    return meta_dir_for(None) / 'launch' / cycle_id / node_id
 
