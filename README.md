@@ -73,8 +73,13 @@ Worker sessions are skills, linked into `~/.agents/skills`:
 
 ## Development
 
+Each tool's suite runs from `tools/` — nothing is discovered under the `tools/` root itself:
+
 ```pwsh
 cd tools
+python -m unittest discover -s dag/tests -t .
+python -m unittest discover -s issue/tests -t .
+python -m unittest discover -s shared/tests -t .
 python -m unittest discover -s conduct/tests -t .
 ```
 
