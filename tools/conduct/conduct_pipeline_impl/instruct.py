@@ -84,7 +84,7 @@ def instruction_in_scope(ins: dict, nodes: dict, active: set, cycle: str | None 
     The other two scopes are read against **where the reader stands**, and that is what the last two
     arguments are: `cycle` is the line the reader works on, `node` is the node in its hand. Given
     them, the judgement is an exact comparison -- the entry's own binding against the reader's place
-    -- which is the whole rule (docs/conduct-state.md「用户的指令现读」): a session running
+    -- which is the whole rule: a session running
     `instruction list` and the close settling a node stand in the same place, so they read the same
     constraints. A constraint bound to another node is not read at this one.
 
