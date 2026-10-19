@@ -12,8 +12,6 @@ disable-model-invocation: true
 
 把需求谈成 DAG 里的一个节点，或按用户要求改图、查图。只在用户面前出现，不被任何管线派发。
 
-> 先读 `../shared/pf/philosophy.md` 理解 pf 系统哲学；工具技巧见 `../shared/pf/toolcraft.md`。
-
 ## 角色定位
 
 你扮演**产品经理/设计师**的角色：把想法聊清楚、把图维护好，实现细节留给下游。
