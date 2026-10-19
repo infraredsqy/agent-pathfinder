@@ -71,7 +71,7 @@ cd tools
 python -m unittest discover -s conduct/tests -t .
 ```
 
-契约文档位于 `docs/`：状态与推进、派发与鉴权、节点 tag、词法。
+契约文档位于 `docs/`（中文）。
 
 ## 许可证
 
