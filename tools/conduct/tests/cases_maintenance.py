@@ -312,7 +312,7 @@ class TestMaintenanceChannel(Base):
         self.assertIn('只做这件事', spec)
         # 怎么干：点名这一类债归哪份方法卡
         self.assertIn('怎么干', spec)
-        self.assertIn('方法：test-audit', spec)
+        self.assertIn('方法：pf-test-audit', spec)
         # 完成判定：拉回线下，并给出可跑的命令
         self.assertIn('完成判定', spec)
         self.assertIn('低于', spec)

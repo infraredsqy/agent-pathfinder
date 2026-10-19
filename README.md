@@ -70,6 +70,7 @@ Worker sessions are skills, linked into `~/.agents/skills`:
 | `pf-issue-scan` | find debt in the code that is not in the pool yet |
 | `pf-issue-discuss` | go through the pool with the human, batch by batch |
 | `pf-issue-repair` | repair pool debt back under its weight limit |
+| `pf-test-audit` | audit the test suite: delete what verifies nothing, move or split what slows the fast lane |
 
 ## Development
 

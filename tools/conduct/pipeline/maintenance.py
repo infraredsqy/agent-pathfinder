@@ -86,7 +86,7 @@ METRICS = (
         'where': '条子 `outputs.reading.test_seconds`（跑过全量验证的那个会话实测）',
         'criterion': '下一次收尾条子里 `reading.test_seconds` 必须**低于**',
         'remedy': '把项目文档认定的那套全量验证命令**实测**跑一遍（不许估算），把实测秒数报进条子',
-        'method': 'test-audit',
+        'method': 'pf-test-audit',
     },
     {
         'reading': 'issue_pool_weight',
