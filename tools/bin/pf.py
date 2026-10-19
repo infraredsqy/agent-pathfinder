@@ -69,9 +69,14 @@ def _store():
                                         register=True, reuse=True)
     return _STORE
 
+#: This tree's own version. Release tags are `v<version>`, and every build handed to someone
+#: carries its own number -- one number, one content.
+VERSION = '0.1.0-alpha.1'
+
+
 def _verb_version(rest: list[str]) -> int:
-    """`pf version`: where this checkout lives."""
-    print(f'pf at {HERE} (tools: {TOOLS})')
+    """`pf version`: this tree's version, and where the checkout lives."""
+    print(f'pf {VERSION} at {HERE} (tools: {TOOLS})')
     return 0
 
 
@@ -92,7 +97,7 @@ def _verb_doctor(rest: list[str]) -> int:
 SELF_VERBS = (
     ('doctor', 'doctor [--fix]',
      'read the health of this checkout and this project', _verb_doctor),
-    ('version', 'version', 'print where this checkout lives', _verb_version),
+    ('version', 'version', 'print the version and where this checkout lives', _verb_version),
     ('migrate', 'migrate',
      'inactive for now -- it reopens when this system itself needs migrating', _verb_migrate),
 )
