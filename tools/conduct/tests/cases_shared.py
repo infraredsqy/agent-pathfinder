@@ -363,7 +363,7 @@ class TestTheMarkerContract(Base):
     标记是人工发现「链断在这里」的唯一入口，所以这一组盯三件事：文件名与记录形状只在正本里拼一次
     （两个 spawner 都不再自拼落点）、python 侧写它走的是全树那条带重试的原子写、条子那一拍与 spawner
     那一拍交出的是同一个形状。壳侧那份实现是物理上无法共享的例外（运行点可能没有 python），它的形状
-    由 `cases_cli.py` 的等价性用例钉住。
+    由 `cases_spawn_shell.py` 的等价性用例钉住。
     """
 
     def test_the_marker_is_spelled_in_exactly_one_file(self):

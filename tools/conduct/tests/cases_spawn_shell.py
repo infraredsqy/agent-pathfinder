@@ -20,22 +20,32 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import Base, normalise  # noqa: E402
-from harness import CONDUCT_DIR, _fresh_module  # noqa: E402
+from harness import CONDUCT_DIR, _fresh_module, shared_loader  # noqa: E402
 
 __all__ = ['TestTheSpawnerShell', 'TestDSHSpawnFailures']
 
 SPAWN_DIR = CONDUCT_DIR / 'spawn'
 SPAWN_COMMON = SPAWN_DIR / 'spawn-common.ps1'
 
+#: 壳侧写下的那个时刻该长成的样子：恒 6 位小数、字面 `Z`。判据落在形状上，不落在样本上 ——
+#: 一个样本相等只说明这一次的两个值一样，形状漂到 `+00:00` 或短一位它也照样绿。
+DETECTED_AT_SHAPE = r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$'
+
 
 def _marker_module():
     """`spawn/marker.py`: 标记的落点与记录形状那一处正本（壳侧按同一份形状自己写）。"""
     return _fresh_module('pf_marker_case', SPAWN_DIR / 'marker.py')
+
+
+def _clock():
+    """`shared/clock.py`: 时刻形状的正本 —— 按路径从 `tools/shared/` 取，这里不抄格式字面量。"""
+    return shared_loader().load_shared('clock')
 
 
 def _ps(value) -> str:
@@ -168,7 +178,9 @@ class TestTheSpawnerShell(Base):
         """两份实现（`marker.py` 与壳侧）长出同一份记录：同一组键、同一句人话、同一个落点。
 
         形状没法共享（理由见上一条），所以这条用例是防漂移的那一半：哪一边改了字段名、改了那句
-        人话、改了 attempts 的记法，它当场判红。
+        人话、改了 attempts 的记法，它当场判红。`detected_at` 的**形状**也钉在这里：上面那条等价
+        断言会把每个 `_at` 字段折成 `<ts>`（`normalise`），对时刻的形状一个字都没说，所以壳侧写下
+        的那个时刻自己判一次 —— 恒 6 位小数、字面 `Z`，并且能被 `clock.ISO_FMT` 读回来。
         """
         self.pwsh_or_skip()
         sb = self.make()
@@ -180,6 +192,11 @@ class TestTheSpawnerShell(Base):
                                            workspace=sb.root)
         self.assertEqual(normalise(written), normalise(expected),
                          '壳侧那份记录与 marker.record() 漂开了')
+        moment = written['detected_at']
+        self.assertRegex(moment, DETECTED_AT_SHAPE,
+                         '壳侧写下的时刻不是 clock 的微秒形状：恒 6 位小数、字面 `Z`')
+        self.assertIsNotNone(datetime.strptime(moment, _clock().ISO_FMT),
+                             '壳侧写下的时刻 clock.ISO_FMT 读不回来')
 
     def test_a_failed_write_leaves_no_temporary_file_behind(self):
         """改名重试耗尽时盘上不留残渣：临时文件只在这一拍里有意义。

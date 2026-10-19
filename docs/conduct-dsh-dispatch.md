@@ -58,7 +58,7 @@ cookie 的门票。
   作为参数交给 spawner，spawner 不自拼 `.pf/meta` 那条路——名字一改，自拼的地方会安静地写到工具不读的
   位置。python 侧那份写入走全树那条原子写（临时文件 + 同卷改名 + 对「读方此刻正开着目标文件」的重试）；
   spawner 那一层是**物理上无法共享的例外**：它的运行点可能没有 python，所以它按同一份形状自己写，两份
-  实现的一致性由 `conduct/tests/cases_cli.py` 的等价性用例钉住。这条写入恰恰是不许丢的那条。
+  实现的一致性由 `conduct/tests/cases_spawn_shell.py` 的等价性用例钉住。这条写入恰恰是不许丢的那条。
 - 排查顺序：401 看 cookie 与凭据文件；404 看方法名是不是点号写法；`result.ok=false` 看
   `result.error`；会话建了但 GUI 里在"未分组"，看是不是错传了 `cwd`。改鉴权路径时务必端到端验
   一次（用一个自检 cycle id 跑通"新会话建立 → prompt 注入 → `/pf-conduct` 被加载"）。

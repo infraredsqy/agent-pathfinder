@@ -26,7 +26,7 @@
   `dsh-spawn.ps1`，ZCode 上 `zcode-spawn.ps1`）开出**真实的会话**并烧 token；ZCode 那一份还会往
   用户装机的 `~/.zcode/v2/tasks-index.sqlite` 写行。测试、调试、跑样例一律不经过它。
 - 验证推进逻辑，到「返回 action + prompt 文本落盘」为止。要断言派发语义，用 fake spawner
-  （先例：`tests/cases_cli.py` 的 `TestOneSpawner`）。
+  （先例：`tests/cases_cli_entries.py` 的 `TestOneSpawner`）。
 - 验证机制改动一律在**一次性沙箱项目**里做：把图的记录拷进 temp 下的 git 仓库（或直接造一份假图），
   配 fake spawner 驱动；真实项目上只许只读查询（`cycle list` / `cycle current` / `--plan`），不许开 cycle、
   不许 `dispatch` / `--spawn`。

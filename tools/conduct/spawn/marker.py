@@ -11,13 +11,15 @@
             按线分文件：并行=2 时两条线并排跑，本线成功只清本线的标记，不抹别线的断链记号。
     形状    record(cycle, phase, reason, attempts=, workspace=, extra=) —— 一份，写它的
             每一条路都长出同一个形状；宿主自己的事实（dsh 的 api_base、zcode 的 db）走 `extra`
-            那一个槽，漂移不再落在字段上。
+            那一个槽，漂移不再落在字段上。`detected_at` 是这个记录自己的时刻，取
+            `tools/shared/clock.py` 的微秒形状（`clock.now()`）—— 时刻的形状只有那一处正本。
     写法    write(path, payload) —— `tools/shared/jsonio.py` 的原子写：临时文件 + 同卷改名 +
             对「读方此刻正开着目标文件」的重试。全树写 `.pf/` 记录都走这条原语。
             **一处例外**：spawner 那一层（`spawn/spawn-common.ps1`）用纯 PowerShell 写同一份形状。
             理由是物理上的 —— spawner 跑起来的那台机器、那个时刻可能没有 python，而 PowerShell
             没法 import 这个模块，这条写入又恰恰是链断掉之后唯一留给人的入口。两份实现的形状由
-            `conduct/tests/cases_cli.py` 的 `TestTheSpawnerShell` 钉住（同一组键、同一句人话）。
+            `conduct/tests/cases_spawn_shell.py` 的 `TestTheSpawnerShell` 钉住（同一组键、同一句
+            人话、同一个时刻形状）。
     谁写    失败的那一拍自己：spawner 在自己的失败点上写（`spawn/spawn-common.ps1` 那一层自己写盘，
             形状照这份），条子写不下去的那一拍由 `handoff.py` 写。
             **一处失败只落一条**：第一次的那条是根因，后面的不再覆盖它。
@@ -40,7 +42,6 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -76,6 +77,11 @@ def _ledger():
     return _loader().load_shared('ledger')
 
 
+def _clock():
+    """`tools/shared/clock.py`: 记录里的时刻 —— 形状与「现在」都取这一处正本。"""
+    return _loader().load_shared('clock')
+
+
 def marker_path(project, cycle: str) -> Path:
     """这条线的降级标记落在哪：`<project>/.pf/meta/CONDUCT-CALLBACK-FAILED-<cycle>.json`。
 
@@ -101,7 +107,7 @@ def record(cycle: str, phase: str, reason: str, *, attempts: int = 0, workspace=
         'reason': str(reason),
         'workspace': str(workspace),
         'extra': dict(extra or {}),
-        'detected_at': datetime.now(timezone.utc).isoformat(),
+        'detected_at': _clock().now(),
         'note': DEFAULT_NOTE,
     }
 

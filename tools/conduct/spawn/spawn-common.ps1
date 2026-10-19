@@ -9,9 +9,9 @@
 # 降级标记的**形状与落点**有一处正本：同目录的 `marker.py`（python 侧与条子那一拍用它）。这一层
 # 按同一份合同**自己写**，是一条例外，理由是物理上的：spawner 跑起来的那台机器、那个时刻可能
 # 没有 python，而 PowerShell 没法 import 一个 python 模块 —— 这条写入恰恰是链断掉之后唯一留给人
-# 的入口，它不能因为解释器不在而消失。代价是形状有两份实现，所以 `conduct/tests/cases_cli.py` 的 `TestTheSpawnerShell`
-# 拿一条等价性用例把两边钉住：同一组键、同一句人话、同落点（`-MarkerPath`）、二次失败不覆盖、
-# 清后不在。改形状时两处一起改，用例当场判红。
+# 的入口，它不能因为解释器不在而消失。代价是形状有两份实现，所以 `conduct/tests/cases_spawn_shell.py` 的
+# `TestTheSpawnerShell` 拿一条等价性用例把两边钉住：同一组键、同一句人话、同一个时刻形状、同落点
+# （`-MarkerPath`）、二次失败不覆盖、清后不在。改形状时两处一起改，用例当场判红。
 #
 # 清标记不走这条路：删文件没有形状可言，而成功那一拍不该因为清不掉而失败。
 #
@@ -111,6 +111,16 @@ function Write-CallbackFailureMarker {
     if ($script:SpawnMarkerWritten) { return }        # 一次失败只落一条：第一次的那条是根因
     $script:SpawnMarkerWritten = $true
     try {
+        # `detected_at` 与 clock.py 的微秒形状逐字同形：UTC、秒到小数 6 位、字面 `Z`。
+        # 6 位是**形状**上的硬要求，微秒由这里的取整规则自己保证，不落在日期说明符那一族对末尾零的
+        # 处理上：`0.9999999` 秒那一段的 ticks 除以 10 是个 …999.9 的数，PowerShell 的 `[int]` 转换
+        # 会四舍五入到 7 位（1000000），Floor 才是截断。
+        # `:` 在 .NET 自定义格式里是随 CurrentCulture 变的时间分隔符占位符，所以日期那一半走
+        # 不变文化，不跟机器的区域设置走。
+        $now = [DateTime]::UtcNow
+        $micros = [int][Math]::Floor(($now.Ticks % [TimeSpan]::TicksPerSecond) / 10)
+        $stamp = [string]::Format([Globalization.CultureInfo]::InvariantCulture,
+                                  '{0:yyyy-MM-ddTHH:mm:ss}.{1:D6}Z', $now, $micros)
         $record = [ordered]@{
             cycle_id    = $script:SpawnCycle
             phase       = $Phase
@@ -118,7 +128,7 @@ function Write-CallbackFailureMarker {
             reason      = $Reason
             workspace   = $script:SpawnTarget
             extra       = (ConvertTo-SpawnExtra $script:SpawnExtra)
-            detected_at = [DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.ffffffzzz')
+            detected_at = $stamp
             note        = $script:SpawnMarkerNote
         }
         $dir = Split-Path -Parent $script:SpawnMarkerPath
