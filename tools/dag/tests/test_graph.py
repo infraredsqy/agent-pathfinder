@@ -1,8 +1,8 @@
-"""`tools/dag/graph.py`: 图那一半，进程内直接调用 —— 一个子进程都不用起。
+"""`tools/dag/graph.py`: the graph half, called in-process -- not one child process needed.
 
-跑法（两种都行）：
+How to run (either works):
 
-    python -m unittest discover -s dag/tests -t .      （cwd 在 tools/）
+    python -m unittest discover -s dag/tests -t .      (cwd in tools/)
     python dag/tests/test_graph.py
 """
 
@@ -16,7 +16,7 @@ GRAPH_PY = Path(__file__).resolve().parent.parent / 'graph.py'
 
 
 def _load(name: str, path: Path):
-    """按路径取一份模块：这一份不引用邻居，整份 import 起来就行。"""
+    """Load a module by path: this one imports no neighbour, so importing the file is enough."""
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -44,7 +44,7 @@ class TestAdjacency(unittest.TestCase):
         self.assertEqual({'a': [], 'b': ['a']}, graph._reverse_adj(adj))
 
     def test_a_dangling_edge_points_at_nobody(self):
-        """记录里点名了图上没有的节点：反查表里它不占一格。"""
+        """The records name a node the graph does not have: no slot in the reverse table."""
         self.assertEqual({'a': []}, graph._reverse_adj({'a': ['gone']}))
 
 

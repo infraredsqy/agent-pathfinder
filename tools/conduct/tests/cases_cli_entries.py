@@ -37,7 +37,7 @@ class TestPipelineModuleEntries(Base):
         output and the exit code are part of what is under test.
         """
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         proc = self.pipeline_cli(sb, 'plan', '--project', sb.root, '--json')
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -57,13 +57,15 @@ class TestPipelineModuleEntries(Base):
             self.assertNotIn(gone, proc.stdout)
 
     def test_the_two_front_ends_print_the_same_preview(self):
-        """同一份计划，两个前端印出来的是同一份 —— 连「预览不可执行」也跟着同一份实现。
+        """The same plan, printed the same by both front ends -- even "the preview cannot be run"
+        follows the one implementation.
 
-        空手的线（手里没有节点）那一问的计划是 `open_node`，它带着钉人的命令：预览只报「还在落
-        定」，两个前端都得报同一份，而且都不带 `commands`。
+        The plan for an empty-handed line (nothing in hand) is `open_node`, and it carries the command
+        that pins somebody: the preview only reports "still settling", both front ends have to report
+        the same one, and neither carries `commands`.
         """
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.create_cycle('cyc')
 
         mine = self.pipeline_cli(sb, 'plan', '--project', sb.root, '--json')
@@ -74,19 +76,21 @@ class TestPipelineModuleEntries(Base):
         action = json.loads(mine.stdout)
         self.assertEqual(action, json.loads(theirs.stdout))
         self.assertEqual(action['action'], 'open_node')
-        self.assertTrue(action.get('settling'), '预览没报「还在落定」')
-        self.assertNotIn('commands', action, '预览把命令交出来了')
+        self.assertTrue(action.get('settling'), 'the preview did not report "still settling"')
+        self.assertNotIn('commands', action, 'the preview handed the commands over')
 
     def test_apply_is_the_settle_the_worker_asked_for(self):
-        """`conduct_pipeline.py apply` 就是 `pf next --after` 那一次结算：它读手里那格的条子。
+        """`conduct_pipeline.py apply` is that one settle `pf next --after` performs: it reads the
+        note in the slot in hand.
 
-        这条入口的说明写着 `--after` 跑的就是它，所以两个入口对同一份状态给出同一个结果：手里那格
-        交了条子，它就结算 —— path 记一步、DAG 标 completed、线按停手规则收摊。
+        This entry's own help says `--after` runs it, so both entries give the same answer for the
+        same state: the slot in hand has filed its note, so it settles -- one step recorded in path,
+        the DAG marked completed, and the line closed out by the stop rule.
         """
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
-        sb.write_signal('cyc', NODE, 'completed', 'pf-conduct 做完了')
+        sb.write_signal('cyc', NODE, 'completed', 'pf-conduct finished')
 
         proc = self.pipeline_cli(sb, 'apply', '--project', sb.root, '--json')
 
@@ -98,22 +102,23 @@ class TestPipelineModuleEntries(Base):
         self.assertEqual(sb.cycle()['status'], 'inactive')
 
     def test_apply_names_the_node_it_settles(self):
-        """手里握着两格时，`apply --after <node>` 说出这次结算的是哪一格。
+        """With two slots in hand, `apply --after <node>` says which slot this settle is for.
 
-        不给 `--after` 时这条入口读不出该结算谁 —— 手里不止一格，所以那一趟只报 `wait`，一个字节
-        都不写；点名之后与 `pf next --after` 是同一件事：path 记一步、DAG 标 completed。
+        Without `--after` this entry cannot read whom to settle -- more than one slot is in hand, so
+        that pass reports `wait` alone and writes not one byte; named, it is the same thing as
+        `pf next --after`: one step recorded in path, the DAG marked completed.
         """
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.add_node(NODE2, '另一条支线', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
+        sb.add_node(NODE2, 'another line', mode='auto')
         sb.start_cycle(parallel=2)
-        sb.write_signal('cyc', NODE2, 'completed', 'pf-conduct 做完了')
+        sb.write_signal('cyc', NODE2, 'completed', 'pf-conduct finished')
 
         blind = self.pipeline_cli(sb, 'apply', '--project', sb.root, '--json')
 
         self.assertEqual(blind.returncode, 0, blind.stderr)
         self.assertEqual('wait', json.loads(blind.stdout)['action'], blind.stdout)
-        self.assertEqual([], sb.path(), '没点名的那一趟结算了一格')
+        self.assertEqual([], sb.path(), 'the pass that named nobody settled a slot')
 
         named = self.pipeline_cli(sb, 'apply', '--project', sb.root, '--after', NODE2, '--json')
 
@@ -122,13 +127,15 @@ class TestPipelineModuleEntries(Base):
         self.assertEqual(sb.dag_status(NODE2), 'completed')
 
     def test_the_closing_answers_are_refused_without_a_preview(self):
-        """收尾的回答没有可结算的那一问时被拒 —— 与 `pf next` 同一条口径。
+        """A closing answer is refused where there is no question to settle -- the same rule as
+        `pf next`.
 
-        拒绝的判据是：没有可结算的那一问时，照收会让人以为那句话被采纳了 —— 管线一个字节都没动，
-        命令却报成功。
+        The refusal's reason: with no question to settle, taking the answer would make it look as if
+        that word had been accepted -- the pipeline moved not one byte, yet the command reports
+        success.
         """
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         before = sb.state()
 
@@ -136,7 +143,7 @@ class TestPipelineModuleEntries(Base):
 
         self.assertEqual(refused.returncode, 2, refused.stdout)
         self.assertIn('closing call', refused.stderr)
-        self.assertEqual(sb.state(), before, '被拒的那条命令动了状态')
+        self.assertEqual(sb.state(), before, 'the refused command moved the state')
 
         theirs = self.cli(sb, 'next', '--stop')
         self.assertEqual(theirs.returncode, 2, theirs.stdout)

@@ -1,8 +1,9 @@
-"""一个一次性项目，加上把 `tools/shared/` 里那些件按路径取回来的取件方式。
+"""A throwaway project, plus the way the pieces under `tools/shared/` are fetched back by path.
 
-自带：`tools/shared/` 是别的工具从外面驱动的那一层，它的套件就不从别的工具的夹具里取件 —— 夹具
-住在消费者隔壁，这一层就再也无法单独自证。这里只有三件事：定位这棵树、按路径取一份模块、造一个
-临时项目。
+Self-contained: `tools/shared/` is the layer other tools drive from outside, so its suite takes no
+fixture from another tool's -- one living next door to its consumer would leave this layer unable
+to prove itself on its own. There are only three things here: locating this tree, fetching one
+module by path, and making a temp project.
 """
 
 from __future__ import annotations
@@ -20,14 +21,15 @@ HERE = Path(__file__).resolve().parent
 SHARED_DIR = HERE.parent
 TOOLS_DIR = SHARED_DIR.parent
 
-#: 这些用例只需要一个节点 id，便条自己的形状不认它：写死一处，省得每条用例各拼一个。
+#: These cases need a node id and nothing else -- the note's own shape does not read it: spelled
+#: once here, so no case has to build its own.
 NODE = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'
 
 _SHARED_LOADER = None
 
 
 def _fresh_module(name, path):
-    """一个文件按路径加载出来的一份新拷贝，别人手上没有。"""
+    """A fresh copy of one file loaded by path, which nobody else holds."""
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -35,11 +37,12 @@ def _fresh_module(name, path):
 
 
 def shared_loader():
-    """`tools/shared/loader.py`，按路径加载并留在本进程里。
+    """`tools/shared/loader.py`, loaded by path and kept in this process.
 
-    留在进程里的理由与工具自己的一样：`reuse` 只在每个调用方都走同一个装载器时才还回同一个模块
-    对象，而项目那把跨进程锁的可重入记录是一个进程一份 —— 第二个装载器会悄悄地把第二个模块交给
-    同一个文件。
+    It stays in the process for the same reason the tools keep it: `reuse` hands back the same
+    module object only when every caller goes through the one loader, and the project's
+    cross-process lock keeps its reentrant record per process -- a second loader would quietly hand
+    a second module to the same file.
     """
     global _SHARED_LOADER
     if _SHARED_LOADER is None:
@@ -48,12 +51,13 @@ def shared_loader():
 
 
 def _shared(name, filename):
-    """`tools/shared/` 里的一个文件，作为本进程唯一的那一份。"""
+    """One file under `tools/shared/`, as this process's single copy."""
     return shared_loader().load_by_path(name, SHARED_DIR / filename, register=True, reuse=True)
 
 
 def _child_env():
-    """本套件起的每个子进程都拿到 UTF-8 的流，以及那个「不真开会话」的开关。"""
+    """Every child this suite starts gets UTF-8 streams, and the switch that says "do not really
+    open a session"."""
     env = dict(os.environ)
     env['PYTHONIOENCODING'] = 'utf-8'
     env['DSH_CONDUCT_SPAWN_DRY_RUN'] = '1'
@@ -61,17 +65,18 @@ def _child_env():
 
 
 class _Sandbox:
-    """一个一次性项目根：`<tmp>/`，里面只有用例自己写的东西。"""
+    """One throwaway project root: `<tmp>/`, holding nothing but what the case itself wrote."""
 
     def __init__(self, root):
         self.root = root
 
 
 class SharedCase(unittest.TestCase):
-    """一条用例一个临时目录，要几个再要几个。
+    """One temp directory per case, as many as you ask for.
 
-    `make()` 交回来的对象带 `root` —— 和别的套件交出来的那个把手一样，所以从别处搬过来的用例，
-    自己的正文（`sb = self.make()` / `sb.root`）一个字都不用动。
+    The object `make()` hands back carries `root` -- the same handle the other suites hand back --
+    so a case moved in from elsewhere needs no change to its own body (`sb = self.make()` /
+    `sb.root`).
     """
 
     def setUp(self):

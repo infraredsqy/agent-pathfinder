@@ -29,7 +29,7 @@ _spec = importlib.util.spec_from_file_location('chain_spawn', CONDUCT_DIR / 'spa
 chain_spawn = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(chain_spawn)
 
-PROMPT = '/text-repair 4\n\n上一轮 r5：top 0.22 → 0.18，还剩 31 条。\n'
+PROMPT = '/text-repair 4\n\nlast round r5: top 0.22 → 0.18, 31 rows left.\n'
 FAKE_SPAWNER = 'Z:/fake/spawner.ps1'
 SPAWN_LINE = 'spawned: session session-fake (stage)'
 
@@ -111,7 +111,7 @@ class TestFailure(ChainCase):
         self.assertEqual(1, code)
         self.assertIn('pwsh boom', err)
         self.assertIn('CONDUCT-CALLBACK-FAILED-next-r5.json', err,
-                      '人工接手的入口要指得出来')
+                      'the by-hand takeover entry must be named')
         self.assertIn(str(self.prompt), err)
 
 

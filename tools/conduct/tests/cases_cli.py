@@ -29,7 +29,7 @@ class TestCLIEntryPoints(Base):
     def test_bare_next_writes_and_plan_does_not(self):
         """`--plan` is read-only over the same decision; a bare `next` is what carries it out."""
         sb = self.make(cli=True)
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
 
         planned = self.cli(sb, 'next', '--plan', '--json')
@@ -48,7 +48,7 @@ class TestCLIEntryPoints(Base):
         anything is written.
         """
         sb = self.make(cli=True)
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         waiting = finish_node(sb)
 
@@ -58,7 +58,7 @@ class TestCLIEntryPoints(Base):
         self.assertEqual(sb.path(), [])                   # the refusal closed nothing
 
         stopped = self.cli(sb, 'next', '--json', '--after', waiting['node_id'], '--stop',
-                           '--note', '收工')
+                           '--note', 'wrapping up')
         self.assertEqual(stopped.returncode, 0, stopped.stderr)
         self.assertEqual(json.loads(stopped.stdout)['action'], 'stop_pipeline')
         self.assertEqual(sb.cycle()['status'], 'inactive')
@@ -70,7 +70,7 @@ class TestCLIEntryPoints(Base):
         is the pipeline's contract with the machine.
         """
         sb = self.make(cli=True)
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.create_cycle('cyc')
         self.assertIsNone(sb.current_node())
 
@@ -89,7 +89,7 @@ class TestCLIEntryPoints(Base):
     def test_the_rendered_output_says_what_the_action_is(self):
         """The human-facing rendering is what a session reads when it is not using --json."""
         sb = self.make(cli=True)
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         proc = self.cli(sb, 'next', '--plan')
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -101,7 +101,7 @@ class TestCLIEntryPoints(Base):
         the rendering has to print it -- the reader who is not using `--json` is the one who needs it.
         """
         sb = self.make(cli=True)
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         sb._tool('cycle', 'status', 'cyc', 'inactive')
 
@@ -119,7 +119,7 @@ class TestCLIEntryPoints(Base):
         where the loose ends ride, so the close is what is driven here.
         """
         sb = self.make(cli=True)
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         WorkerSession(sb, fail_nodes={NODE}).work(sb.next())
         waiting = sb.next_cli()[0]
@@ -138,7 +138,7 @@ class TestCLIEntryPoints(Base):
         the step OPENS, so the reading is available from the start.
         """
         sb = self.make(cli=True)
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         current = self.cli(sb, 'cycle', 'current')
         self.assertEqual(current.returncode, 0, current.stderr)
@@ -162,16 +162,17 @@ class TestCLIEntryPoints(Base):
         for gone in ('--record', '--theme-verdict', '--decision-mode', '--verdict', '--round',
                      '--stage', '--launch-mode'):
             self.assertNotIn(gone, proc.stdout)
-        # 尾巴上那段合同正文（`conduct_pipeline.ACTIONS` 的正本）：它挂在打印 help 的那一刻，
-        # 所以这条读数同时钉住「help 还带着它」与「`-h` 那条短旗标也走到了同一个动作」。
-        self.assertIn('action 全集', proc.stdout)
-        self.assertIn('不变量', proc.stdout)
+        # The contract body at the tail (the one source is `conduct_pipeline.ACTIONS`): it hangs off
+        # the moment help is printed, so this reading pins both "help still carries it" and "the
+        # short `-h` flag reached the same action".
+        self.assertIn('the full set of actions', proc.stdout)
+        self.assertIn('Invariant:', proc.stdout)
 
     def test_next_short_help_carries_the_contract_too(self):
-        """`-h` 与 `--help` 是同一条动作：短的那条也要带上合同正文。"""
+        """`-h` and `--help` are the same action: the short one carries the contract body too."""
         proc = run_argv([STATE_MANAGE, 'next', '-h'], check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn('action 全集', proc.stdout)
+        self.assertIn('the full set of actions', proc.stdout)
 
 
 class TestRobustness(Base):
@@ -202,7 +203,7 @@ class TestRobustness(Base):
         all -- and the message has to say how far it got.
         """
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         sb.next()                                 # dispatch: no commands, nothing to run
         sb.write_signal('cyc', NODE, 'completed', 'done', {'deliverable': 'x'})

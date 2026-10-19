@@ -39,7 +39,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CONDUCT = HERE.parent                      # the conduct tool directory
 
-# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
+# Bootstrap: the loader is fetched by path too, so every file has to carry this paragraph itself
+# (see `shared/loader.py`).
 SHARED = CONDUCT.parent / 'shared'
 
 _LOADER = None
@@ -78,29 +79,35 @@ def main(argv=None) -> int:
 
     parser = argparse.ArgumentParser(
         prog='chain-spawn.py',
-        description='按 prompt 文件开一个新 session：走管线那一道门，链在这里交棒。')
+        description='Start a new session from a prompt file: through the pipeline\'s one door; the '
+                    'chain hands on the baton here.')
     parser.add_argument('--prompt-file', required=True,
-                        help='下一棒的 prompt 全文；第一行是下一棒的调用行')
+                        help='the full prompt for the next baton; its first line is the next '
+                             'invocation line')
     parser.add_argument('--cycle-id', default=None,
-                        help='降级标记用的名字（缺省取 prompt 文件名的 stem）')
+                        help='the name the degradation marker uses (default: the prompt file stem)')
     parser.add_argument('--workspace', default='.',
-                        help='新 session 的工作目录（缺省当前目录）')
+                        help='working directory of the new session (default: the current '
+                             'directory)')
     parser.add_argument('--dry-run', action='store_true',
-                        help='只打印将要用到的 argv，不开会话')
+                        help='print the argv that would be used and start no session')
     args = parser.parse_args(argv)
 
     prompt_file = Path(args.prompt_file).resolve()
     workspace = Path(args.workspace).resolve()
     cycle_id = args.cycle_id or prompt_file.stem
     try:
-        # 管线那一道门：开会的口只此一个（`writer.spawn_session`）。spawner 由它的末档回答
-        # （入口算好的宿主自认），会话便条与标记的写、清都在那一道门里；claim 认领的只是落在
-        # launch 目录里的 prompt，这条链拿不到它（见模块说明）。
+        # The pipeline's one door: a session starts at exactly one mouth (`writer.spawn_session`).
+        # Its last tier answers which spawner (the host counting itself as something the entry
+        # worked out), and the session note along with the marker's write and clear all live inside
+        # that door; a claim covers only a prompt sitting in the launch directory, and this chain
+        # gets none (see the module docstring).
         output = _start(workspace, cycle_id, prompt_file, args.dry_run)
     except (OSError, RuntimeError, ValueError) as error:
         marker = _loaded(HERE / 'marker.py', 'pf_spawn_marker').marker_path(workspace, cycle_id)
-        print(f'没开起来：{error}\n'
-              f'prompt 还在 {prompt_file}；spawner 若已落降级标记，就在 {marker}。',
+        print(f'could not start it: {error}\n'
+              f'the prompt is still at {prompt_file}; if the spawner already left a degradation '
+              f'marker, it is at {marker}.',
               file=sys.stderr)
         return 1
     print(output)

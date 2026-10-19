@@ -34,7 +34,8 @@ def dag_ready_nodes(project: Path, assume_completed=(), dag: dict | None = None)
     `dag` is the already-read graph when the caller has one: the close reads the graph once and hands
     the same copy to everything it asks on that path.
 
-    **被 tag 挡住不是依赖没满足**：一条 cycle 的过滤集（`node_in_tag_scope`）只删行，DAG 不为它动。
+    **Being blocked by a tag is not an unmet dependency**: a cycle's filter set
+    (`node_in_tag_scope`) only drops rows, and the DAG does not move for it.
     """
     nodes = (dag if dag is not None else load_dag(project)).get('nodes', {})
     assumed = {n for n in assume_completed if n}
@@ -50,20 +51,24 @@ def dag_ready_nodes(project: Path, assume_completed=(), dag: dict | None = None)
     return out
 
 
-# ── 节点 tag 与 cycle 分流 ────────────────────────────────────────────────────
-# 一条 cycle 的 `tags` 是它的**选材范围**：给「在哪些节点里挑人」画一条线。判据只有一条
-# ——节点一个 tag 都没有，或者它的 tag 与过滤集相交，它就在范围里。
+# ── Node tags and cycle routing ──────────────────────────────────────────────
+# A cycle's `tags` are its **selection range**: they draw the line around which nodes it picks
+# people from. There is one rule -- a node with no tag at all, or one whose tag intersects the
+# filter set, is in range.
 #
-# 保守方向是**宁可漏挡**：多挑一个节点只多花一个节点的时间，误挡会让一条线的活永远没人做。
+# The conservative direction is to **rather let one through**: picking one node too many costs one
+# node's time, while blocking by mistake leaves a line's work with nobody to do it forever.
 #
-# 过滤只落在「挑下一个节点」这一步：正在跑的节点照跑完，DAG 的依赖关系一个字不改 ——
-# `art` 节点照样能等 `writing` 节点做完才就绪，该等的还等。挡住只影响「挑谁」，不动状态、
-# 不标 shelved、不动依赖边。
+# The filter only lands on "pick the next node": a node already running runs to the end, and the
+# DAG's dependencies are not changed by a word -- an `art` node can still wait for a `writing` node
+# to finish before it is ready, and what should wait still waits. Blocking only affects "who is
+# picked": no status moves, nothing is marked shelved, no dependency edge moves.
 
 def node_in_tag_scope(node: dict, cycle_tags=None) -> bool:
-    """这个节点在这条 cycle 的选材范围里吗？
+    """Is this node inside this cycle's selection range?
 
-    没有过滤集 = 整张图都是范围，与这个功能没出现时逐字节相同；没有 tag 的节点处处可见。
+    No filter set means the whole graph is in range, byte-for-byte as it was before the feature
+    existed; a node with no tag is visible everywhere.
     """
     if not cycle_tags:
         return True
@@ -74,33 +79,36 @@ def node_in_tag_scope(node: dict, cycle_tags=None) -> bool:
 
 
 def tag_blocked_lines(blocked: list) -> list:
-    """被过滤集挡在外面的就绪节点，一个一行：标题、id、它身上的 tag。
+    """The ready nodes the filter set hides, one per line: title, id, and the tags on it.
 
-    这段话会被原样念给人听，所以它按人读的方式写：标题、id、tag，一行一个节点。
+    This text is read out to a human as it stands, so it is written the way a human reads: title,
+    id, tags, one node per line.
     """
     lines = []
     for n in blocked:
         tags = [t for t in (n.get('tags') or []) if isinstance(t, str)]
-        lines.append(f'  - {n.get("title") or "(无标题)"}（{n["id"]}）tags={tags}')
+        lines.append(f'  - {n.get("title") or "(untitled)"} ({n["id"]}) tags={tags}')
     return lines
 
 
 def cross_line_reason(tags, blocked: list) -> str:
-    """别的线就绪、本线无人可挑时那句人话。
+    """The sentence a human gets when another line is ready and this one has nobody to pick.
 
-    这段 reason 会被原样念给用户听，所以它只做三件事：点名哪些节点就绪、说清被哪些 tag 挡在
-    外面、给出一条能直接抄的命令去接那条线。停在这里是**把选择权交回人手上**：一条线的活做完
-    了，另一条线要不要开工、什么时候开工，由他说了算。
+    This reason is read to the user as it stands, so it does exactly three things: name which nodes
+    are ready, say which tags are hiding them, and give a command that can be copied straight to
+    take that line. Stopping here is **handing the choice back to the human**: one line's work is
+    done, and whether and when another line starts is his to say.
     """
     need = []
     for n in blocked:
         for t in (n.get('tags') or []):
             if t not in need:
                 need.append(t)
-    head = (f'本 cycle 的过滤集 {list(tags)} 里没有就绪节点了，但图里还有 '
-            f'{len(blocked)} 个节点就绪，只是被 tag 挡在外面：')
-    tail = ('一条线的活做完了，另一条线要不要开工、什么时候开工，由你定。\n'
-            f'另开一个 cycle 接它：pf '
+    head = (f'This cycle has no ready node left in its filter set {list(tags)}, but the graph still '
+            f'has {len(blocked)} ready node(s), only hidden outside by their tags:')
+    tail = ('One line has finished its work; whether and when another line starts is yours to '
+            'decide.\n'
+            f'Open another cycle to take it: pf '
             f'cycle start <slug> --tags {",".join(need)}')
     return '\n'.join([head, *tag_blocked_lines(blocked), tail])
 
@@ -133,12 +141,14 @@ def _rank_ready_nodes(project: Path, exclude=None, exclude_many=(), assume_compl
     if not ready:
         return []
     try:
-        # 这次调用走接缝（`seam.capture`）：**子进程只有这一条通路**，按文档 patch 入口的
-        # `_capture` / `_run` 就拦得住它。排在就绪集之后：先算出来，再问排序。
+        # This call goes through the seam (`seam.capture`): **a child process has this one road**, and
+        # patching the entry's `_capture` / `_run` as documented stops it. It sits after the ready
+        # set: first work it out, then ask for the ranking.
         out = seam.capture(seam.dag('list', '-n', '0'), project)
     except RuntimeError:
-        # 排序是锦上添花：dag-manage 答不上来（超时、非零退出、起不来）时，就绪集按 DAG 记录自己
-        # 的顺序交出去 —— 「读不到排名」不该让挑选停摆。
+        # The ranking is a bonus: when dag-manage cannot answer (timeout, non-zero exit, will not
+        # start), the ready set is handed over in the DAG record's own order -- "no ranking read"
+        # must not stall the pick.
         return ready
     order = {}
     if out:
@@ -148,24 +158,27 @@ def _rank_ready_nodes(project: Path, exclude=None, exclude_many=(), assume_compl
                 order = {r.get('id'): i for i, r in enumerate(rows) if r.get('id')}
         except (json.JSONDecodeError, TypeError, ValueError):
             pass
-    # 子进程输出怎么解码是接缝自己的约定（一律 errors='replace'）：这台机器的控制台代码页是
-    # GBK，而 PYTHONIOENCODING 未必设过。宁可节点标题里出现替换符（id 是 ASCII，挑选不受影响），
-    # 也不能让解码异常把整条管线掀翻。
+    # How child output is decoded is the seam's own convention (always errors='replace'): this
+    # machine's console code page is GBK, and PYTHONIOENCODING is not necessarily set. Rather a
+    # replacement character in a node title (ids are ASCII, so the pick is unaffected) than a
+    # decoding error capsizing the whole pipeline.
     ready.sort(key=lambda n: order.get(n.get('id'), len(order) + 1))
     return ready
 
 
 def node_holders(project: Path) -> dict:
-    """{node_id: cycle_id} —— 每条 cycle 现在握着的那组节点。
+    """{node_id: cycle_id} -- the set of nodes each cycle holds right now.
 
-    一个节点一次只归一条 cycle：cycle 一握住它，别的线在这一步就挑不到它。这份占位表是
-    「挑下一个节点」和「谁挑得到谁挑不到」共用的那一份读数 —— 挑人的两步（本线的就绪集、
-    被过滤集挡住的那批就绪集）都要按同一份表扣掉，否则同一个节点会一边被算成「可挑」、一边被
-    算成「轮不到」，两句话自相矛盾。
+    A node belongs to one cycle at a time: once a cycle takes hold of it, the other lines cannot
+    pick it at this step. This holding table is the one reading shared by "pick the next node" and
+    "who can pick whom" -- both halves of the pick (this line's ready set, the ready set the filter
+    set hides) have to be deducted against the same table, or one node is counted as pickable on
+    one side and as not-its-turn on the other, two sentences contradicting each other.
 
-    只算还握着的：节点一收尾，cycle 就把它放下（DAG 的 status 自己会让它离开就绪集）。cycle
-    自己的 status 不在判定里 —— 一条 parked 在半路的 cycle 照样占着它没跑完的那个节点，直到
-    有人把它收尾。
+    Only what is still held counts: the moment a node closes out, the cycle puts it down (the DAG's
+    own status takes it out of the ready set). The cycle's own status is not part of the judgement
+    -- a cycle parked half way still occupies the node it did not finish, until somebody closes it
+    out.
     """
     state = load_state(project)
     holders = {}
@@ -176,10 +189,10 @@ def node_holders(project: Path) -> dict:
 
 
 def _free_ready(project: Path, ranked: list, mine=None) -> list:
-    """就绪集里，扣掉别的 cycle 现在握着的那些。
+    """The ready set, minus the nodes another cycle holds right now.
 
-    `mine` 是调用方手上的节点（可以是多个）：它属于调用方，不该因为「被别人拿着」而被扣 ——
-    它没有被别人拿着。
+    `mine` is the node(s) in the caller's hand: it belongs to the caller, and must not be deducted
+    as "held by somebody else" -- it is not held by anybody else.
     """
     holders = node_holders(project)
     keep = set(mine) if isinstance(mine, (list, tuple, set)) else ({mine} if mine else set())
@@ -195,9 +208,10 @@ def ranked_ready_nodes(project: Path, limit: int | None = None, exclude=None, ex
     existed. Nodes another cycle is holding are not in the set at all: the DAG calls them ready
     (their dependencies are met) and they are not available.
 
-    `limit` left out hands over the whole ranking: 一条线一次拿几格是调用方的事（`parallel` 策略，
-    以及 `cycle start` 自己钉的那几格）。读取端拿一个自己的数去截断，「我点名的那个节点在不在」
-    与「图里还有没有活」这两个问题都会答错。
+    `limit` left out hands over the whole ranking: how many slots a line takes at once is the
+    caller's business (the `parallel` policy, and the slots `cycle start` pins itself). A reader
+    that truncates with a number of its own answers both "is the node I named there" and "is there
+    any work left in the graph" wrong.
     """
     ranked = _rank_ready_nodes(project, exclude=exclude, exclude_many=exclude_many,
                                assume_completed=assume_completed, dag=dag)
@@ -253,11 +267,13 @@ def blocked_reason(project: Path, tags, tagged: list, holding: list) -> str:
         holding_lines = []
         for n in holding:
             owner = holders.get(n.get('id')) or '?'
-            holding_lines.append(f'  - {n.get("title") or "(无标题)"}（{n["id"]}）：cycle '
-                                 f'{owner} 正拿着它')
-        lines.append('图里这些节点就绪，但已经被别的 cycle 占着，本线挑不到：\n'
+            holding_lines.append(f'  - {n.get("title") or "(untitled)"} ({n["id"]}): cycle '
+                                 f'{owner} is holding it')
+        lines.append('These nodes in the graph are ready, but another cycle already occupies '
+                     'them, so this line cannot pick them:\n'
                      + '\n'.join(holding_lines)
-                     + '\n要它们，就等那一条线把它们跑完（别的线正忙不属于本线的故障）。')
+                     + '\nTo get them, wait for that line to run them out (another line being '
+                       'busy is not a fault of this line).')
     return '\n'.join(lines)
 
 
@@ -292,10 +308,11 @@ def pick_node(project: Path, override: str | None = None, exclude=None, exclude_
 
 
 def node_spec_path(project: Path, node_id: str) -> str:
-    """`<project>/.pf/nodes/<id>/spec.md`，按人读的方式写（正斜杠）。
+    """`<project>/.pf/nodes/<id>/spec.md`, written the way a human reads it (forward slashes).
 
-    这是这条路径唯一的一处算法：生成的 spec 末尾报它，`maintenance.write_spec` 往它写，维护节点
-    的目录也建在它旁边。`.pf` 与它底下的 `nodes/` 由 `shared/ledger.py` 定。
+    This is the one place this path is worked out: the generated spec reports it at the end,
+    `maintenance.write_spec` writes to it, and the maintenance node's directory is made next to it.
+    `.pf` and the `nodes/` under it are settled by `shared/ledger.py`.
     """
     return (_ledger().nodes_dir_for(project) / node_id / 'spec.md').as_posix()
 
@@ -305,17 +322,21 @@ def mode_for(node_id: str | None, dag: dict) -> str:
 
     Nothing overrides it: the node's mode decides on its own whether the line keeps going after it
     (see `planner.stop_criterion`), so there is no line-level mode left to take precedence over.
-    兜底走 `normalize_mode`；读的是交进来的那份图，调用方不会再为这一个值重读一次盘。
+    The fallback goes through `normalize_mode`; it reads the graph that was handed in, so the
+    caller does not read the disk again for this one value.
     """
     node = ((dag.get('nodes') or {}).get(node_id) or {}) if node_id else {}
     return normalize_mode(node.get('mode'))
 
 
 def node_row(dag: dict, node_id: str) -> dict:
-    """图里那一格，并把 id 交进去 —— id 是记录的键，行里没有它。
+    """That row in the graph, with the id handed in -- the id is the record's key and is not in the
+    row.
 
-    取一格节点记录的形状只有这一处：停手判据读的就是这一份，派发与维护那两条路各自的条目也从它
-    长出来。图里没有这一格时给的是一份只有 id 的空行（调用方按 `.get()` 读，缺什么都读作默认）。
+    This is the one place a node record's shape is taken: the stop criterion reads this very copy,
+    and the entries of the dispatch and maintenance roads grow out of it too. When the graph has no
+    such row, it hands over an empty row carrying only the id (callers read with `.get()`, and
+    anything missing reads as the default).
     """
     row = dict((dag.get('nodes') or {}).get(node_id) or {})
     row['id'] = node_id

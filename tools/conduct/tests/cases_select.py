@@ -1,9 +1,10 @@
 """Which node a line picks: where the line starts, the filter set it reads, and the weight.
 
-`cycle start` / `cycle select` 这一摊子：起点怎么定、过滤集管到哪一步、weight 怎么合成 —— 都在
-挑选那一步读。收尾那一头（一个节点怎么算完、怎么收口）住在同目录的 `cases_node.py`。
+The whole `cycle start` / `cycle select` area: how the start is fixed, how far the filter set
+reaches, how the weight is combined -- all of it is read at the pick. The closing end (how one node
+counts as done, how it is closed out) lives in `cases_node.py` in this same directory.
 
-    python -m unittest conduct.tests.cases_select        # 这个文件单独跑
+    python -m unittest conduct.tests.cases_select        # this file on its own
 """
 
 from __future__ import annotations
@@ -20,9 +21,9 @@ from harness import DAG_MANAGE, STATE_MANAGE, _fresh_module, finish_node, run_da
 
 
 def _state_cycles_module():
-    """`state` 是带相对导入的包，不能按单文件加载：照 state-manage.py 自己的引导，
-    以包形式按路径整包装进来，取装好的 cycles 子模块。装前先清同名旧条目，本文件里的
-    两次加载互不串。
+    """`state` is a package with relative imports, so it cannot be loaded as a single file: follow
+    state-manage.py's own bootstrap and load the whole package by path, then take the loaded cycles
+    submodule. Clear stale entries under the same name first, so this file's two loads stay apart.
     """
     name = 'pf_state_for_vocab'
     for stale in [n for n in sys.modules if n == name or n.startswith(name + '.')]:
@@ -37,13 +38,13 @@ def _state_cycles_module():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  起点、过滤集、weight：挑选那一步读的东西
+#  The start, the filter set, the weight: what the pick reads
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestStartCycle(Base):
     def test_start_cycle_pins_the_node_the_rule_picks(self):
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
 
         self.assertEqual(sb.current_node(), NODE)
@@ -58,11 +59,12 @@ class TestStartCycle(Base):
         self.assertEqual((sb.state() or {'cycles': []})['cycles'], [])
 
     def test_a_cycle_with_no_node_in_hand_takes_the_top_ready_row(self):
-        """多个就绪不停线：排名平时在每次收尾独自定人（`pick_node` 拿第一行），线的第一棒拿同一行。
-        要点名的入口在人手上（`--node`、`cycle hold`），不在这拍反问。"""
+        """Several ready rows do not stop the line: the ranking decides alone at every close
+        (`pick_node` takes the top row), and the line's first pick takes the same row. Naming one is
+        a human's move (`--node`, `cycle hold`), not a question asked here."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.add_node(NODE2, '另一条支线', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
+        sb.add_node(NODE2, 'another line', mode='auto')
         sb.create_cycle(cycle_id='cyc')
 
         action = sb.plan()
@@ -70,64 +72,72 @@ class TestStartCycle(Base):
         self.assertEqual(action['node_id'], NODE)
 
 
-# ── 选择层与 tag 过滤（原 cases_tags / cases_weight 并来）─────────────────────
+# ── the selection layer and tag filtering (cases_tags / cases_weight were merged in) ────────────
 
 class TestNodeTags(Base):
-    """节点 tag + cycle 分流：一条 cycle 在哪些节点里挑人。
+    """A node tag + cycle split: which nodes a cycle picks its people from.
 
-    判据只有一条 —— 节点一个 tag 都没有，或者它的 tag 与 cycle 的过滤集相交，它就在这条线的
-    选材范围里。过滤只落在「挑下一个节点」这一步：正在跑的节点照跑完，DAG 的依赖关系一个字
-    不改（挡住只影响挑谁，不动状态、不标 failed、不动依赖边）。本线挑不到、别的线有人就绪时
-    停下，把「另一条线要不要开工」交回人手上。
+    There is one criterion -- a node carries no tag, or its tag intersects the cycle's filter set,
+    and it is in this line's range. The filter falls only on the "pick the next node" step: a node
+    already running runs to the end, and the DAG's dependencies do not change one character
+    (blocking only affects who is picked: it moves no status, marks nothing failed, touches no
+    dependency edge). When this line cannot pick and another line has someone ready, it stops and
+    hands "should the other line start" back to a human.
 
-    没有过滤集时（cycle 不带 tags）这些用例一个都不该改变既有的挑选结果 —— 这一条由整套测试
-    守，`test_an_untagged_cycle_picks_what_it_always_picked` 再单独钉一次。那个形状如今只剩存量
-    记录这一个入口：`cycle start` / `cycle create` 对新调用一律要 `--tags`。
+    With no filter set (a cycle carrying no tags) these cases must not change the pick at all -- the
+    whole suite guards that, and `test_an_untagged_cycle_picks_what_it_always_picked` pins it once
+    more. That shape now has only one entry left, the records already on disk: `cycle start` /
+    `cycle create` always demand `--tags` for a new call.
     """
 
     K = 'dddddddd-4444-4444-8444-dddddddddddd'          # coding
     W = 'eeeeeeee-5555-4555-8555-eeeeeeeeeeee'          # writing
-    P = 'ffffffff-6666-4666-8666-ffffffffffff'          # 没打 tag
+    P = 'ffffffff-6666-4666-8666-ffffffffffff'          # no tag
 
     def code_and_words(self, cli=False):
-        """一条 coding 的活 + 一条 writing 的活，都是 auto（否则停手判据先响，轮不到 tag）。
+        """One coding job + one writing job, both `auto` (otherwise the stop rule fires first and
+        the tag never comes up).
 
-        `W` 依赖 `K`，所以图里最要紧的是 `K`：一条线先挑谁，要看 DAG 的排序，这里让它确定下来。
+        `W` depends on `K`, so `K` is the one that matters most in the graph: who a line picks first
+        follows the DAG ranking, and this fixes it here.
         """
         sb = self.make(cli=cli)
-        sb.add_node(self.K, '写代码', mode='auto', tags=['coding'])
-        sb.add_node(self.W, '写文案', mode='auto', tags=['writing'], deps=[self.K])
+        sb.add_node(self.K, 'Write code', mode='auto', tags=['coding'])
+        sb.add_node(self.W, 'Write copy', mode='auto', tags=['writing'], deps=[self.K])
         return sb
 
-    # ── 判据表第一行：过滤集里有就绪节点 → 按 DAG 的排序挑第一名 ──────────
+    # ── criterion table, first row: the filter set has a ready node -> take the DAG's top row ────
 
     def test_the_filter_set_only_drops_rows_from_the_dag_ranking(self):
-        """过滤集只删行，排序还是 `dag-manage` 那一处实现。
+        """The filter set only deletes rows; the ranking is still the one implementation in
+        `dag-manage`.
 
-        图里排第一的节点带 `writing`，本条的过滤集是 `coding` —— 被删的是**它**，被挑的是过滤
-        集里排第一的那个。如果 conduct_pipeline 自己又写了一份优先级规则，这条断言就会挑到别的
-        节点上（排序只准有一份实现，这是 `ranked_ready_nodes` 一直守着的规矩）。
+        The graph's top row carries `writing`, and this line's filter set is `coding` -- **that** is
+        the row deleted, and the one picked is the filter set's own top row. If conduct_pipeline grew
+        a second priority rule, this assertion would pick another node (the ranking is allowed one
+        implementation, the rule `ranked_ready_nodes` has always kept).
         """
         sb = self.make()
-        sb.add_node(self.W, '写文案', mode='auto', tags=['writing'])
-        sb.add_node('aaaa1111-6666-4666-8666-ffffffffffff', '文案的后续', mode='auto',
-                    deps=[self.W])                      # 让 W 成为图里最要紧的那个（有人等它）
-        sb.add_node(self.K, '写代码', mode='auto', tags=['coding'])
-        sb.add_node(self.P, '没打 tag 的活', mode='auto')
+        sb.add_node(self.W, 'Write copy', mode='auto', tags=['writing'])
+        sb.add_node('aaaa1111-6666-4666-8666-ffffffffffff', "the copy's follow-up", mode='auto',
+                    deps=[self.W])              # make W the one that matters most (someone waits on it)
+        sb.add_node(self.K, 'Write code', mode='auto', tags=['coding'])
+        sb.add_node(self.P, 'the untagged job', mode='auto')
 
         sb.start_cycle(tags=['coding'])
         self.assertEqual(sb.current_node(), self.K)
         self.assertEqual(sb.cycle()['tags'], ['coding'])
 
     def test_an_untagged_node_stays_in_every_filter_set(self):
-        """没有 tag 的节点在任何过滤集下都留在选材范围里。
+        """A node with no tag stays in range under any filter set.
 
-        保守方向：漏挡只多跑一个节点，误挡会让一条线的活永远没人做。所以本条过滤集是 `art`
-        （图里没有一个节点带 `art`），挑到的仍然是没有 tag 的那个。
+        The conservative direction: letting one through runs one extra node, while blocking wrongly
+        leaves a line's work with nobody to do it forever. So this line's filter set is `art` (no
+        node in the graph carries `art`), and the one picked is still the untagged node.
         """
         sb = self.make()
-        sb.add_node(self.K, '写代码', mode='auto', tags=['coding'])
-        plain = sb.add_node(self.P, '没打 tag 的活', mode='auto')
+        sb.add_node(self.K, 'Write code', mode='auto', tags=['coding'])
+        plain = sb.add_node(self.P, 'the untagged job', mode='auto')
         sb.start_cycle(tags=['art'])
 
         self.assertEqual(sb.current_node(), plain)
@@ -139,13 +149,15 @@ class TestNodeTags(Base):
         self.assertEqual([n['id'] for n in pipeline.tag_blocked_ready_nodes(sb.root, ['art'])],
                          [self.K])
 
-    # ── 判据表第二行：本线没有、别的线有 → 停，并把话说全 ────────────────────
+    # ── criterion table, second row: none for this line, some for another -> stop and say it ─────
 
     def test_a_cross_line_stop_names_the_nodes_and_the_command(self):
-        """跨线就绪时停下，reason 点名：哪些节点就绪、被哪些 tag 挡住、另开一条线的整条命令。
+        """When another line has someone ready it stops and the reason names them: which nodes are
+        ready, which tags block them, the whole command that opens the other line.
 
-        这句 reason 会被原样念给用户听，所以它要能一个人读完就知道下一步敲什么。停在这里的理由
-        是把选择权交回人手上：一条线的活做完了，另一条线要不要开工、什么时候开工，由他说了算。
+        This reason is read to the user as it stands, so one person reading it has to know what to
+        type next. The reason it stops here is to hand the choice back to a human: this line's work
+        is done, and whether another line starts, and when, is his to say.
         """
         sb = self.code_and_words()
         sb.start_cycle(tags=['coding'])
@@ -157,80 +169,91 @@ class TestNodeTags(Base):
 
         self.assertEqual(closed['action'], 'stop_pipeline')
         reason = closed['reason']
-        self.assertIn('写文案', reason)                     # 哪个节点就绪
+        self.assertIn('Write copy', reason)                 # which node is ready
         self.assertIn(self.W, reason)
-        self.assertIn('writing', reason)                    # 被哪个 tag 挡住
-        self.assertIn('cycle start', reason)                # 另一条线怎么开
+        self.assertIn('writing', reason)                    # blocked by which tag
+        self.assertIn('cycle start', reason)                # how the other line is opened
         self.assertIn('--tags writing', reason)
         self.assertNotIn('--launch-mode', reason, 'the deleted lever is back in the suggested command')
-        self.assertNotIn('图里没有 ready 节点', reason)
+        self.assertNotIn('the graph has no ready node left', reason)
 
-        # 被挡住 ≠ 依赖没满足：状态、依赖边、一个 shelved 都没动。
+        # Being blocked is not the same as an unmet dependency: no status, no dependency edge and
+        # not one shelved node moved.
         self.assertEqual(sb.dag_status(self.W), 'todo')
         self.assertEqual(sb.node(self.W)['dependencies'], [self.K])
-        # 停手只有一句话：inactive。本线的活干完了，另一条线还有人在等开工 —— 而「还有活」这件事
-        # 不写在线的状态里（图会长大，一条停下来的线该不该接着跑是人说了算），所以这一停同样是
-        # inactive，而接那条线的路照 reason 里给的命令真敲一遍就该成。
+        # Stopping is one sentence: inactive. This line's work is done and the other line still has
+        # someone waiting to start -- and "there is work left" is not written into a line's status
+        # (a graph grows, and whether a stopped line should run on is a human's call), so this stop
+        # is inactive too, and the way onto that line is the command the reason gives, typed for
+        # real.
         self.assertEqual(sb.cycle()['status'], 'inactive')
-        # 接那条线的路，照 reason 里给的命令真敲一遍：不加 --force 就该成。`check=True` 意味着
-        # 被拒会当场抛出来，所以下面两行断言成立就说明这一发过了。
-        sb.start_cycle('other', title='另一条线', tags=['writing'])
+        # The way onto that line, the command the reason gives, typed for real: with no --force it
+        # has to work. `check=True` means a refusal raises right there, so the two assertions below
+        # holding means this one passed.
+        sb.start_cycle('other', title='another line', tags=['writing'])
         self.assertEqual(sb.cycle('other')['status'], 'active')
         self.assertEqual(sb.cycle('other')['tags'], ['writing'])
         self.assertEqual(waiting['node_id'], node)
 
     def test_the_second_pick_path_says_the_same_thing(self):
-        """过滤只删行：收尾之后，同一个状态从两个入口读出来是同一套过滤的结果。
+        """The filter only deletes rows: after the close, the same state read through the two entries
+        gives the same filtered result.
 
-        本线从头到尾都只认 `coding`（那个没打 tag 的活也在范围里，所以它先被挑中）；收尾之后
-        盘上还剩一个打了 `coding` 的节点 —— 它在范围里、也还就绪，这就是第二个入口要挑的那个。
+        This line recognizes only `coding` from start to finish (the untagged job is in range too, so
+        it is picked first); after the close one node tagged `coding` is still on disk -- in range
+        and still ready, and that is the one the second entry has to pick.
         """
         sb = self.make()
-        sb.add_node(self.K, '写代码', mode='auto', tags=['coding'])
-        sb.add_node(self.P, '没打 tag 的活', mode='auto')
+        sb.add_node(self.K, 'Write code', mode='auto', tags=['coding'])
+        sb.add_node(self.P, 'the untagged job', mode='auto')
         for i in range(3):
-            sb.add_node('aaaa000%d-6666-4666-8666-ffffffffffff' % i, f'等它的第 {i} 个',
+            sb.add_node('aaaa000%d-6666-4666-8666-ffffffffffff' % i, f'the {i}th waiting on it',
                         mode='auto', deps=[self.P])
         pinned = sb.start_cycle(tags=['coding'], check=False)
 
         self.assertEqual(pinned.returncode, 0, pinned.stderr)
-        self.assertEqual(sb.current_node(), self.P, '图里最要紧的是那个没打 tag 的活')
+        self.assertEqual(sb.current_node(), self.P, 'the untagged job is the one that matters most')
         sb.write_signal('cyc', self.P, 'completed', 'done')
         sb.close_round(self.P)
 
-        # 第二个入口读的是同一张图、同一套过滤
-        self.assertEqual(sb.current_node(), self.K, '本线里就绪的正是那个 coding 节点')
+        # the second entry reads the same graph and the same filter
+        self.assertEqual(sb.current_node(), self.K, 'the ready one on this line is that coding node')
         self.assertEqual([n['id'] for n in pipeline.tag_blocked_ready_nodes(sb.root, ['coding'])], [])
         self.assertEqual(sb.dag_status(self.P), 'completed')
-        self.assertEqual(sb.dag_status(self.K), 'todo', '被挑中不等于被跑过')
+        self.assertEqual(sb.dag_status(self.K), 'todo', 'being picked is not being run')
 
     def test_nothing_ready_anywhere_keeps_the_old_sentence(self):
-        """没有过滤集挡住谁的时候，停下来说的还是「图里没有就绪节点」那句话。"""
+        """With no filter set blocking anyone, the stop still says "the graph has no ready node
+        left"."""
         sb = self.make()
-        sb.add_node(self.K, '写代码', mode='auto')
+        sb.add_node(self.K, 'Write code', mode='auto')
         sb.create_cycle(cycle_id='cyc')
         sb.set_current_node(self.K)
         sb.write_signal('cyc', self.K, 'completed', 'done')
         action = sb.close_round(self.K)
 
         self.assertEqual(action['action'], 'stop_pipeline')
-        self.assertIn('就绪节点', action['reason'])
+        self.assertIn('the graph has no ready node left', action['reason'])
         self.assertNotIn('tag', action['reason'])
         self.assertEqual(sb.cycle()['status'], 'inactive')
 
     def test_an_untagged_cycle_picks_what_it_always_picked(self):
-        """空过滤集的 cycle 与这个功能没出现时逐字节相同：整张图都是范围。
+        """An empty filter set makes a cycle byte-for-byte what it was before this feature: the
+        whole graph is in range.
 
-        这条分支如今只剩一个入口 —— **存量记录**：`cycle start` / `cycle create` 对新调用一律要
-        `--tags`，所以这里把不带 tags 的那条线按老记录的形状写到盘上，再照常驱动它。空集不是死代码：
-        机器上 pull 下来的老 cycle 长这样，而它对挑选结果的影响必须仍是零。
+        This branch now has only one entry -- **the records already on disk**: `cycle start` /
+        `cycle create` always demand `--tags` for a new call, so here the tagless line is written to
+        disk in the old record's shape and then driven as usual. The empty set is not dead code: an
+        old cycle pulled down on a machine looks like this, and its effect on the pick must still be
+        zero.
         """
         sb = self.make()
-        sb.add_node(self.W, '写文案', mode='auto', tags=['writing'])
-        sb.add_node(self.K, '写代码', mode='auto', tags=['coding'])
+        sb.add_node(self.W, 'Write copy', mode='auto', tags=['writing'])
+        sb.add_node(self.K, 'Write code', mode='auto', tags=['coding'])
         sb.start_cycle(tags=['coding'])
-        # 老记录那份形状：这条线不带 tags（那个键根本不出现，不是空 list），此刻钉在 W 上。
-        # 老记录里钉着谁就是谁，与它身上有没有 tag 无关。
+        # The old record's shape: this line carries no tags (the key does not appear at all, it is
+        # not an empty list) and is pinned on W right now. In an old record, whoever is pinned is
+        # it, regardless of any tag it carries.
         state = sb.state()
         state['cycles'][0].pop('tags', None)
         state['cycles'][0]['holding'] = [{'id': self.W, 'since': '2026-10-01T00:00:00Z'}]
@@ -245,32 +268,35 @@ class TestNodeTags(Base):
                          {self.K})
 
     def test_a_running_node_is_never_interrupted_by_the_filter_set(self):
-        """过滤只在挑选那一步读：本条已经钉在手上的节点照跑完，与它身上的 tag 无关。"""
+        """The filter is read only at the pick: this line's node already in hand runs to the end,
+        whatever tag it carries."""
         sb = self.make()
-        sb.add_node(self.K, '写代码', mode='auto', tags=['coding'])
+        sb.add_node(self.K, 'Write code', mode='auto', tags=['coding'])
         sb.start_cycle(tags=['coding'])
         self.assertEqual(sb.current_node(), self.K)
 
-        # 过滤集被改宽/改窄都不该动已经在手上的那个节点
+        # widening or narrowing the filter set must not move the node already in hand
         sb.rewrite_cycle(tags=['writing'])
         self.assertEqual(sb.current_node(), self.K)
         self.assertEqual(sb.plan()['node_id'], self.K)
 
     def test_a_named_node_outside_the_filter_set_runs_and_says_so(self):
-        """`--node` 是机主亲手点的名，过滤集管不到它 —— 但它得说出来，别让人以为过滤集没生效。"""
+        """`--node` is a name the owner typed by hand, and the filter set does not reach it -- but it
+        has to say so, so nobody thinks the filter set failed to apply."""
         sb = self.code_and_words()
         sb.start_cycle(tags=['coding'])
         sb.write_signal('cyc', self.K, 'completed', 'done')
         action = sb.close_round(self.K, node=self.W)
 
         self.assertEqual(sb.current_node(), self.W)
-        self.assertIn('过滤集', action.get('note', ''),
+        self.assertIn("is not in this cycle's filter set", action.get('note', ''),
                       f'a hand-named node outside the filter must be said out loud: {action}')
 
     def test_a_named_node_that_is_not_ready_is_refused(self):
-        """点名一个根本跑不了的节点：停下，并把点名的 id 写进 reason，而不是悄悄换一个节点跑。"""
+        """Naming a node nobody can run: it stops and writes the named id into the reason, instead of
+        quietly running another node."""
         sb = self.make()
-        sb.add_node(self.K, '写代码', mode='auto', tags=['coding'])
+        sb.add_node(self.K, 'Write code', mode='auto', tags=['coding'])
         absent = 'absent-9999-4999-8999-999999999999'
         sb.start_cycle(tags=['coding'])
         sb.write_signal('cyc', self.K, 'completed', 'done')
@@ -281,12 +307,13 @@ class TestNodeTags(Base):
         self.assertIsNone(sb.current_node())
 
     def test_the_cycle_keeps_its_filter_set_for_every_later_step(self):
-        """过滤集属于**这条线**，跟着它走到最后一步：后面每一格都照它挑。"""
+        """The filter set belongs to **this line** and travels with it to the last step: every later
+        slot picks by it."""
         sb = self.make()
-        a = sb.add_node(self.K, '写代码 A', mode='auto', tags=['coding'])
-        b = sb.add_node('aaaa2222-6666-4666-8666-ffffffffffff', '写代码 B', mode='auto',
+        a = sb.add_node(self.K, 'Write code A', mode='auto', tags=['coding'])
+        b = sb.add_node('aaaa2222-6666-4666-8666-ffffffffffff', 'Write code B', mode='auto',
                         tags=['coding'])
-        sb.add_node(self.W, '写文案', mode='auto', tags=['writing'])
+        sb.add_node(self.W, 'Write copy', mode='auto', tags=['writing'])
         sb.start_cycle(tags=['coding'])
         terminal, driver = self.run_to_stop(sb)
 
@@ -297,14 +324,15 @@ class TestNodeTags(Base):
         self.assertEqual(sb.cycle()['tags'], ['coding'])
 
     def test_start_cycle_tags_reach_the_pick_and_the_record(self):
-        """`--tags` 必须传进挑选那一步，也留在 cycle 记录里。
+        """`--tags` has to reach the pick and stay in the cycle record.
 
-        挑选发生在 cycle 建起来之前，所以过滤集只落在记录上就太晚了：第一步就会挑到别的线的
-        节点，而后面每一格都继承一条「头一个节点来路不明」的线。
+        The pick happens before the cycle is built, so landing the filter set only in the record
+        would be too late: the first step would pick another line's node, and every later slot would
+        inherit a line whose first node came from nowhere.
         """
         sb = self.make(cli=True)
-        sb.add_node(self.W, '写文案', mode='auto', tags=['writing'])
-        sb.add_node(self.K, '写代码', mode='auto', tags=['coding'])
+        sb.add_node(self.W, 'Write copy', mode='auto', tags=['writing'])
+        sb.add_node(self.K, 'Write code', mode='auto', tags=['coding'])
 
         sb.start_cycle(tags=['coding'])
 
@@ -312,10 +340,11 @@ class TestNodeTags(Base):
         self.assertEqual(sb.cycle()['tags'], ['coding'])
 
     def test_start_cycle_refuses_when_the_filter_set_matches_nothing(self):
-        """过滤集里一个就绪节点都没有时，拒绝要说清「图里有活，只是不归这条线管」。"""
+        """When the filter set holds no ready node at all, the refusal has to say plainly "there is
+        work in the graph, it is just not this line's to pick"."""
         sb = self.make(cli=True)
-        sb.add_node(self.W, '写文案', mode='auto', tags=['writing'])
-        sb.add_node(self.K, '写代码', mode='auto', tags=['coding'])
+        sb.add_node(self.W, 'Write copy', mode='auto', tags=['writing'])
+        sb.add_node(self.K, 'Write code', mode='auto', tags=['coding'])
 
         proc = sb._tool('cycle', 'start', 'img', '--tags', 'art', check=False, cli=True)
 
@@ -326,46 +355,50 @@ class TestNodeTags(Base):
         self.assertEqual((sb.state() or {'cycles': []})['cycles'], [])
 
     def test_create_cycle_keeps_a_lone_tag_whole(self):
-        """`cycle create --tags art` 记下的是 `['art']`。
+        """`cycle create --tags art` records `['art']`.
 
-        字符串按字符拆开会得到 `['a','r','t']`：过滤集里于是躺着 `a`、`r`、`t` 三个词，图上没有
-        任何节点对得上，而记录里看不出来 —— 这条线挑不到任何东西，原因却写在看不见的地方。
-        两个记录入口（`cycle create` 与 `cycle start`）都要落到同一份 list 上。
+        Splitting the string by character would give `['a','r','t']`: the filter set would then hold
+        the three words `a`, `r` and `t`, no node in the graph matches, and the record would not show
+        it -- this line picks nothing, for a reason written where nobody can see it. Both record
+        entries (`cycle create` and `cycle start`) have to land on the same list.
         """
         sb = self.make()
-        sb.add_node(self.W, '写文案', mode='auto', tags=['writing'])
+        sb.add_node(self.W, 'Write copy', mode='auto', tags=['writing'])
 
         sb._tool('cycle', 'create', 'img', '--tags', 'art', '--force', cli=True)
 
         self.assertEqual(sb.cycle('img')['tags'], ['art'])
 
-    # ── 图上给节点打 tag：dag-manage 那一半 ─────────────────────────────────
+    # ── tagging nodes in the graph: dag-manage's half ─────────────────────────────────────────────
 
     def test_dag_manage_writes_reads_and_clears_node_tags(self):
-        """`add --tags` / `update --tags` / `update --clear-tags` / `list --tags`，全部走真 CLI。
+        """`add --tags` / `update --tags` / `update --clear-tags` / `list --tags`, all through the
+        real CLI.
 
-        词表外的 tag 警告一行就收下 —— 词表摆在人面前给人看，engine 照单全收。
+        A tag outside the vocabulary is taken with one warning line -- the vocabulary is laid out in
+        front of a human to look at, and the engine takes anything.
         """
         sb = self.make()
 
         def add(*args):
             return run_dag(sb.root, 'add', *args).stdout.splitlines()[0].split(': ')[1].strip()
 
-        code = add('写代码', '--tags', 'coding')
-        words = add('写文案', '--tags', 'writing')
-        plain = add('没打 tag 的活')
+        code = add('Write code', '--tags', 'coding')
+        words = add('Write copy', '--tags', 'writing')
+        plain = add('the untagged job')
 
         self.assertEqual(sb.node(code)['tags'], ['coding'])
         listed = {n['id'] for n in json.loads(run_dag(sb.root, 'list', '--tags', 'coding').stdout)}
-        self.assertEqual(listed, {code, plain})            # 没 tag 的那个处处可见
+        self.assertEqual(listed, {code, plain})            # the untagged one is visible everywhere
 
         unknown = run_dag(sb.root, 'list', '--tags', 'misc')
-        self.assertIn('不在词表', unknown.stderr)           # 警告一行，走 stderr
+        self.assertIn('is not in the vocabulary', unknown.stderr)   # one warning line, on stderr
         self.assertEqual({n['id'] for n in json.loads(unknown.stdout)}, {plain})
 
-        # 词表外的 tag 照收：真冒出第四类工作时，写进去就能用。
-        fourth = run_dag(sb.root, 'add', '第四类活', '--tags', 'misc')
-        self.assertIn('不在词表', fourth.stderr)
+        # A tag outside the vocabulary is taken anyway: when a real fourth kind of work turns up,
+        # writing it in is enough to use it.
+        fourth = run_dag(sb.root, 'add', 'the fourth kind of work', '--tags', 'misc')
+        self.assertIn('is not in the vocabulary', fourth.stderr)
         fourth_id = fourth.stdout.splitlines()[0].split(': ')[1].strip()
         self.assertEqual(sb.node(fourth_id)['tags'], ['misc'])
         self.assertIn(fourth_id,
@@ -380,23 +413,28 @@ class TestNodeTags(Base):
         self.assertEqual({n['id'] for n in after}, {plain, words})
 
     def test_a_tag_filter_never_touches_the_graph(self):
-        """过滤是「挑谁」的事：`list --tags` 不改状态、不改依赖，也不给节点判死。
+        """Filtering is about "who is picked": `list --tags` moves no status, changes no dependency
+        and writes no node off.
 
-        挡住一个节点 = 这一格不挑它。它仍是 `todo`、仍是 ready、依赖边原样。
+        Blocking a node = this slot does not pick it. It stays `todo`, stays ready, and its
+        dependency edges are untouched.
         """
         sb = self.make()
-        run_dag(sb.root, 'add', '写代码', '--tags', 'coding')
-        run_dag(sb.root, 'add', '写文案', '--tags', 'writing')
+        run_dag(sb.root, 'add', 'Write code', '--tags', 'coding')
+        run_dag(sb.root, 'add', 'Write copy', '--tags', 'writing')
         before = sb.dag()
         run_dag(sb.root, 'list', '--tags', 'coding', '--ready', '-n', '0')
         self.assertEqual(sb.dag(), before)
 
     def test_both_tools_spell_the_tag_vocabulary_the_same_way(self):
-        """词表是一份约定，摆在 dag-manage（管节点）和 state-manage（管 cycle 的范围）两处。
+        """The vocabulary is one agreement, laid out in two places: dag-manage (nodes) and
+        state-manage (a cycle's range).
 
-        两边分头长出自己的词，就会出现「节点写 `coding`、过滤集写 `code`」这种图上看不出异常的
-        局面 —— 一条线的活静悄悄地永远挑不到。所以这三个词由这一条用例比对：两个
-        工具各自装进来的常量按值比对，不锚在源码的字面写法上（重命名、换行都不该误报）。
+        If the two grew their own words, you would get "a node says `coding`, the filter set says
+        `code`" -- a graph that looks fine, with a line's work quietly never picked. So these three
+        words are compared by this one case: the constants each tool loads are compared by value, not
+        anchored to how the source spells them (a rename or a line break must not raise a false
+        alarm).
         """
         dag_mod = _fresh_module('dag_manage_for_vocab', DAG_MANAGE)
         cycles_mod = _state_cycles_module()
@@ -405,11 +443,13 @@ class TestNodeTags(Base):
         self.assertEqual(dag_mod.VALID_TAGS, cycles_mod.VALID_TAGS)
 
     def test_the_borrowed_cycle_policy_tables_read_the_same_by_value(self):
-        """impl 借的是 `state/cycles.py` 那一份正本，两个包各自装载同一个文件。
+        """impl borrows the one source in `state/cycles.py`, and the two packages each load the same
+        file.
 
-        这里钉的是那条边界：两份读数**按值相等**（`==`）。两个包各按自己的名字装载，拿到的是两个
-        模块对象，所以跨包 `is` 不成立，谁也不该拿 `is` 去比这两份；要改这张表，改的是
-        `state/cycles.py` 那个文件本身。
+        What is pinned here is that boundary: the two readings are **equal by value** (`==`). Each
+        package loads under its own name, so the two module objects differ, `is` does not hold across
+        the packages and nobody should compare these two with `is`; to change this table, change
+        `state/cycles.py` itself.
         """
         cycles_mod = _state_cycles_module()
 
@@ -456,7 +496,7 @@ class TestCycleSelection(Base):
         """Taking a line out of service is a human's decision to stop driving it; the planner hands
         back the one command that puts it back in, and drives nothing."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         sb.set_cycle_status('cyc', 'inactive')
         self.assertEqual(sb.cycle()['status'], 'inactive')
@@ -468,29 +508,32 @@ class TestCycleSelection(Base):
 
 
 class TestNodeWeight(Base):
-    """`dag-manage --weight` 那一半，以及它落到调用行上的那一格。"""
+    """`dag-manage --weight`'s half, and where it lands on the invocation line."""
 
-    # ── 图上那个键 ───────────────────────────────────────────────────────────
+    # ── the key in the graph ─────────────────────────────────────────────────────────────────────
 
     def test_only_light_lands_the_key(self):
-        """`add --weight light` 落键；不写、或显式写 standard，记录里就是今天这份形状。
+        """`add --weight light` lands the key; leaving it out, or stating `standard` explicitly,
+        leaves the record in today's shape.
 
-        存储形状本身就是兼容策略：老图没有这个键、standard 节点没有这个键，两者读作同一件事。
+        The storage shape is itself the compatibility policy: an old graph has no such key and a
+        `standard` node has no such key, and the two read as the same thing.
         """
         sb = self.make()
 
-        light = added(run_dag(sb.root, 'add', '轻活', '--weight', 'light'))
-        plain = added(run_dag(sb.root, 'add', '标准活'))
-        stated = added(run_dag(sb.root, 'add', '显式标准', '--weight', 'standard'))
+        light = added(run_dag(sb.root, 'add', 'light work', '--weight', 'light'))
+        plain = added(run_dag(sb.root, 'add', 'standard work'))
+        stated = added(run_dag(sb.root, 'add', 'explicit standard', '--weight', 'standard'))
 
         self.assertEqual(sb.node(light)['weight'], 'light')
         self.assertNotIn('weight', sb.node(plain))
         self.assertNotIn('weight', sb.node(stated))
 
     def test_update_moves_the_key_both_ways(self):
-        """`update --weight` 两档都管：写 light 落键，写 standard 让这个键从记录里消失。"""
+        """`update --weight` covers both tiers: writing light lands the key, writing standard makes
+        the key disappear from the record."""
         sb = self.make()
-        node = added(run_dag(sb.root, 'add', '活'))
+        node = added(run_dag(sb.root, 'add', 'work'))
 
         run_dag(sb.root, 'update', node, '--weight', 'light')
         self.assertEqual(sb.node(node)['weight'], 'light')
@@ -499,10 +542,11 @@ class TestNodeWeight(Base):
         self.assertNotIn('weight', sb.node(node))
 
     def test_list_and_info_echo_it_only_for_light(self):
-        """回显同 tags：没写过这个键的节点，`list` / `info` 的输出与今天逐字节相同。"""
+        """Echoed the same way tags are: for a node that never wrote this key, `list` / `info` output
+        is byte-for-byte what it is today."""
         sb = self.make()
-        light = added(run_dag(sb.root, 'add', '轻活', '--weight', 'light'))
-        plain = added(run_dag(sb.root, 'add', '标准活'))
+        light = added(run_dag(sb.root, 'add', 'light work', '--weight', 'light'))
+        plain = added(run_dag(sb.root, 'add', 'standard work'))
 
         listed = {n['id']: n for n in json.loads(run_dag(sb.root, 'list').stdout)}
         self.assertEqual(listed[light]['weight'], 'light')
@@ -512,37 +556,41 @@ class TestNodeWeight(Base):
         self.assertNotIn('weight', json.loads(run_dag(sb.root, 'info', plain).stdout))
 
     def test_the_word_outside_the_vocabulary_is_refused_at_the_command_line(self):
-        """词表外的词由 argparse 挡下：两档是个闭集，写错了当场报，别落进记录等下一次读。"""
+        """A word outside the vocabulary is stopped by argparse: the two tiers are a closed set, and
+        a typo is reported right there instead of landing in the record to be read later."""
         sb = self.make()
-        refused = run_dag(sb.root, 'add', '活', '--weight', 'heavy', check=False)
+        refused = run_dag(sb.root, 'add', 'work', '--weight', 'heavy', check=False)
         self.assertNotEqual(refused.returncode, 0)
         self.assertIn('invalid choice', refused.stderr)
 
     def test_an_unknown_word_on_disk_reads_as_standard(self):
-        """记录里写着别的词（手改的、以后新增的、老机器不认识的）→ 读的人按 standard 走。
+        """The record says another word (hand-edited, added later, one an old machine does not know)
+        -> the reader goes with `standard`.
 
-        读不准就往保守那一边倒：多派一个人干活，别让 conductor 因为一个错字亲自上阵。
-        读发生在会话那一侧（`info` 的输出 + skill 里的规则），所以这里只核 `info` 不回显它。
+        When a reading is uncertain, lean conservative: dispatch one more worker rather than have
+        the conductor step in over a typo. The reading happens on the session's side (`info` output
+        plus the rule in the skill), so this only checks that `info` does not echo it.
         """
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto', weight='misc')
+        sb.add_node(NODE, 'UI design', mode='auto', weight='misc')
 
         self.assertNotIn('weight', json.loads(run_dag(sb.root, 'info', NODE).stdout))
 
-    # ── 它落到调用行上的那一格 ───────────────────────────────────────────────
+    # ── where it lands on the invocation line ────────────────────────────────────────────────────
 
     def invocation_line(self, sb) -> str:
-        """派发这个节点时 prompt 的第一行 —— 运行时的判据就长在这一行上。"""
+        """The prompt's first line when this node is dispatched -- the runtime's criterion grows on
+        this line."""
         sb.start_cycle()
         action = sb.next()
         self.assertEqual('dispatch', action['action'], action)
         return action['prompt_text'].splitlines()[0]
 
     def test_the_invocation_line_carries_no_weight_token(self):
-        """调用行只有调用本身与 `[pipeline]`：重量与 mode 都是节点自己的属性，会话读 `info`。"""
+        """The invocation line carries only the call itself and `[pipeline]`: weight and mode are the
+        node's own attributes, and a session reads `info`."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto', weight='light')
+        sb.add_node(NODE, 'UI design', mode='auto', weight='light')
 
         self.assertEqual(self.invocation_line(sb),
                          f'/pf-conduct {NODE} [pipeline]')
-

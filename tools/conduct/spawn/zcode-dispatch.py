@@ -98,7 +98,7 @@ DEFAULT_MODE = 'yolo'
 #:            GUI sessions on this host run.
 #:
 #: The `$level` is part of the value, not decoration: the desktop refuses an automation selection
-#: that carries no reasoning level, three steps downstream ("Automation 模型选择不可用").
+#: that carries no reasoning level, three steps downstream ("Automation model selection unavailable").
 MODEL_CHOICES = {
     'glm': 'account:bigmodel-individual-coding-plan/GLM-5.3-Flash$high',
     'opencode': 'opencode-go-chat/deepseek-v4.1-flash$high',
@@ -192,7 +192,7 @@ def selection_json(model: str | None) -> str:
         if separator and level.strip():
             payload['options'] = {'reasoningLevel': level.strip()}
     # The same strictness the desktop applies on read: unknown keys are how a plausible-looking
-    # value turns into "Automation 模型选择不可用" three steps later.
+    # value turns into "Automation model selection unavailable" three steps later.
     allowed = {'providerId', 'modelId', 'options'}
     extra = set(payload) - allowed
     if extra:
@@ -400,7 +400,7 @@ def main() -> None:
     model_selection = selection_json(args.model)
     if model_selection != 'null' and 'reasoningLevel' not in model_selection:
         print('warning: --model carries no reasoning level, and the desktop refuses an automation '
-              'selection without one ("Automation 模型选择不可用"). Add it: '
+              'selection without one ("Automation model selection unavailable"). Add it: '
               '`--model provider/model$level`, e.g. deepseek/deepseek-flash$max.', file=sys.stderr)
     automation_id = queue(workspace, prompt_file, next_run_at, title, mode=args.mode,
                           model_selection=model_selection, allow_existing=args.allow_existing)

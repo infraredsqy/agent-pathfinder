@@ -35,7 +35,8 @@ import importlib.util
 import json
 from pathlib import Path
 
-# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
+# Bootstrap: the loader is fetched by path too, so every file has to carry this paragraph itself
+# (see `shared/loader.py`).
 SHARED = Path(__file__).resolve().parent
 
 _LOADER = None
@@ -52,7 +53,7 @@ def _loader():
 
 
 def _ledger():
-    """`tools/shared/ledger.py`: `.pf/` 的落点、init 闸门 —— 正本一处。"""
+    """`tools/shared/ledger.py`: where `.pf/` lands and the init gate -- one source."""
     return _loader().load_shared('ledger')
 
 #: The two keys a note is made of, in the order a human reads them.

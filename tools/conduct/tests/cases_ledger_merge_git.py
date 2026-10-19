@@ -53,8 +53,9 @@ class TestGitEndToEnd(unittest.TestCase):
         git(self.repo, 'config', 'merge.pf.driver',
             f'python "{MERGE_PY.as_posix()}" %O %A %B %P')
         (self.repo / '.gitattributes').write_text(GITATTRIBUTES, encoding='utf-8')
-        # init 的两枚文件，加 `.pf/.gitignore`：驱动写回时要拿项目那把锁，锁住在 `.pf/meta/`
-        # 里，而它正是这份 ignore 挡住的东西 —— 于是下面那些"合并没留下痕迹"的断言还成立。
+        # init's two marker files, plus `.pf/.gitignore`: the write-back takes the project's lock,
+        # the lock lives in `.pf/meta/`, and that is exactly what this ignore keeps out -- so the
+        # "the merge left no trace" assertions below still hold.
         init_markers(self.repo)
 
     def write(self, ledger: str, data, sort_keys=False):
@@ -182,7 +183,7 @@ class TestGitEndToEnd(unittest.TestCase):
         proc = git(self.repo, 'rebase', 'feature', check=False)
 
         self.assertNotEqual(0, proc.returncode)
-        for hint in ('git rebase --continue', 'git rebase --abort', 'pf 冲突'):
+        for hint in ('git rebase --continue', 'git rebase --abort', 'pf conflict'):
             self.assertIn(hint, proc.stdout + proc.stderr, proc.stdout + proc.stderr)
         self.assertTrue((self.repo / '.git' / 'rebase-merge').exists()
                         or (self.repo / '.git' / 'rebase-apply').exists(),

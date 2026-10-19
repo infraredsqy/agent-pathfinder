@@ -25,7 +25,7 @@ from harness import GIT, STATE_MANAGE, git, run_argv, shared_loader  # noqa: E40
 
 __all__ = ['TestInit']
 
-MARK = '# pf 工作系统'
+MARK = '# pf working system'
 
 
 def run_init(root: Path, *args):
@@ -33,7 +33,8 @@ def run_init(root: Path, *args):
 
 
 def ledger_contract():
-    """`tools/shared/ledger.py` 正本：闸门的记号与判定都从它这里读，一个字面量都不抄。"""
+    """`tools/shared/ledger.py` is the one source: the gate's markers and its verdict are both read
+    from it, not one literal copied."""
     return shared_loader().load_shared('ledger')
 
 
@@ -82,7 +83,8 @@ class TestInit(unittest.TestCase):
         self.assertTrue((self.root / '.pf' / '.gitignore').is_file())
 
     def test_going_local_untracks_a_directory_the_project_already_committed(self):
-        """忽略行管不了已经 track 的文件：本地档必须把它从 index 里退出来，否则档位在撒谎。"""
+        """An ignore line cannot govern a file that is already tracked: the local kind must take it back
+        out of the index, or the mode is lying."""
         run_init(self.root, '--commit')
         (self.root / '.pf' / 'ideas.json').write_text('{}', encoding='utf-8')
         git(self.root, 'add', '-A')
@@ -115,8 +117,9 @@ class TestInit(unittest.TestCase):
     def test_a_pf_nobody_initialized_is_refused_before_anything_is_written(self):
         ledger = self.root / '.pf'
         (ledger / 'nodes').mkdir(parents=True)          # the shape, none of the markers
-        # 使用约定不是 init 标记：只有它、没有那两枚文件时，照样算没 init 过
-        (ledger / 'AGENTS.md').write_text('# 手写的约定\n', encoding='utf-8')
+        # The usage note is not an init marker: with only it and neither of the two marker files,
+        # the directory still counts as never init-ed
+        (ledger / 'AGENTS.md').write_text('# a hand-written note\n', encoding='utf-8')
 
         proc = run_state(self.root, 'cycle', 'start', 'cyc', '--title', 't', '--tags', 'coding')
 
@@ -127,12 +130,13 @@ class TestInit(unittest.TestCase):
         self.assertFalse((ledger / 'state.json').exists())
 
     def test_init_writes_the_ledger_usage_note(self):
-        """使用约定归工具：任何宿主上 init 过的项目都该拿到同一份，且重跑幂等。"""
+        """The usage note belongs to the tool: every project init-ed on any harness must get the same
+        one, and re-running is idempotent."""
         run_init(self.root)
         note = self.root / '.pf' / 'AGENTS.md'
         self.assertTrue(note.is_file(), 'init writes the usage note into the ledger')
         body = note.read_text(encoding='utf-8')
-        self.assertIn('要改它，先问用户', body)
+        self.assertIn('To change it, ask the user first', body)
         run_init(self.root)
         self.assertEqual(body, note.read_text(encoding='utf-8'),
                          're-running init rewrites the same note, it never stacks or drifts')
@@ -145,13 +149,17 @@ class TestInit(unittest.TestCase):
                           'the tool machinery must stay out of the project history too')
 
     def test_the_markers_init_writes_are_the_ones_the_gate_reads(self):
-        """`init` 落在盘上的记号，与闸门 `INIT_MARKERS` / `is_initialized` 查的记号是同一份。
+        """The markers `init` lands on disk are the same ones the gate's `INIT_MARKERS` /
+        `is_initialized` look for.
 
-        两个方向都挡。正本多一枚记号而 `init` 不写它：`is_initialized` 对这个刚 init 过的目录判
-        False。`init` 改名或漏写一枚：盘上少一枚，同一个判定也判 False。两个方向一致时两边各自
-        安静；一旦分开，症状离开 `init` 跑到工具深处 —— 每个写命令都拒绝一个明明 init 过的项目
-        （或者反过来，一个没 init 的目录被放行），报出来的错与真正该改的那一处隔着几层调用。
-        这一条经真 CLI 跑 `init`，记号从正本按路径读，一个字面量都不抄。
+        Both directions are guarded. The one source gains a marker and `init` does not write it:
+        `is_initialized` says False for a directory just init-ed. `init` renames one or drops one:
+        the disk has one fewer, and the same verdict is False too. While the two agree, each is
+        quiet; once they part, the symptom leaves `init` and moves deep into the tool -- every
+        mutating command refuses a project that is plainly init-ed (or the other way round, a
+        directory that was never init-ed is let through), and the error it reports sits several
+        calls away from the one place that really needs changing. This case runs `init` through
+        the real CLI and reads the markers from the one source by path, not one literal copied.
         """
         proc = run_init(self.root)
         self.assertEqual(0, proc.returncode, proc.stderr)
@@ -160,10 +168,11 @@ class TestInit(unittest.TestCase):
         ledger = self.root / '.pf'
 
         self.assertTrue(contract.is_initialized(ledger),
-                        '闸门说这个目录没 init 过：init 写的记号与正本查的记号分了家')
+                        'the gate says this directory was never init-ed: the markers `init` '
+                        'writes and the ones the one source reads have parted ways')
         for marker in contract.INIT_MARKERS:
             self.assertTrue((ledger / marker).is_file(),
-                            f'闸门要查 {marker}，`init` 没有把它写到盘上')
+                            f'the gate looks for {marker}, and `init` never wrote it to disk')
 
 
 if __name__ == '__main__':

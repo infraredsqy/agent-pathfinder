@@ -93,14 +93,16 @@ def _resolution(label, key, base_value, ours_value, theirs_value, ours, theirs, 
     o_stamp, t_stamp = _get(ours, 'resolved_at'), _get(theirs, 'resolved_at')
     if all(isinstance(s, str) for s in (o_stamp, t_stamp)) and o_stamp != t_stamp:
         newer = 'ours' if o_stamp > t_stamp else 'theirs'
-        rep.decide(f'{label}: 两侧都改了这条指令的解除结果 → 取 resolved_at 较新的一侧'
-                   f'（{newer} {max(o_stamp, t_stamp)}）')
+        rep.decide(f'{label}: both sides changed this instruction\'s resolution -> take the side with '
+                   f'the newer resolved_at ({newer} {max(o_stamp, t_stamp)})')
         winner = ours if o_stamp > t_stamp else theirs
         return _get(winner, key)
     # A revive CLEARS the stamp, and a cleared one can only meet a stamped one when both sides moved
     # this group: two owner acts on two machines, which no stamp in either record orders. Worth
-    # saying in those words -- "resolved_at 分不出先后" would send the reader looking for two stamps.
-    note = ('一侧把这条放回生效（收掉的时刻清空了）、另一侧又改过它 —— 两次机主动作撞了'
-            if (o_stamp is None) != (t_stamp is None) else 'resolved_at 分不出先后')
+    # saying in those words -- "resolved_at cannot order the two" would send the reader looking for
+    # two stamps.
+    note = ('one side put this entry back in force (clearing the moment it was withdrawn) while the '
+            'other side changed it again -- two owner acts collided'
+            if (o_stamp is None) != (t_stamp is None) else 'resolved_at cannot order the two')
     rep.conflict(label, key, ours_value, theirs_value, note)
     return _MISSING

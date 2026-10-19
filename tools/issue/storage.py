@@ -15,7 +15,8 @@ import re
 import sys
 from pathlib import Path
 
-# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
+# Bootstrap: the loader is fetched by path too, so every file has to carry this paragraph itself
+# (see `shared/loader.py`).
 SHARED = Path(__file__).resolve().parent.parent / 'shared'
 
 _LOADER = None
@@ -32,7 +33,8 @@ def _loader():
 
 
 def _ledger():
-    """`tools/shared/ledger.py`: `.pf/` 的落点、worktree 回主树那条判定、init 闸门 —— 正本一处。"""
+    """`tools/shared/ledger.py`: where `.pf/` lands, the worktree-to-main-tree rule, the init gate
+    -- one source."""
     return _loader().load_shared('ledger')
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -40,20 +42,22 @@ def _ledger():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _resolve_project_root(cwd: Path) -> Path:
-    """cwd 即根，唯一例外：cwd 是一条 linked worktree 的检出根时回主树（判定在 ledger 正本里）。"""
+    """cwd is the root; the one exception: when cwd is a linked worktree's checkout root, go back to
+    the main tree (the rule lives in the ledger)."""
     return _ledger().resolve_project_root(cwd)
 
 
-#: 这个模块此刻指着哪一个项目：`configure()` 一次定下，CLI 在 `main()` 里按 cwd 解析一次。
-#: 导入这份文件时不绑项目 —— 模块指向哪，由调用方说一句。
+#: Which project this module points at right now: `configure()` fixes it once, and the CLI resolves
+#: it from cwd once in `main()`. Importing this file binds no project -- the caller says which one.
 DATA_DIR = None
 ISSUES_JSON = None
 
 
 def configure(project_root) -> None:
-    """把记录目录钉在一个项目上：`<root>/.pf/issues/`，它下面的 `issues.json`。
+    """Pin the ledger to one project: `<root>/.pf/issues/`, with its `issues.json` under it.
 
-    这是路径进这个模块的那道门：CLI 在 `main()` 里用 cwd 调一次，进程内的调用方自己点名。
+    This is the door paths enter this module through: the CLI calls it once from cwd inside `main()`,
+    and in-process callers name the project themselves.
     """
     global DATA_DIR, ISSUES_JSON
     DATA_DIR = _ledger().ledger_dir_for(project_root) / 'issues'
@@ -61,17 +65,20 @@ def configure(project_root) -> None:
 
 
 def _require_configured() -> None:
-    """还没点过名就说清楚：读哪个项目的池子，得先由调用方说一句。"""
+    """Say it plainly when nothing was named: which project's pool to read is the caller's word."""
     if ISSUES_JSON is None:
-        print('Error: 这个模块还没指向任何项目；先调 configure(项目根)。', file=sys.stderr)
+        print('Error: this module points at no project yet; call configure(project root) first.',
+              file=sys.stderr)
         sys.exit(1)
 
 VALID_STATUSES = {'open', 'acknowledged', 'resolving', 'resolved', 'rejected'}
 VALID_SEVERITIES = {'P0', 'P1', 'P2', 'P3'}
 VALID_DECISIONS = {'autofix', 'external', 'unknown'}
-#: `scan` 是扫描入池的那一支；`conduct` 是干活的会话撞见一条与本节点无关的债，顺手记进来。
+#: `scan` is the scanning entry into the pool; `conduct` is a working session that ran into a debt
+#: unrelated to its own node and filed it in passing.
 VALID_SOURCES = {'scan', 'manual', 'conduct'}
-#: 严重度 → 权重：池子「有多重」就是它加出来的。一条 P0 抵八条 P3。`weight` 命令读它。
+#: Severity -> weight: the pool's "how heavy" is nothing but this sum. One P0 is worth eight P3s.
+#: The `weight` command reads it.
 SEVERITY_WEIGHTS = {'P0': 8, 'P1': 4, 'P2': 2, 'P3': 1}
 
 
@@ -136,10 +143,11 @@ def _write(data: dict) -> None:
 
 
 def _require_initialized() -> None:
-    """没有 init 过的 `.pf/` 什么都不许写：锁的 `mkdir` 是唯一会把它造出来的东西。
+    """A `.pf/` nobody init'ed may hold no write at all: the lock's `mkdir` is the one thing that
+    would conjure it.
 
-    读 `DATA_DIR.parent`（也就是 `.pf/`），而 `DATA_DIR` 由 `configure()` 点过名；判据与那句话在
-    `tools/shared/ledger.py`。
+    It reads `DATA_DIR.parent` (that is, `.pf/`), and `configure()` named `DATA_DIR`; the judgement
+    and the one sentence a refused write is told live in `tools/shared/ledger.py`.
     """
     ledger = DATA_DIR.parent
     if _ledger().is_initialized(ledger):

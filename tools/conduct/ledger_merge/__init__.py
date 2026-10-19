@@ -152,7 +152,8 @@ from .generic import (EXIT_CONFLICT, EXIT_OK, EXIT_USAGE, KIND_IDEAS, KIND_INSTR
 
 HERE = Path(__file__).resolve().parent.parent   # the conduct tool directory
 
-# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
+# Bootstrap: the loader is fetched by path too, so every file has to carry this paragraph itself
+# (see `shared/loader.py`).
 SHARED = HERE.parent / 'shared'
 
 _LOADER = None
@@ -235,7 +236,7 @@ def _read(path: Path, label: str):
         return jsonio.read_json_strict(path, label)
     except jsonio.JsonReadError as e:
         print(f'Error: {e}', file=sys.stderr)
-        print(f'ledger-merge: {label} 不是合法 JSON，不写任何东西', file=sys.stderr)
+        print(f'ledger-merge: {label} is not valid JSON; nothing is written', file=sys.stderr)
         raise
 
 
@@ -332,30 +333,32 @@ def run(args) -> int:
     if kind is None:
         kind = _kind_from_shape(ours, theirs, base)
     if kind is None:
-        print(f'ledger-merge: 既不是这个驱动管的记录文件（按名字判：{args.path or args.ours}），'
-              f'内容也不像四种记录之一，不碰它', file=sys.stderr)
+        print(f'ledger-merge: by name ({args.path or args.ours}) this is not a ledger file this '
+              f'driver handles, and by its content it is none of the four records -- not touching it',
+              file=sys.stderr)
         return EXIT_USAGE
 
     rep = Report(kind, args.path or args.ours)
 
     if ours is None and theirs is None:
-        print(f'ledger-merge [{rep.path}]: 两侧都没有文件，没有可合的东西', file=sys.stderr)
+        print(f'ledger-merge [{rep.path}]: neither side has a file; there is nothing to merge',
+              file=sys.stderr)
         return EXIT_OK
     if ours is None:
-        rep.decide('ours 不存在（这一侧新增）→ 取 theirs')
+        rep.decide('ours does not exist (added on this side) -> take theirs')
         ours, theirs = theirs, None
     elif theirs is None:
-        rep.decide('theirs 不存在（这一侧新增）→ 取 ours')
+        rep.decide('theirs does not exist (added on this side) -> take ours')
 
     if theirs is None:
         merged = ours                                     # nothing to merge: one side has it all
     else:
         if not all(isinstance(side, dict) for side in (ours, theirs)):
-            print(f'ledger-merge [{rep.path}]: 文件不是一个 JSON 对象，形状不对，不写',
+            print(f'ledger-merge [{rep.path}]: the file is not a JSON object; wrong shape, nothing written',
                   file=sys.stderr)
             return EXIT_USAGE
         if base is not None and not isinstance(base, dict):
-            print(f'ledger-merge [{rep.path}]: base 不是一个 JSON 对象，形状不对，不写',
+            print(f'ledger-merge [{rep.path}]: base is not a JSON object; wrong shape, nothing written',
                   file=sys.stderr)
             return EXIT_USAGE
         merged = _merge(kind, base, ours, theirs, rep, str(ours_path), str(theirs_path))
@@ -366,21 +369,22 @@ def run(args) -> int:
             for line in rep.decisions:
                 print(line)
         else:
-            print('  （没有需要裁决的地方，两侧一致或只有一侧改过）')
+            print('  (nothing to adjudicate: the two sides agree, or only one of them changed anything)')
         rep.flush_conflicts()
-        print(f'  → {"有冲突，未写" if rep.conflicts else "无冲突，本应写入 " + rep.path}')
+        print(f'  -> '
+              f'{"conflicts; nothing written" if rep.conflicts else "no conflicts; would have written " + rep.path}')
         return EXIT_CONFLICT if rep.conflicts else EXIT_OK
 
     if rep.conflicts:
         rep.flush_conflicts()
-        print(f'pf: {len(rep.conflicts)} 处要人裁决，{rep.path} 一个字都没动；'
-              f'先手动合好它，再 `git add` 继续。', file=sys.stderr)
+        print(f'pf: {len(rep.conflicts)} places need a human decision; not a byte of {rep.path} was '
+              f'touched. Merge it by hand first, then `git add` and carry on.', file=sys.stderr)
         return EXIT_CONFLICT
 
     try:
         payload = _owner_bytes(kind, merged)
     except (TypeError, ValueError) as e:
-        print(f'ledger-merge [{rep.path}]: 合出来的结果不是合法 JSON：{e}', file=sys.stderr)
+        print(f'ledger-merge [{rep.path}]: the merged result is not valid JSON: {e}', file=sys.stderr)
         return EXIT_USAGE
     except FileNotFoundError as e:
         return _no_such_tool(e)

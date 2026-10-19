@@ -21,12 +21,12 @@ from .pipeline_loader import _load_pipeline
 
 VALID_TARGETS = ('stage', 'boundary')
 
-#: `state` 缺省读作的那个词：一个没有 `state` 字段的条目按这个词算数。读侧（`pipeline/instruct.py`）
-#: 经装载器借这个名字，不抄第二遍。
+#: The word a missing `state` is read as: an entry with no `state` field counts as this word. The
+#: reading side (`pipeline/instruct.py`) borrows the name through the loader instead of copying it.
 LIVE_STATE = 'live'
 #: The account has two states, and one of them is written by the owner alone: `live` (in force) and
 #: `withdrawn` (archived -- still on the account, no longer read). Nothing else ends an entry: where
-#: it can be seen from is derived on every read from its scope and the bound node/cycle (impl 的
+#: it can be seen from is derived on every read from its scope and the bound node/cycle (the impl's
 #: `instruction_in_scope`), so a scoped entry goes out of sight on its own. A record carrying any
 #: other word in `state` is not one of these; it is read as archived, and nothing writes it back
 #: (`_retired`). Taking an entry off the account is NOT a third state: the entry is not in the list
@@ -56,10 +56,11 @@ def _scope_rules():
 
 
 def valid_scopes() -> tuple:
-    """`scope` 的词表：`conduct_pipeline` 的那一份，不是这里的第二个副本。
+    """The `scope` vocabulary: `conduct_pipeline`'s one, not a second copy kept here.
 
-    `SCOPES` 在 `pipeline/instruct.py`（判定的正本）里；这个工具只借不抄 —— 抄一份
-    的下场是给判定加第四个 scope 之后，`--scope` 先在 argparse 那一步把它拒了。
+    `SCOPES` lives in `pipeline/instruct.py` (the source of the judgement); this tool borrows it
+    instead of copying -- the price of a copy is that after a fourth scope is added to the
+    judgement, `--scope` refuses it first, at the argparse step.
     """
     return _scope_rules().SCOPES
 
@@ -138,11 +139,13 @@ def _next_instruction_id(data: dict) -> str:
 # ── where the pipeline stands, and what is visible from there ──
 
 def _cycle_of_node(active: list, node: str) -> str | None:
-    """节点反查 cycle：这个节点正拿在哪一条 active cycle 手里？
+    """Node to cycle, backwards: which active cycle is holding this node right now?
 
-    节点 id 在整个 DAG 里唯一，cycle 的记录里写着它此刻握着的那组节点 —— 于是「读者站在哪条线上」
-    这件事，在两条 active cycle 并排时也能从盘上读出来，不必猜一个「当前 cycle」。只有恰好一条
-    命中才算数：两条线都握着同一个节点时（同一条活被两条线同时开跑），答案不止一个，那还是给 None。
+    A node id is unique in the whole DAG, and a cycle's record says which set of nodes it holds at
+    this moment -- so "which line the reader stands on" can be read off disk even with two active
+    cycles side by side, with no guessing at a "current cycle". Only exactly one hit counts: when
+    two lines hold the same node (the same work started by two lines at once), the answer is more
+    than one, and None comes back.
     """
     hits = [c['id'] for c in active if node in _holding_ids(c)]
     return hits[0] if len(hits) == 1 else None
@@ -203,16 +206,17 @@ def _instruct_empty_lines(total: int, scope: str | None, global_total: int) -> l
     first of those has no place in an answer.
     """
     if not total:
-        return ['本项目没有任何指令记录。',
-                '这不是错误：可以照常开工。']
+        return ['This project has no instruction record at all.',
+                'That is not an error: work can start as usual.']
     if scope:
-        return [f'没有 scope={scope} 且仍在生效的指令。',
-                f'（指令记录里有 {total} 条记录。）']
+        return [f'No instruction with scope={scope} is still in force.',
+                f'(The instruction record has {total} entries.)']
     if not global_total:
-        return ['本项目没有任何全局指令。',
-                f'（指令记录里有 {total} 条记录，但都不是全局的。）']
-    return ['当前没有任何仍在生效的指令记录。',
-            f'（指令记录里有 {total} 条记录，都不在生效。把一条指令归档只有机主能做。）']
+        return ['This project has no global instruction.',
+                f'(The instruction record has {total} entries, and none of them is global.)']
+    return ['No instruction record is in force right now.',
+            f'(The instruction record has {total} entries, and none of them is in force. Only the '
+            f'owner can archive an instruction.)']
 
 
 def _nothing_visible_lines(total: int) -> list:
@@ -222,17 +226,19 @@ def _nothing_visible_lines(total: int) -> list:
     is nothing for me here" from "there is nothing at all", and the second sentence is what keeps it
     from reading as a green light.
     """
-    return ['当前这一步没有看得见的指令。',
-            f'（指令记录里有 {total} 条记录：它们要么绑在别的 cycle 或别的节点上，要么已经不在生效'
-            f'状态。位置钉不下来时这些条目照念 —— 读成空，是它们真的到不了这一步。）']
+    return ['No instruction is visible from this step.',
+            f'(The instruction record has {total} entries: they are bound to another cycle or '
+            f'another node, or they are no longer in force. When the position cannot be pinned down '
+            f'these entries are still read out -- reading as empty means they really cannot reach '
+            f'this step.)']
 
 
 #: How a scope is spelled for the reader. The vocabulary is English in the account and in the flag
-#: (`--scope global|cycle|node`); the sentences a session reads are Chinese, and none of them
-#: carries the word `cycle`, which is also how the cycle ids in this account start.
-SCOPE_WORDS = {'global': '全局（任何位置都算数）',
-               'cycle': '本次运行期间（这次运行结束就不再算数）',
-               'node': '仅当前节点（这个节点做完就不再算数）'}
+#: (`--scope global|cycle|node`); the sentences a session reads spell the scope out in words, and
+#: none of them carries the word `cycle`, which is also how the cycle ids in this account start.
+SCOPE_WORDS = {'global': 'global (counts anywhere)',
+               'cycle': 'for this run (it stops counting once this run ends)',
+               'node': 'this node only (it stops counting once this node is done)'}
 
 
 def _render_constraints(items: list) -> None:
@@ -243,15 +249,15 @@ def _render_constraints(items: list) -> None:
     it, and showing it invites treating a past reading as a reason the instruction might not apply
     now.
     """
-    print(f'本项目有 {len(items)} 条在当前这一步看得见的指令：')
+    print(f'This project has {len(items)} instruction(s) visible from this step:')
     print()
     for i, it in enumerate(items, 1):
         print(f'{i}. {it["text"]}')
         if it.get('scope'):
-            print(f'   可见性：{SCOPE_WORDS.get(it["scope"], it["scope"])}')
-        deliver = {'stage': '所有节点', 'boundary': '仅在收尾时读'}.get(it.get('target'))
+            print(f'   visibility: {SCOPE_WORDS.get(it["scope"], it["scope"])}')
+        deliver = {'stage': 'every node', 'boundary': 'read only at the close'}.get(it.get('target'))
         if deliver:
-            print(f'   范围：{deliver}')
+            print(f'   reach: {deliver}')
         print()
 
 
@@ -333,8 +339,10 @@ def cmd_instruction_add(text: str, scope: str, target: str, said_by: str,
         print(f'Error: --target must be one of {list(VALID_TARGETS)}', file=sys.stderr)
         sys.exit(1)
 
-    # 读-追加-整份写回必须在锁里：两个会话并发 add 时，后写者会整份覆盖、先写的条目无声消失
-    # （顺带各得一个同号 id）。id 按「已经发到过的最大号 + 1」取，也只有在锁里才是无歧义的。
+    # Read-append-write-the-whole-file must sit inside the lock: with two sessions adding at
+    # once, the later writer would overwrite the whole file and the entry written first would
+    # vanish without a word (each also getting an id of the same number). The id is taken as "the
+    # highest number ever handed out + 1", which is unambiguous only inside the lock.
     with _ledger_lock():
         state = _read_state()
         cycle_id, node_id = _new_entry_binding(scope, cycle, node, state)
@@ -359,7 +367,8 @@ def cmd_instruction_add(text: str, scope: str, target: str, said_by: str,
         items.append(entry)
         _write_instructions(data)
     if scope == 'global':
-        # 全局条目没有绑定：`@ 线 / 节点` 那截尾巴只会让人误读成局部条目。
+        # A global entry has no binding: the `@ line / node` tail would only be misread as a
+        # scoped entry.
         print(f'INSTRUCTION {entry["id"]}: [{scope}/{target}] {text}')
     else:
         where = (f'{cycle_id} / {node_id[:8]}' if (cycle_id and node_id)
@@ -391,10 +400,13 @@ def cmd_instruction_list(as_json: bool, live_only: bool, project: str | None = N
     global_total = len([i for i in all_items if rules.entry_scope(i) == 'global'])
 
     if not all_entries and scope is None and not live_only:
-        # 默认视图：位置由 `_position` 读出来，读不读由管道的那一个判定说了算
-        # （`instruction_in_scope`）—— 收尾结算一个节点时站的是同一个位置，用的是同一个判定。
+        # The default view: the position comes from `_position`, and whether an entry is read is
+        # the pipeline's one judgement (`instruction_in_scope`) -- closing out a node stands in the
+        # same position and uses the same judgement.
         cur_cycle, cur_node = _position(project, node=node)
-        # scope 判定要的两件事（图里的节点表、此刻在服务的线）由判定那一侧读：这一侧不拼第二份。
+        # The two things the scope judgement needs (the graph's node table, the lines in service
+        # right now) are read on the judgement's side: this side does not piece together a second
+        # copy.
         nodes, active = rules._scope_facts(ledger_dir_for(project).parent)
         visible = [_fold(i) for i in all_items
                    if _is_live(i)
@@ -435,7 +447,8 @@ def cmd_instruction_list(as_json: bool, live_only: bool, project: str | None = N
         # Any word other than `live` -- including one an older tool wrote -- reads as archived.
         mark = marks.get(i.get('state', LIVE_STATE), '✗')
         scoped = rules.entry_scope(i)
-        deliver = {'stage': '干活可见', 'boundary': '仅收尾时读'}.get(i.get('target'), '?')
+        deliver = {'stage': 'visible while working', 'boundary': 'read only when closing out'}.get(
+            i.get('target'), '?')
         print(f'{mark} {i["id"]}  [{scoped}/{deliver}]  {i.get("text","")}')
         if i.get('note'):
             print(f'      note: {i["note"]}')

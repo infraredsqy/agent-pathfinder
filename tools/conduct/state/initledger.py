@@ -31,58 +31,65 @@ from pathlib import Path
 
 from .store import LEDGER_NAME, _ledger, _loader, _resolve_project_root
 
-#: `.pf/` 底下三样机械空间。提交档下它替项目仓库挡住这三样，自成仓库时替那份仓库挡。
+#: The three pieces of machinery under `.pf/`. In the committed kind it keeps them out of the
+#: project repository; with a repository of its own it keeps them out of that one.
 GITIGNORE_BODY = """\
-# 这套工具自己的机械空间：派发落点、worktree、节点跑出来的临时件。
+# This tool's own machinery: where dispatch lands, worktrees, the temp files a node produces.
 meta/
 worktrees/
 temp/
 """
 
-#: 模式相对 `.pf/`，所以同一份文件在两种档位下都对：提交档下它管的是 `<项目>/.pf/…`，
-#: 自成仓库时管的是那份仓库的根。
+#: The patterns are relative to `.pf/`, so the same file is right in both modes: the committed kind
+#: governs `<project>/.pf/…`, and the own-repo kind governs that repository's root.
 GITATTRIBUTES_BODY = """\
-# 记录不进 EOL 转换：工具在 Windows 上写 CRLF，各机的 core.autocrlf 不该改动它。
+# Records do not go through EOL conversion: the tool writes CRLF on Windows, and no machine's
+# core.autocrlf should rewrite that.
 ** -text
 
-# 记录按条目合并，不按行；驱动实现在 tools/conduct/ledger-merge.py，
-# 命令注册在每台机器的 git config（pf register）。
+# Records merge entry-wise, not line by line; the driver lives in tools/conduct/ledger-merge.py,
+# and the command is registered in each machine's git config (pf register).
 ideas.json merge=pf
 state.json merge=pf
 instructions.json merge=pf
 signals/** merge=pf
 """
 
-#: `.pf/` 自己的使用约定，由 `init` 写入，跟着项目走：谁跑 pf 都看见同一份纪律，
-#: 不必为它在每次工具调用上挂一个钩子。要改它，先问用户。
+#: `.pf/`'s own usage note, written by `init` and carried with the project: everyone who runs pf
+#: sees the same discipline, with no hook hung on every tool call for it. To change it, ask the
+#: user first.
 LEDGER_AGENTS_BODY = """\
-# .pf 使用约定
+# .pf usage note
 
-> 本文件（`.pf/AGENTS.md`）不得超过 100 行。
-> 本文件由这套工具在 `init` 时写入并维护。**要改它，先问用户**——他说了「可以」，再动手。
+> This file (`.pf/AGENTS.md`) must not exceed 100 lines.
+> This file is written and maintained by this tool at `init` time. **To change it, ask the user first** -- once they have said "go ahead", then touch it.
 
-本目录是 pf 管线的记录库：`ideas.json`、`state.json`、`instructions.json`、
-`signals/` 是管线的记录，`nodes/<uuid>/` 是每一格（DAG 节点）的 spec 与交付物。
+This directory is the pf pipeline's ledger: `ideas.json`, `state.json`, `instructions.json` and
+`signals/` are the pipeline's records, and `nodes/<uuid>/` holds the spec and the deliverable of
+each slot (DAG node).
 
-- 记录只经 `pf` 读写（`pf dag …`、`pf issue …`、`pf next`）；禁止手编 JSON，也不要直接 read `ideas.json` 原文——用工具的 list / plan 输出。
-- 属于某一格的过程产物（探针、原始输出、自证脚本）放 `.pf/nodes/<uuid>/temp/`，临时不入库，别当交付物提交。
-- 其他一切临时产物放工作区根的 `.tmp/`。
-- `meta/`、`worktrees/`、`nodes/<id>/temp/` 由 `.gitignore` 挡在版本库外；别把这些里面的东西手工搬出去提交。
+- Records are read and written only through `pf` (`pf dag …`, `pf issue …`, `pf next`); hand-editing the JSON is forbidden, and so is reading `ideas.json` raw -- use the tool's list / plan output.
+- Process artifacts belonging to one slot (probes, raw output, self-check scripts) go in `.pf/nodes/<uuid>/temp/`, which is temporary and not committed: do not submit them as deliverables.
+- Everything else temporary goes in `.tmp/` at the workspace root.
+- `meta/`, `worktrees/` and `nodes/<id>/temp/` are kept out of the repository by `.gitignore`; do not move anything from inside them out by hand and commit it.
 """
 
-#: 写进 `info/exclude` 的那两行的记号。按记号收割：种一次是它，拔一次也是它。
-EXCLUDE_MARK = '# pf 工作系统：这套记录只留本机，不进团队库'
+#: The marker on those two lines written into `info/exclude`. Harvested by marker: planting one is
+#: it, and pulling one is it too.
+EXCLUDE_MARK = '# pf working system: this ledger stays on this machine, never in the team repo'
 
-#: 这套工具树里 `pf` 的位置：`<tools>/conduct/state/` 往上三级就是 `<tools>`。
+#: Where `pf` sits in this tool tree: three levels up from `<tools>/conduct/state/` is `<tools>`.
 TOOLS = Path(__file__).resolve().parent.parent.parent
 
 
 def driver_command() -> str:
-    """登记进 `merge.pf.driver` 的那条命令。
+    """The command registered into `merge.pf.driver`.
 
-    首选 PATH 上的 `pf`：这条命令不带绝对路径，checkout 搬到别处、换一台机器，项目里已经登记的
-    那一行照样有效，不必逐项目重来。PATH 上还没有 `pf` 时退回绝对形式，并请人去补 PATH——补好
-    之后重跑一次 `pf register`，登记的那行就跟位置无关了。
+    `pf` on PATH is preferred: that command carries no absolute path, so moving the checkout
+    elsewhere or switching machines keeps the line already registered in the project valid, with no
+    per-project redo. When `pf` is not on PATH yet, fall back to the absolute form and ask a human
+    to fix PATH -- after that, one more `pf register` makes the registered line
+    location-independent.
     """
     for entry in os.environ.get('PATH', '').split(os.pathsep):
         if entry and (Path(entry) / 'pf').is_file():
@@ -91,7 +98,7 @@ def driver_command() -> str:
 
 
 def register_driver(project: Path) -> str:
-    """把一个项目的合并驱动登记好，返回登记的那条命令。"""
+    """Register one project's merge driver, and return the command that was registered."""
     command = driver_command()
     _git(project, 'config', 'merge.pf.name', 'pf ledger three-way merge')
     _git(project, 'config', 'merge.pf.driver', command)
@@ -99,25 +106,28 @@ def register_driver(project: Path) -> str:
 
 
 def cmd_register(project: str | None = None) -> None:
-    """`register`：登记合并驱动，并把登记的那条命令打出来。
+    """`register`: register the merge driver, and print the command that was registered.
 
-    `init` 里已经顺手做了这件事；这个动词在这里，是为了让一个已经 init 过的项目能单独把驱动补齐
-    （换机器、换 checkout 位置之后重跑它一次就够），也让 `pf register` 有个可转发的落点。
+    `init` already does this along the way; the verb is here so that a project already init-ed can
+    top the driver up on its own (re-running it once is enough after a new machine or a new
+    checkout location), and so that `pf register` has something to forward to.
     """
     root = Path(project).expanduser().resolve() if project else _resolve_project_root(Path.cwd())
     print(register_driver(root))
 
 
 def _git(project: Path, *args: str) -> subprocess.CompletedProcess:
-    """`tools/shared/gitcmd.py`: 这棵树问 git 的唯一种写法（cwd、解码、不抛都在那里）。"""
+    """`tools/shared/gitcmd.py`: the tree's one way of asking git (cwd, decoding, no-raise all live there)."""
     return _loader().load_shared('gitcmd').git(project, *args)
 
 
 def _exclude_file(project: Path) -> tuple[Path, str] | None:
-    """这个项目的仓库忽略清单（`info/exclude`）与要写进去的那条模式。
+    """This project's repository ignore list (`info/exclude`) and the pattern to write into it.
 
-    不是 git 项目、或者 git 不在手上时返回 None：那种项目没有能被扫进去的地方，`--local`
-    的忽略行也就无从谈起。模式带上项目相对仓库根的前缀——项目可能是仓库里的一个子目录。
+    Returns None when this is not a git project, or when git is not at hand: that kind of project
+    has nowhere to be swept into, so the `--local` ignore line has no meaning either. The pattern
+    carries the project's prefix relative to the repository root -- a project may be a
+    subdirectory of the repository.
     """
     if _git(project, 'rev-parse', '--git-dir').returncode != 0:
         return None
@@ -132,9 +142,10 @@ def _exclude_file(project: Path) -> tuple[Path, str] | None:
 
 
 def _write_exclude(path: Path, pattern: str | None) -> str:
-    """种下或拔掉 `info/exclude` 里那两行，返回一句话说明做了什么。
+    """Plant or pull the two lines in `info/exclude`, and return one sentence saying what was done.
 
-    按记号收割而不是按模式收割：模式随项目在仓库里的位置变（子目录项目），记号不变。
+    Harvested by marker, not by pattern: the pattern moves with the project's place in the
+    repository (a subdirectory project), while the marker does not.
     """
     lines = path.read_text(encoding='utf-8', errors='replace').splitlines() if path.exists() else []
     kept, skipped = [], False
@@ -155,32 +166,39 @@ def _write_exclude(path: Path, pattern: str | None) -> str:
         kept += [EXCLUDE_MARK, pattern]
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('\n'.join(kept) + '\n', encoding='utf-8')
-        return f'已写进 {path}：{pattern}' + ('（换了新的模式）' if had else '')
+        return f'wrote into {path}: {pattern}' + (' (replaced the old pattern)' if had else '')
     if not had:
-        return f'{path} 里本来就没有 pf 的忽略行。'
+        return f'{path} had no pf ignore line in the first place.'
     path.write_text('\n'.join(kept) + ('\n' if kept else ''), encoding='utf-8')
-    return f'已从 {path} 拔掉 pf 的忽略行。'
+    return f'pulled the pf ignore line out of {path}.'
 
 
 def _untrack(project: Path, ledger: Path) -> str:
-    """本地档：已经进了项目仓库的 `.pf/` 要从 index 里退出来，文件留在盘上。
+    """The local kind: a `.pf/` that already got into the project repository has to come out of the
+    index, with the files left on disk.
 
-    不退的话档位会撒谎——盘上看着是本地档（忽略行在、下一发不带它），而项目仓库仍把整个
-    目录带走。忽略行管不了已经 track 的文件，这一条只有 index 说了算。
+    Leaving it in would make the mode a lie -- on disk it looks local (the ignore line is there,
+    and the next commit does not carry it), while the project repository still takes the whole
+    directory along. An ignore line cannot govern a file already tracked; only the index decides
+    this one.
     """
     if _git(project, 'ls-files', '--', LEDGER_NAME).stdout.strip() == '':
-        return '项目仓库本来就没 track `.pf/`，index 没动。'
+        return 'the project repository never tracked `.pf/`; the index was left alone.'
     done = _git(project, 'rm', '-r', '-q', '--cached', '--', LEDGER_NAME)
     if done.returncode != 0:
-        return f'Warning: `git rm --cached` 没成：{done.stderr.strip()}'
-    return '已把 `.pf/` 从项目仓库的 index 里退出来（文件都还在盘上，随你提交这一发）。'
+        return f'Warning: `git rm --cached` failed: {done.stderr.strip()}'
+    return ('took `.pf/` out of the project repository index (every file is still on disk; commit '
+            'this round as you like).')
 
 
 def cmd_init(project: str | None = None, mode: str = 'local', own_repo: bool = True) -> None:
-    """把 `.pf/` 摆成一个能用的证据目录，并定下它是进项目库还是只留本机。
+    """Lay `.pf/` out as a usable evidence directory, and settle whether it enters the project
+    repository or stays on this machine alone.
 
-    幂等：两枚文件每次都照常量重写，忽略行照着模式种或拔。已经 init 过的项目重跑一次没有副
-    作用，换档也只是再跑一次 —— `--local` 与 `--commit` 各自把 `info/exclude` 那一行安顿好。
+    Idempotent: both files are rewritten from their constants every time, and the ignore line is
+    planted or pulled according to the mode. Re-running on an already init-ed project has no side
+    effect, and switching modes is just another run -- `--local` and `--commit` each settle the
+    `info/exclude` line their own way.
     """
     root = Path(project).expanduser().resolve() if project else _resolve_project_root(Path.cwd())
     ledger = _ledger().ledger_dir_for(root)
@@ -189,22 +207,25 @@ def cmd_init(project: str | None = None, mode: str = 'local', own_repo: bool = T
     (ledger / '.gitignore').write_text(GITIGNORE_BODY, encoding='utf-8')
     (ledger / '.gitattributes').write_text(GITATTRIBUTES_BODY, encoding='utf-8')
     (ledger / 'AGENTS.md').write_text(LEDGER_AGENTS_BODY, encoding='utf-8')
-    # 设置文件：摆一个空对象，位置一眼可见；空对象读作"全按出厂默认"。已经有内容时一个字都不动
-    # —— init 是幂等的，而这一份是人／agent 会往里写东西的，重跑一次不能把人写下的覆盖清掉。
+    # The config file: lay down an empty object, visible at a glance; an empty object reads as "all
+    # factory defaults". When it already has content, not one character is touched -- init is
+    # idempotent, and this is a file humans / agents write into, so a re-run must not wipe out what
+    # they wrote.
     config_file = _ledger().config_path_of(ledger)
     made_config = not config_file.exists()
     if made_config:
         config_file.write_text('{}\n', encoding='utf-8')
 
-    print(f'记录目录：{ledger}')
-    print(f'模式：{"只留本机（.pf/ 不进团队库）" if mode == "local" else "跟项目一起进版本库"}')
-    print(f'设置文件：{config_file}'
-          f'（{"新摆的空对象" if made_config else "已经在，没动它"}；'
-          f'空＝全按出厂默认，要改就用 `pf config set`）')
+    print(f'Ledger: {ledger}')
+    print(f'Mode: {"this machine only (.pf/ does not enter the team repository)" if mode == "local" else "into the version repository with the project"}')
+    print(f'Config file: {config_file}'
+          f' ({"a freshly laid empty object" if made_config else "already there, left alone"}; '
+          f'empty = all factory defaults, and `pf config set` is how to change one)')
 
     exclude = _exclude_file(root)
     if exclude is None:
-        print('这个项目不是一个 git 检出：忽略行无从谈起，整套 pull / push 也都不适用。')
+        print('This project is not a git checkout: there is no ignore line to speak of, and the '
+              'whole pull / push story does not apply either.')
     else:
         path, pattern = exclude
         print(_write_exclude(path, pattern if mode == 'local' else None))
@@ -214,20 +235,21 @@ def cmd_init(project: str | None = None, mode: str = 'local', own_repo: bool = T
     if own_repo and not (ledger / '.git').exists():
         done = _git(ledger, 'init', '--quiet')
         if done.returncode == 0:
-            print(f'已给 {ledger} 开一份自己的仓库：本地历史从这里开始，'
-                  f'给它接一个远端之后，它也能自己走另一台机器。')
+            print(f'Gave {ledger} a repository of its own: local history starts here, and once a '
+                  f'remote is attached to it, it can travel to another machine on its own.')
         else:
-            print(f'Warning: `git init` 没成：{done.stderr.strip()}', file=sys.stderr)
+            print(f'Warning: `git init` failed: {done.stderr.strip()}', file=sys.stderr)
     elif own_repo:
-        print(f'{ledger} 已经有一份自己的仓库了，没动它。')
+        print(f'{ledger} already has a repository of its own; it was left alone.')
 
     if mode == 'local':
-        print('提醒：`.pf/` 是被忽略的，`git clean -xdf` 会把它连里面的历史一起删掉。'
-              '接一个远端是唯一能救回来的办法。')
+        print('A reminder: `.pf/` is ignored, so `git clean -xdf` deletes it, history and all. '
+              'Attaching a remote is the only way to get it back.')
 
     if _git(root, 'rev-parse', '--git-dir').returncode == 0:
         command = register_driver(root)
-        print(f'合并驱动已登记：merge.pf.driver = {command}')
+        print(f'Merge driver registered: merge.pf.driver = {command}')
         if not command.startswith('pf '):
-            print('  注：`pf` 还不在 PATH 上，先登记了绝对形式。把它所在的 bin 目录放进 PATH，'
-                  '再重跑一次 `pf register`，这行就跟位置无关了。')
+            print('  Note: `pf` is not on PATH yet, so the absolute form was registered instead. '
+                  'Put its bin directory on PATH, run `pf register` once more, and this line '
+                  'becomes location-independent.')

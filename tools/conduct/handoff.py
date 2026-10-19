@@ -26,8 +26,9 @@ no session. It also leaves a readable middle state: a ticket on disk whose node 
 yet is how a chain that broke halfway shows up (the planner answers `wait` with the closing command).
 The worker never reads this program's output and never touches a state file.
 
-交条子这一拍只写条子、读一遍 `plan`（只读）、把答案里的收尾命令报给会话 —— 状态与下一格的
-prompt 都不由这一拍写。
+This step of filing the ticket only writes the ticket, reads `plan` once (read-only) and reports
+the closing command in the answer back to the session -- neither the state nor the next slot's
+prompt is written by this step.
 
 The one gate is the cycle's own hand: a ticket is accepted only while the cycle is holding the
 node, so a stale session reporting on a node that was closed and released long ago is refused
@@ -48,7 +49,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent      # the conduct tool directory: the entry sits at its top
 CONDUCT = HERE
 
-# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
+# Bootstrap: the loader is fetched by path too, so every file has to carry this paragraph itself
+# (see `shared/loader.py`).
 SHARED = CONDUCT.parent / 'shared'
 
 _LOADER = None
@@ -65,7 +67,7 @@ def _loader():
 
 
 def _ledger():
-    """`tools/shared/ledger.py`: `.pf/` 的落点与 worktree 回主树那条判定 —— 正本一处。"""
+    """`tools/shared/ledger.py`: where `.pf/` lands and the worktree-to-main-tree rule -- one source."""
     return _loader().load_shared('ledger')
 
 
@@ -75,19 +77,22 @@ def _load(name: str, path):
 
 
 def _project_root(project: Path) -> Path:
-    """cwd（或 `--project`）落在 linked worktree 里时回主树。
+    """Go back to the main tree when cwd (or `--project`) lands in a linked worktree.
 
-    并行模式下这一条是从 worktree 的 cwd 跑的：条子必须落主树的 `.pf/signals/`，标记落主树的
-    `.pf/meta/`。判定只有 `tools/shared/ledger.py` 一处，这里借它。
+    In parallel mode this rule is run from the worktree's cwd: the note must land in the main tree's
+    `.pf/signals/` and the marker in the main tree's `.pf/meta/`. The rule lives in exactly one
+    place, `tools/shared/ledger.py`, and this borrows it.
     """
     return _ledger().resolve_project_root(project)
 
 
 def _marker():
-    """`spawn/marker.py`: 断链降级标记的落点与记录形状，一处长成。
+    """`spawn/marker.py`: where the broken-chain degradation marker lands and the shape it is
+    written in -- one place grows both.
 
-    `spawn/` 这一层与手边这个入口是同一条链的两半（spawner 那一层按同一份形状自己写，那条例外写在
-    `marker.py` 的说明里），加载方式与别的邻居一样走装载器。
+    The `spawn/` layer and the entry point beside it are the two halves of one chain (the spawner
+    layer writes the same shape by itself, and that exception is written down in `marker.py`'s
+    description); it is loaded through the loader like any other neighbour.
     """
     return _loader().load_by_path('conduct_spawn_marker',
                                   CONDUCT / 'spawn' / 'marker.py',
@@ -102,8 +107,10 @@ def _write_marker(project: Path, cycle: str, phase: str, reason: str, attempts: 
     # erase line A's "chain broke here" flag (the spawners clear the marker of their OWN cycle on
     # success).
     #
-    # 落点、记录形状与那句人话以 `spawn/marker.py` 为正本（spawner 那一层按同一份形状自己写：
-    # 见 `marker.py` 的说明），这里只交出这一拍知道的事：哪条线、断在哪一步、那一拍的原话。
+    # The landing place, the record shape and that one sentence have `spawn/marker.py` as their one
+    # source (the spawner layer writes the same shape by itself: see `marker.py`'s description);
+    # this hands over only what this step knows -- which line, which step broke, the exact words of
+    # that step.
     marker = _marker()
     path = marker.marker_path(project, cycle)
     try:
@@ -117,7 +124,8 @@ def _write_marker(project: Path, cycle: str, phase: str, reason: str, attempts: 
 #: What one asked-for reading means, in the words a worker needs to fill it in. A key with no line
 #: here still gets a slot -- its own name in angle brackets.
 _READING_ASKS = {
-    'test_seconds': '全量验证实测的墙钟秒数（照项目文档认定的那套命令跑，不许估算）',
+    'test_seconds': 'the measured wall-clock seconds of a full verification (run the command set '
+                    'the project docs recognize; estimating is not allowed)',
 }
 
 
@@ -134,26 +142,28 @@ def _print_form(project: Path, cycle_id: str, node: str | None) -> int:
         print(f'Error: no cycle named {cycle_id!r}.', file=sys.stderr)
         return 2
     readings = pipeline.asked_readings(cycle)
-    fields = ['"deliverable":"<本节点该产出的那样东西的路径>"',
-              '"acceptance":["<核心验收点1>","<核心验收点2>"]',
-              '"touched":["<你这个节点改过的文件>"]']
+    fields = ['"deliverable":"<path to the thing this node is meant to produce>"',
+              '"acceptance":["<key acceptance point 1>","<key acceptance point 2>"]',
+              '"touched":["<files you changed under this node>"]']
     if readings:
         slots = ','.join(f'"{key}":<{_READING_ASKS.get(key, key)}>' for key in readings)
         fields.append(f'"reading":{{{slots}}}')
     here = Path(__file__).resolve().as_posix()
-    print(f'这条线（{cycle_id}）要的条子：')
+    print(f'the ticket this line ({cycle_id}) asks for:')
     print()
-    print(f'python {here} {cycle_id} {node or "<节点id>"} completed -s "<一行总结>" '
+    print(f'python {here} {cycle_id} {node or "<node id>"} completed -s "<one-line summary>" '
           f"-o '{{{','.join(fields)}}}'")
     if readings:
         print()
-        print('没测到的读数那个键整个删掉：缺一个数读作「这一趟不知道」，填 0 读作「已经量到零」。')
+        print('drop the key of any reading you did not measure: a missing number reads as "this run '
+              'does not know", a 0 reads as "measured zero".')
     return 0
 
 
 def main(argv=None) -> int:
-    # 这条命令由干活的那格在收尾时跑，输出会被会话读进上下文：统一成 UTF-8，
-    # 免得控制台代码页是 GBK 时中文总结变成乱码。stderr 同样处理：报错也会被父进程读。
+    # The working slot runs this command at the close, and the session reads its output into context:
+    # force it to UTF-8, so that a GBK console code page does not turn a non-ASCII summary into
+    # mojibake. stderr gets the same treatment: errors are read by the parent process too.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, 'reconfigure'):
             stream.reconfigure(encoding='utf-8', errors='replace')
@@ -178,7 +188,7 @@ def main(argv=None) -> int:
     if args.form:
         return _print_form(project, args.cycle, args.node)
     if not args.node or not args.status or args.summary is None:
-        parser.error('a ticket needs <node> <status> -s "<一行总结>"; '
+        parser.error('a ticket needs <node> <status> -s "<one-line summary>"; '
                      '`--form <cycle>` prints the shape')
 
     try:
@@ -217,8 +227,10 @@ def main(argv=None) -> int:
         return 1
 
     try:
-        # 只读的一问：条子刚写下，管线此刻的答案是「等收尾」加那一条收尾命令。`record` 那半（把线
-        # 推到下一个稳定动作、顺手给别的格补 prompt）留在收尾与派发那一拍，这里一个字节都不写。
+        # One read-only question: the ticket has just been written, and the pipeline's answer right now
+        # is "wait for the close" plus that one closing command. The `record` half (moving the line
+        # to its next stable action, topping up other slots' prompts along the way) stays with the
+        # close and dispatch step; not a byte is written here.
         action = pipeline.plan(project, args.cycle)
     except (RuntimeError, ValueError) as e:
         _write_marker(project, args.cycle, 'plan', str(e))
@@ -227,9 +239,10 @@ def main(argv=None) -> int:
 
     kind = action.get('action')
     if kind == 'wait' and action.get('close_with'):
-        # 这一格刚写下条子，还没被收尾。这里不 spawn 任何会话——收尾那一棒由调用方跑
-        # `next --after <node_id> --json` 完成（它也不再拉会话：派发是提交推送之后的
-        # 另一条命令 `dispatch <cycle>`），所以这里只报清楚别停得静悄悄。
+        # This slot has just written its ticket and has not been closed yet. No session is spawned here
+        # -- the closing leg is run by the caller as `next --after <node_id> --json` (which pulls no
+        # session either: dispatch is a separate command after the commit and push, `dispatch
+        # <cycle>`), so this only reports clearly rather than stopping quietly.
         print(f'handoff: {args.node} ticket written; the node is not closed yet -- finish it '
               f'with `{action["close_with"]}` (no session was spawned)')
     else:

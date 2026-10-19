@@ -25,7 +25,8 @@ CONDUCT = HERE
 #  Loading a neighbouring file, and the implementation package
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
+# Bootstrap: the loader too is taken by path, so this passage has to travel with every file
+# (see `shared/loader.py`).
 SHARED = CONDUCT.parent / 'shared'
 
 _LOADER = None
@@ -52,8 +53,8 @@ def _tool_path(env_var: str, default):
     return toolpath.tool_path(env_var, default)
 
 
-#: 本文件要读要写的那个实现包：出厂的树里是旁边那个 `state/`，草稿或演练副本用
-#: `DSH_CONDUCT_STATE_DIR` 指向真工具的那一份。
+#: The implementation package this file reads and writes: in the shipped tree it is the `state/`
+#: next door, while a draft or a drill copy points `DSH_CONDUCT_STATE_DIR` at the real tool's copy.
 STATE_PKG = _tool_path('DSH_CONDUCT_STATE_DIR', CONDUCT / 'state')
 
 
@@ -85,17 +86,18 @@ globals().update({name: getattr(_impl, name) for name in _impl.__all__})
 
 
 class _NextHelp(argparse.Action):
-    """`next --help`：help 尾巴上那段合同正文，只有真打印这一次才算得出来。
+    """`next --help`: the contract text on the tail of the help, which is only computable by really printing.
 
-    `_render_contract` 要按路径加载管线包（`_load_pipeline`），所以它挂在打印那一刻 —— 解析器建
-    起来就给每条 state-manage 命令白背一次那份加载，不值当。判据是解析器自己选中了这个动作：哪
-    一条 `--help` 被选中，就是那一条在打印。
+    `_render_contract` has to load the pipeline package by path (`_load_pipeline`), so it hangs off the
+    printing moment -- building the parser would otherwise make every state-manage command carry that
+    load for nothing. The judgement is that the parser itself picked this action: whichever `--help` was
+    picked is the one printing.
     """
 
     def __init__(self, option_strings, dest, default=argparse.SUPPRESS,
-                 help='打印 `next` 的 help（尾巴上是 action 全集）'):
-        # `dest` 用 argparse 自己算的那个（`'help'`）：读解析器的人靠它认出这条 help 动作，
-        # 而这条动作的全部作用就是打印 help。
+                 help='Print `next`\'s help (the tail carries the full set of actions)'):
+        # `dest` is the one argparse computes for itself (`'help'`): a reader of the parser recognizes
+        # this help action by it, and this action's whole job is to print the help.
         super().__init__(option_strings, dest, nargs=0, default=default, help=help)
 
     def __call__(self, parser, namespace, values, option_string=None):
@@ -105,16 +107,18 @@ class _NextHelp(argparse.Action):
 
 
 def _layer(args) -> str:
-    """`--global` 说的是哪一层：没有它就是项目那一层。"""
+    """Which layer `--global` names: without it, the project layer."""
     return 'global' if args.global_ else 'project'
 
 
-#: 唯一的路由表：解析好的 args 变成一次调用，全在这里。键是 `(顶层动词, 子动词)` —— 叶子动词的
-#: 子动词是 None。加一个动词就是加一行，叶子动词与三组子动词看的是同一张表。
+#: The one routing table: a parsed args object becomes one call, all of it here. The key is
+#: `(top-level verb, subverb)` -- a leaf verb's subverb is None. Adding a verb means adding one line;
+#: leaf verbs and the three groups of subverbs read the same table.
 #:
-#: 每一行只读解析器交出来的那一份字段：缺省值住在 parser 上（哪一条命令的哪一面旗标，`--help`
-#: 就是它），这里不再替它重说一遍 —— 重说等于同一件事有两个来源，改一个忘一个就是那条命令的
-#: 行为与 `--help` 分叉。
+#: Each line reads only the fields the parser hands over: defaults live on the parser (which flag of
+#: which command is `--help` itself), and this table does not restate them -- restating is two sources
+#: for one thing, and changing one while forgetting the other forks that command's behaviour from its
+#: `--help`.
 _ROUTES = {
     ('init', None): lambda a: cmd_init(a.project, a.mode, a.own_repo),
     ('register', None): lambda a: cmd_register(a.project),
@@ -157,10 +161,11 @@ _ROUTES = {
 
 
 def route(args) -> None:
-    """一行命令变成一次调用 —— 这个工具唯一的分派处。
+    """One command line becomes one call -- this tool's only dispatch.
 
-    `args.command` 是顶层动词，`<动词>_command` 是那个组的子动词（叶子动词没有）。表里查不到只有
-    两种情形：一个组没带子动词，或者解析器根本不认识这个词 —— 两种都由这里报出去，一种口径。
+    `args.command` is the top-level verb and `<verb>_command` is that group's subverb (a leaf verb has
+    none). Not finding it in the table has exactly two cases: a group with no subverb, or a word the
+    parser does not know at all -- both are reported from here, with one wording.
     """
     verb = getattr(args, 'command', None)
     sub = getattr(args, f'{verb}_command', None) if verb else None
@@ -172,13 +177,14 @@ def route(args) -> None:
     if subs:
         print(f'usage: state-manage.py {verb} {{{"|".join(subs)}}} ...', file=sys.stderr)
     else:
-        print('usage: state-manage.py <verb> ...（动词、旗标与取值见 --help）', file=sys.stderr)
+        print('usage: state-manage.py <verb> ... (verbs, flags and values: --help)', file=sys.stderr)
     sys.exit(1)
 
 
 def main(argv=None) -> None:
-    # 中文 everywhere：stdout 是给调用方解析的，stderr 是给人看的报错。两个流都按 UTF-8 走，
-    # 否则控制台代码页（这台机器默认 GBK）会把字节写歪，按 UTF-8 解码的父进程直接炸在读线程上。
+    # stdout is for a caller to parse and stderr is the error text a human reads. Both streams go by
+    # UTF-8: otherwise the console code page (GBK by default on this machine) writes the bytes wrong,
+    # and a parent process decoding them as UTF-8 blows up on its read thread.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, 'reconfigure'):
             stream.reconfigure(encoding='utf-8', errors='replace')
@@ -291,10 +297,11 @@ def main(argv=None) -> None:
                             'waits on it forever, so dropping it is what lets the retry be '
                             'dispatched')
 
-    # `--scope` 的候选集与判定同源：`SCOPES` 住在管线那一侧，取它要把那个模块按路径读一遍。
-    # 这笔装载税推迟不了 —— argparse 在 `add_argument` 那一步就迭代 `choices` 去拼 metavar，
-    # 于是每条命令都付一次（十几毫秒）。换来的是 `--help` 印出来的值清单不会与判定漂开；
-    # 两个 `--scope`（`instruction add` 与 `list`）共用这一份。
+    # `--scope`'s candidate set comes from the same source as its judgement: `SCOPES` lives on the
+    # pipeline's side, and taking it means loading that module by path once. That load tax cannot be
+    # deferred -- argparse iterates `choices` at the `add_argument` step to build the metavar, so every
+    # command pays it (a dozen milliseconds). What it buys is that the value list `--help` prints cannot
+    # drift from the judgement; both `--scope` flags (`instruction add` and `list`) share this one copy.
     scope_choices = list(valid_scopes())
 
     p_ins = sub.add_parser(
@@ -564,13 +571,13 @@ def main(argv=None) -> None:
 
     p_fork = sub.add_parser(
         'fork-worktree',
-        help='Fork one node\'s parallel-mode worktree: `.pf/worktrees/<短id>` on branch '
-             '`pf/<短id>`',
-        description='The parallel mode\'s fork, as one command (SKILL「并行：worktree」): refuses '
+        help='Fork one node\'s parallel-mode worktree: `.pf/worktrees/<short id>` on branch '
+             '`pf/<short id>`',
+        description='The parallel mode\'s fork, as one command (the SKILL\'s "parallel: worktree"): refuses '
                     'while the main tree is dirty (another line may be mid-merge-back) and while '
                     'the node\'s short id is already taken (worktree directory or branch '
-                    '`pf/<短id>` exists); otherwise `git worktree add`s the checkout and writes '
-                    '`.pf/meta/FORK-<短id>.json` -- the record the closing call gates on, so a '
+                    '`pf/<short id>` exists); otherwise `git worktree add`s the checkout and writes '
+                    '`.pf/meta/FORK-<short id>.json` -- the record the closing call gates on, so a '
                     'node whose merge-back never finished cannot be settled. Works from a worktree '
                     'cwd too: the main tree is resolved the same way the record commands do it.',
         formatter_class=argparse.RawDescriptionHelpFormatter)

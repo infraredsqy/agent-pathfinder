@@ -9,7 +9,8 @@ import argparse
 import importlib.util
 from pathlib import Path
 
-# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
+# Bootstrap: the loader is fetched by path too, so every file has to carry this paragraph itself
+# (see `shared/loader.py`).
 HERE = Path(__file__).resolve().parent
 SHARED = HERE.parent / 'shared'
 
@@ -26,9 +27,10 @@ def _loader():
     return _LOADER
 
 
-#: 这一对邻居：`commands.py` 装着动词的实现，`storage.py` 装着数据访问。两份都按路径取，名字固定、
-#: 留在 `sys.modules` 里并复用 —— `commands.py` 拿到的是同一个 `storage.py` 模块对象，`main()` 在这里
-#: `configure()` 钉下的项目，就是这一趟命令读写的项目。
+#: This pair of neighbours: `commands.py` holds the verb implementations, `storage.py` the data
+#: access. Both are fetched by path, with fixed names kept in `sys.modules` and reused -- what
+#: `commands.py` gets is the same `storage.py` module object, and the project `main()` pins here
+#: with `configure()` is the project this run of commands reads and writes.
 _STORAGE = _loader().load_by_path('pf_issue_storage', HERE / 'storage.py',
                                   register=True, reuse=True)
 _COMMANDS = _loader().load_by_path('pf_issue_commands', HERE / 'commands.py',
@@ -201,7 +203,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main():
-    # 项目在这里认一次：记录目录由 `configure()` 钉住，这一趟命令都按它读写。
+    # The project is named once here: `configure()` pins the ledger this run reads and writes.
     configure(_resolve_project_root(Path.cwd()))
     parser = _build_parser()
     args = parser.parse_args()
@@ -210,7 +212,8 @@ def main():
         # parser prints, and nothing keeps a second copy of that list to fall out of step with it.
         parser.print_help()
         return
-    # 哪些动词要拿项目那把锁：由每个命令体自己声明（改池子的那几条把它们整段读 → 写罩在里面）。
+    # Which verbs take the project lock: each command body declares it -- a pool-changing verb wraps
+    # its whole read -> write inside it.
     args.func(args)
 
 

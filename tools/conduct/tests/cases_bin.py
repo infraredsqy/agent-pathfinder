@@ -1,19 +1,24 @@
-"""`pf` 这道门前面的两块：Windows 上的 `pf.cmd`，和 `doctor` 认的项目根。
+"""The two pieces in front of `pf`'s door: `pf.cmd` on Windows, and the project root `doctor` names.
 
-两块都长在 pf 这一层，量的是这一层的两条规矩：
+Both live in the pf layer, and what is measured is the rules of that layer:
 
-  * `pf.cmd` 把收到的命令原样交给 `pf.py`，恰好一次：探到哪个解释器就用哪个，它的退出码就是
-    `pf` 的退出码。非零退出尤其要稳 —— `pf handoff` / `pf merge-ledger` 是实弹命令，被后备
-    解释器再跑一遍就是第二发。
-  * `doctor` 报的项目根，与它转发的那些工具（`pf dag` / `pf issue`）读记录用的根是同一个：
-    cwd 就是根，唯一的例外是 linked worktree 里回主树。两边读数对得上，是这条用例证的东西。
-  * `help` 与 `--help` 印的是同一份正文（parser 那一份），命令清单不抄第二遍。
+  * `pf.cmd` hands the command it receives to `pf.py` as it is, exactly once: whichever interpreter
+    it finds is the one used, and that interpreter's exit code is `pf`'s exit code. A non-zero exit
+    especially has to hold -- `pf handoff` / `pf merge-ledger` are live-fire commands, and being run
+    again by the fallback interpreter is a second shot.
+  * the project root `doctor` reports is the same root the tools it forwards (`pf dag` / `pf issue`)
+    read the ledger by: cwd is the root, the one exception being that a linked worktree goes back to
+    the main tree. That the two readings agree is what these cases prove.
+  * `help` and `--help` print the same body (the parser's own), and the command list is not copied a
+    second time.
 
-每个用例在 temp 里造自己那份东西（一份假 `pf.py` 加一条真的 `pf.cmd`，或一个一次性 git 仓库
-加一条 worktree），跑真 CLI、跑完清掉；不碰真项目，不开会话，一条命令都在 5 s 档内。
+Every case builds its own thing in a temp dir (a fake `pf.py` plus a real `pf.cmd`, or a throwaway
+git repository plus one worktree), runs the real CLI and cleans up afterwards; no real project is
+touched, no session is opened, and every command stays inside the 5 s budget.
 
-    python conduct/tests/cases_bin.py            # 这个文件单独跑
-    python conduct/tests/test_conduct_pipeline.py    # 跟全套件一起（注册见那份文件的 import 段）
+    python conduct/tests/cases_bin.py            # this file on its own
+    python conduct/tests/test_conduct_pipeline.py    # with the whole suite (registration is in that
+                                                     file's import section)
 """
 
 from __future__ import annotations
@@ -38,9 +43,9 @@ PF = BIN / 'pf.py'
 SHIM = BIN / 'pf.cmd'
 CMD = os.environ.get('COMSPEC', 'cmd.exe')
 
-#: 假的 `pf.py`：每跑一次往 `runs.txt` 追一行（记下收到的 argv），然后按 `FAKE_PF_EXIT` 退出。
-#: 一份假的就够了：这几条量的是「跑了几次、退出码是谁的」这两件读数，pf.py 自己干了什么活
-#: 由真的那份负责。
+#: A fake `pf.py`: every run appends one line to `runs.txt` (recording the argv it received) and then
+#: exits with `FAKE_PF_EXIT`. One fake is enough: these cases measure "how many times it ran, and
+#: whose exit code it is" -- what `pf.py` itself does is the real one's business.
 FAKE_PF = '''\
 import os
 import sys
@@ -51,8 +56,9 @@ with open(os.path.join(here, 'runs.txt'), 'a', encoding='utf-8') as fh:
 sys.exit(int(os.environ.get('FAKE_PF_EXIT', '0')))
 '''
 
-#: 假的 `py`（Python launcher）：记下 shim 递给它的整条命令，再把 `-3 -X utf8` 之后的部分交给
-#: `FAKE_PYTHON` 跑。这份量的是「`where python` 找不到时走哪一支、递的是什么」。
+#: A fake `py` (the Python launcher): records the whole command the shim handed it, then hands the
+#: part after `-3 -X utf8` to `FAKE_PYTHON`. This one measures "which branch is taken when
+#: `where python` finds nothing, and what is handed over".
 PY_STANDIN = '''\
 @echo off
 setlocal
@@ -66,19 +72,20 @@ exit /b %ERRORLEVEL%
 
 
 def pf(*args, cwd):
-    """真的 `pf` 入口，一个真进程，从 `cwd` 跑 —— 转发层与它前面的 shim 共用这一条。"""
+    """The real `pf` entry, as a real process, run from `cwd` -- the forwarding layer and the shim in front of it share this one."""
     return run_argv([PF, *[str(a) for a in args]], cwd=cwd, check=False)
 
 
 @unittest.skipUnless(os.name == 'nt', 'pf.cmd is the Windows shim')
 class TestPfCmdShim(unittest.TestCase):
-    """`pf.cmd`：一条命令恰好跑一次，退出码原样出去。"""
+    """`pf.cmd`: one command runs exactly once, and the exit code goes out as it came in."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(prefix='pf-cmd-')
         self.addCleanup(tmp.cleanup)
         self.dir = Path(tmp.name)
-        # 真 shim + 假 pf.py：shim 找的是自己旁边那个 `pf.py`，所以拷进 temp 就能整条驱动。
+        # A real shim plus a fake pf.py: the shim looks for the `pf.py` beside itself, so copying it
+        # into temp is enough to drive the whole thing.
         shutil.copyfile(SHIM, self.dir / 'pf.cmd')
         (self.dir / 'pf.py').write_text(FAKE_PF, encoding='utf-8')
         self.runs_file = self.dir / 'runs.txt'
@@ -102,13 +109,15 @@ class TestPfCmdShim(unittest.TestCase):
         self.assertEqual(['version'], self.runs())
 
     def test_a_nonzero_exit_runs_the_command_once_and_keeps_its_code(self):
-        """非零退出：不许被后备解释器再跑一遍，退出码也不许换人（两发 handoff 就是两发）。"""
+        """A non-zero exit: the fallback interpreter must not run it again, and the exit code must
+        not change hands (two handoffs are two shots)."""
         proc = self.shim('issue', 'top', exit_code='3')
         self.assertEqual(3, proc.returncode, proc.stderr)
         self.assertEqual(['issue top'], self.runs())
 
     def test_no_interpreter_on_path_runs_nothing(self):
-        """PATH 上没有解释器：说一声就收，退出码是 shim 自己的 127，一回都不跑。"""
+        """No interpreter on PATH: say so and stop, the exit code is the shim's own 127, and nothing
+        runs at all."""
         env = _child_env()
         env['PATH'] = ''
         proc = self.shim('doctor', env=env)
@@ -117,10 +126,12 @@ class TestPfCmdShim(unittest.TestCase):
         self.assertIn('python', proc.stderr)
 
     def test_the_py_launcher_is_the_fallback_that_runs_it(self):
-        """`where python` 找不到、`where py` 找得到：走 py 那一支，命令照跑一次、退出码还是它的。
+        """`where python` finds nothing and `where py` finds it: the py branch is taken, the command
+        still runs once, and the exit code is still the command's.
 
-        PATH 里留 `System32` 是 `where` 自己要用的：整条 PATH 被清空时 `where` 本身都起不来，
-        那时量到的是探针还在不在，与解释器无关。
+        `System32` is left on PATH because `where` needs it: with PATH emptied entirely `where`
+        itself cannot start, and what is measured then is whether the probe is there at all, not the
+        interpreter.
         """
         (self.dir / 'py.cmd').write_text(PY_STANDIN, encoding='utf-8')
         env = _child_env()
@@ -130,16 +141,17 @@ class TestPfCmdShim(unittest.TestCase):
         proc = self.shim('issue', 'top', exit_code='3', env=env)
 
         self.assertEqual(3, proc.returncode, proc.stderr)
-        self.assertEqual(['issue top'], self.runs(), 'py 那一支也要恰好跑一次')
+        self.assertEqual(['issue top'], self.runs(), 'the py branch must run exactly once too')
         handed = (self.dir / 'py-runs.txt').read_text(encoding='utf-8')
-        self.assertIn('-3', handed, f'shim 递给 py 的整条命令：{handed!r}')
+        self.assertIn('-3', handed, f'the whole command the shim handed to py: {handed!r}')
         self.assertIn('-X utf8', handed)
         self.assertIn('pf.py', handed)
 
 
 @unittest.skipUnless(GIT, 'git is not on PATH')
 class TestDoctorRoot(unittest.TestCase):
-    """`doctor` 的项目根与它转发的工具是同一个：worktree 里两边都回主树。"""
+    """`doctor`'s project root is the same as the tools it forwards: inside a worktree both go back
+    to the main tree."""
 
     UID = '11111111-2222-3333-4444-555555555555'
 
@@ -153,16 +165,18 @@ class TestDoctorRoot(unittest.TestCase):
 
         ledger = init_markers(self.main)
         (ledger / 'nodes' / self.UID).mkdir(parents=True)
-        (ledger / 'AGENTS.md').write_text('# 记录目录\n', encoding='utf-8')
+        (ledger / 'AGENTS.md').write_text('# ledger\n', encoding='utf-8')
         (ledger / 'ideas.json').write_text(json.dumps({'nodes': {self.UID: {
-            'title': '隔着 worktree 也要看得见', 'status': 'todo', 'mode': 'auto',
+            'title': 'visible even across a worktree', 'status': 'todo', 'mode': 'auto',
             'dependencies': []}}}, ensure_ascii=False, indent=2), encoding='utf-8')
         (ledger / 'nodes' / self.UID / 'spec.md').write_text('# spec\n', encoding='utf-8')
-        # 合并驱动按登记过的那一种写（相对形式）：体检项就只剩「根对不对」这一件。
+        # The merge driver is written the registered way (relative form): the only check left is
+        # "is the root right".
         git(self.main, 'config', 'merge.pf.driver', 'pf merge-ledger %O %A %B %P')
 
-        # `.pf/` 不进库：worktree 是完整检出，但只检出进了库的那些 —— 所以 worktree 里没有
-        # 记录目录，往上找 `.git` 目录的走法也找不到主树（这条 worktree 是个兄弟目录）。
+        # `.pf/` is not in the repository: a worktree is a full checkout, but only of what was
+        # committed -- so the worktree has no ledger, and walking up for a `.git` directory does not
+        # find the main tree either (this worktree is a sibling directory).
         (self.main / 'README.md').write_text('# main\n', encoding='utf-8')
         git(self.main, 'add', 'README.md')
         git(self.main, 'commit', '-m', 'seed', '--no-gpg-sign')
@@ -171,14 +185,15 @@ class TestDoctorRoot(unittest.TestCase):
 
     # ── helpers ──────────────────────────────────────────────────────────────
     def reported_root(self, proc):
-        """`doctor` 印的那一行项目根，读回来。"""
-        line = next(l for l in proc.stdout.splitlines() if l.startswith('项目根：'))
-        return Path(line.split('：', 1)[1].strip())
+        """The project-root line `doctor` prints, read back."""
+        line = next(l for l in proc.stdout.splitlines() if l.startswith('project root: '))
+        return Path(line.split(': ', 1)[1].strip())
 
     def dag_root(self, cwd):
-        """`pf dag open` 印的绝对路径里那个根 —— 转发过去的那把工具实际认的根。
+        """The root in the absolute path `pf dag open` prints -- the root the forwarded tool really
+        knows.
 
-        `<root>/.pf/nodes/<id>/spec.md` 往上四层就是它。
+        `<root>/.pf/nodes/<id>/spec.md`, four levels up, is it.
         """
         proc = pf('dag', 'open', self.UID, cwd=cwd)
         self.assertEqual(0, proc.returncode, proc.stderr)
@@ -186,25 +201,27 @@ class TestDoctorRoot(unittest.TestCase):
 
     # ── cases ────────────────────────────────────────────────────────────────
     def test_doctor_and_the_tool_it_fronts_share_the_root_in_a_worktree(self):
-        """worktree 里：doctor 报的根，就是 `pf dag` 读到节点的那个根。"""
+        """Inside a worktree: the root doctor reports is the root `pf dag` read the node by."""
         self.assertTrue(self.dag_root(self.wt).samefile(self.main),
-                        'pf dag 没有回主树 —— 这条用例的前提没成立')
+                        'pf dag did not go back to the main tree -- this case\'s premise does not hold')
         doctor = pf('doctor', cwd=self.wt)
         self.assertTrue(self.reported_root(doctor).samefile(self.main),
-                        f'doctor 报的根不是主树：\n{doctor.stdout}')
+                        f'doctor reported a root that is not the main tree:\n{doctor.stdout}')
         self.assertTrue(self.reported_root(doctor).samefile(self.dag_root(self.wt)),
-                        'doctor 与 pf dag 认的不是同一个根')
+                        'doctor and pf dag do not know the same root')
         self.assertEqual(0, doctor.returncode, doctor.stdout)
 
     def test_the_two_roots_agree_inside_the_project_too(self):
-        """主树里：两边同样对得上（回主树那条例外不影响平常这一路）。"""
+        """In the main tree: the two agree just the same (the go-back exception does not affect the
+        ordinary path)."""
         self.assertTrue(self.reported_root(pf('doctor', cwd=self.main)).samefile(
             self.dag_root(self.main)))
         self.assertTrue(self.reported_root(pf('doctor', cwd=self.main)).samefile(self.main))
 
 
 class TestCommandList(unittest.TestCase):
-    """命令清单只有一份：`<子命令> --help` 印什么，`help` 就印什么。"""
+    """The command list has one source: whatever `<subcommand> --help` prints is what `help`
+    prints."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(prefix='pf-help-')
@@ -219,7 +236,8 @@ class TestCommandList(unittest.TestCase):
         self.assertIn('weight', verb.stdout)
 
     def test_pf_help_names_every_word_it_routes(self):
-        """`--help` 的那两段列的是路由表里的词 —— 加一个动词只改表里那一行。"""
+        """`--help`'s two sections list the words in the routing table -- adding a verb changes only
+        that one row."""
         import importlib.util
         spec = importlib.util.spec_from_file_location('pf_bin_entry', PF)
         entry = importlib.util.module_from_spec(spec)
@@ -230,7 +248,7 @@ class TestCommandList(unittest.TestCase):
         routed += [row[0] for row in entry.FORWARD_VERBS]
         routed += [row[0] for row in entry.FORWARD_GROUPS]
         for name in routed:
-            self.assertIn(name, text, f'{name} 在路由表里，`pf --help` 却不列它')
+            self.assertIn(name, text, f'{name} is in the routing table, but `pf --help` omits it')
 
 
 if __name__ == '__main__':

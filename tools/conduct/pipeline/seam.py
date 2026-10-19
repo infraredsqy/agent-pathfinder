@@ -61,9 +61,10 @@ def capture(argv, cwd) -> str:
     printed) and `nodes._rank_ready_nodes` (the DAG's own ranking). Same bound, same loud failure on
     a non-zero exit.
 
-    **子进程只有 `run` 与 `capture` 两条路**：包里的模块一律经这里，谁都不自己 `subprocess` ——
-    调用方在入口 patch 这两个名字，就拦得住全部子进程。子进程输出一律按 `errors='replace'`
-    解码，这条约定写在入口的 `_capture` 那里（一处）。
+    **A child process has exactly two roads, `run` and `capture`**: every module in the package goes
+    through here, and none calls `subprocess` on its own -- patching these two names in the entry
+    stops every child process. Child output is always decoded with `errors='replace'`, and that
+    convention is written down in the entry's `_capture` (one place).
     """
     return _entry()['_capture'](argv, cwd)
 

@@ -124,14 +124,17 @@ def _is_ready(deps: list, all_nodes: dict) -> bool:
 
 
 def _node_ready(node: dict, all_nodes: dict) -> bool:
-    """`ready` 的唯一定义：节点自己是 `todo`，且每个依赖都已 `completed`（或不存在）。
+    """The one definition of `ready`: the node itself is `todo` and every dependency is `completed`
+    (or absent).
 
-    `completed` 的节点不该被推荐（活已经交了），`shelved` 的节点在等人。这比 _is_ready 更窄：
-    依赖满足了但节点自己不是 `todo`，就不 ready。
+    A `completed` node should not be recommended (the work is already delivered) and a `shelved` node
+    is waiting for a human. This is narrower than _is_ready: a node whose dependencies are satisfied
+    but that is not `todo` itself is not ready.
 
-    另一半是**管线的事，这个工具不碰**：一条 cycle 正拿在手上的节点，管线那边自己不挑
-    （那是 state.json 里的记录）。所以这里不读 state.json，也不知道 cycle 是什么 ——
-    `ready` 只说这张图。调用方传进来的 node 就是盘上那个词。
+    The other half is **the pipeline's business, which this tool does not touch**: a node some cycle
+    is holding right now is not picked by the pipeline either (that is a record in state.json). So
+    this reads no state.json and does not know what a cycle is -- `ready` speaks only about this
+    graph. The node the caller passes in is the word as it stands on disk.
     """
     return node.get('status') == 'todo' and _is_ready(node.get('dependencies', []), all_nodes)
 

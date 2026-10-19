@@ -5,7 +5,8 @@
 
 That judgement is deliberately THE one: `state/instruct.py` -- what `pf instruction list`
 runs -- loads this module by path and asks it the same question with the reader's own place, rather
-than keeping a second reading of the rule. 两份判定就是一条指令被读成两样的来路。
+than keeping a second reading of the rule. Two judgements are how one instruction comes to be read
+two ways.
 """
 
 from __future__ import annotations
@@ -17,8 +18,9 @@ from .store import _state_module, active_cycles, load_dag, load_instructions, lo
 
 # ── instructions ─────────────────────────────────────────────────────────────
 
-#: `state` 缺省读作的那个词。词表正本在写侧（`state/instruct.py` 的 `LIVE_STATE`），
-#: 这一侧经装载器借它 —— 同一个词两处各写一遍，就是一处改了另一处读不懂的来路。
+#: The word `state` is read as when it is left out. The vocabulary's one source is the writing side
+#: (`state/instruct.py`'s `LIVE_STATE`), and this side borrows it through the loader -- spelling the
+#: same word in two places is how one side changes and the other stops understanding it.
 LIVE_STATE = _state_module('instruct').LIVE_STATE
 
 
@@ -66,8 +68,9 @@ def scope_binding(entry: dict) -> tuple:
 def _scope_facts(project: Path, dag: dict | None = None) -> tuple:
     """The two facts a scope question needs, read once per call: the DAG's nodes, the active cycles.
 
-    `dag` 是调用方已经读过的那一份图：收尾那一趟整份读图一次，scope 判定读的是下传的这一份，
-    不为自己再读一遍盘。不给就自己读（别的入口没有现成的一份）。
+    `dag` is the graph the caller has already read: the close reads the whole graph once, and the
+    scope judgement reads the copy handed down instead of reading the disk again for itself. Left
+    out, it reads its own (the other entries have no ready copy).
     """
     nodes = (dag if dag is not None else load_dag(project)).get('nodes') or {}
     active = {c.get('id') for c in active_cycles(load_state(project))}
@@ -119,8 +122,8 @@ def live_instructions(project: Path, target: str | None = None, cycle: str | Non
     line it is settling and the node it is settling, which is how a boundary instruction bound to
     some other node stops capping this one.
 
-    `dag` 是调用方手上已有的那份图：`stop_criterion` 在收尾那一趟把它递进来，scope 判定就不再
-    为同一趟重读一次盘。
+    `dag` is the graph the caller already has: `stop_criterion` hands it in on the close, so the
+    scope judgement does not read the disk a second time for the same run.
     """
     nodes, active = _scope_facts(project, dag)
     out = []

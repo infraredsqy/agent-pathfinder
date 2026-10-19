@@ -33,23 +33,26 @@ __all__ = ['TestTheSpawnerShell', 'TestDSHSpawnFailures']
 SPAWN_DIR = CONDUCT_DIR / 'spawn'
 SPAWN_COMMON = SPAWN_DIR / 'spawn-common.ps1'
 
-#: 壳侧写下的那个时刻该长成的样子：恒 6 位小数、字面 `Z`。判据落在形状上，不落在样本上 ——
-#: 一个样本相等只说明这一次的两个值一样，形状漂到 `+00:00` 或短一位它也照样绿。
+#: The shape of the moment the shell writes: always 6 fractional digits, a literal `Z`. The
+#: judgement lands on the shape, not on a sample -- one sample matching only says these two values
+#: were equal once; a shape that drifted to `+00:00` or lost a digit would pass all the same.
 DETECTED_AT_SHAPE = r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$'
 
 
 def _marker_module():
-    """`spawn/marker.py`: 标记的落点与记录形状那一处正本（壳侧按同一份形状自己写）。"""
+    """`spawn/marker.py`: the one source for where the marker lands and what its record looks like
+    (the shell writes the same shape itself)."""
     return _fresh_module('pf_marker_case', SPAWN_DIR / 'marker.py')
 
 
 def _clock():
-    """`shared/clock.py`: 时刻形状的正本 —— 按路径从 `tools/shared/` 取，这里不抄格式字面量。"""
+    """`shared/clock.py`: the one source for the moment's shape -- loaded by path out of
+    `tools/shared/`, so no format literal is copied here."""
     return shared_loader().load_shared('clock')
 
 
 def _ps(value) -> str:
-    """一条 PowerShell 单引号字面量（值里的单引号翻倍）。"""
+    """One PowerShell single-quoted literal (a single quote inside the value is doubled)."""
     return "'" + str(value).replace("'", "''") + "'"
 
 
@@ -85,8 +88,8 @@ class TestTheSpawnerShell(Base):
             init += ['-WorkspacePath', _ps(sb.root)]
         if python:
             init += ['-PythonExe', _ps(sys.executable)]
-        # utf-8-sig: Windows PowerShell reads a BOM-less file in the console codepage, and this one
-        # carries the shell's own Chinese words.
+        # utf-8-sig: Windows PowerShell reads a BOM-less file in the console codepage, so a
+        # non-ASCII path or value would be misread.
         script = sb.root / 'shell-probe.ps1'
         script.write_text('\n'.join(['. ' + _ps(SPAWN_COMMON), ' '.join(init), *body]) + '\n',
                           encoding='utf-8-sig')
@@ -100,7 +103,8 @@ class TestTheSpawnerShell(Base):
             self.skipTest('pwsh is not on PATH')
 
     def test_the_shell_refuses_to_run_without_a_marker_path(self):
-        """落点由调用方给：没有 `-MarkerPath`，外壳当场拒绝，绝不猜一个位置写下去。"""
+        """The landing place comes from the caller: with no `-MarkerPath` the shell refuses on the
+        spot, and never guesses a place to write to."""
         self.pwsh_or_skip()
         sb = self.make()
         proc, _ = self.probe(sb, marker=False,
@@ -109,12 +113,13 @@ class TestTheSpawnerShell(Base):
         self.assertIn('no -MarkerPath', proc.stderr)
 
     def test_a_missing_prompt_leaves_the_marker_the_pipeline_reads(self):
-        """没有 prompt 就没有会话：写下降级标记再退出，记录的形状与正本一致。"""
+        """No prompt means no session: write the degradation marker and exit, with the record's
+        shape matching the one source."""
         self.pwsh_or_skip()
         sb = self.make()
         proc, path = self.probe(sb, prompt=False, body=['Assert-PromptFile'])
         self.assertNotEqual(proc.returncode, 0)
-        self.assertTrue(path.is_file(), '这一拍没能把降级标记写下来')
+        self.assertTrue(path.is_file(), 'this beat failed to write the degradation marker')
         record = json.loads(path.read_text(encoding='utf-8'))
         marker = _marker_module()
         self.assertEqual(sorted(marker.record(self.CYCLE, 'read-prompt', 'x')), sorted(record))
@@ -123,7 +128,8 @@ class TestTheSpawnerShell(Base):
         self.assertEqual(record['workspace'], str(sb.root))
 
     def test_a_present_prompt_passes_the_check_without_a_marker(self):
-        """prompt 在位时同一句检查安静通过：它问的是「文件在不在」。"""
+        """With the prompt in place the same check passes quietly: all it asks is whether the file
+        is there."""
         self.pwsh_or_skip()
         sb = self.make()
         proc, path = self.probe(sb, body=['Assert-PromptFile'])
@@ -131,78 +137,88 @@ class TestTheSpawnerShell(Base):
         self.assertFalse(path.exists())
 
     def test_the_first_failure_is_the_one_that_stays(self):
-        """一次失败只落一条：第一次的那条是根因，后面的不再覆盖它。"""
+        """One failure leaves one record: the first one is the root cause, and later ones do not
+        overwrite it."""
         self.pwsh_or_skip()
         sb = self.make()
         proc, path = self.probe(sb, body=[
-            "Write-CallbackFailureMarker -Phase 'first-phase' -Reason '根因'",
-            "Write-CallbackFailureMarker -Phase 'second-phase' -Reason '后面的' -Attempts 3"])
+            "Write-CallbackFailureMarker -Phase 'first-phase' -Reason 'root cause'",
+            "Write-CallbackFailureMarker -Phase 'second-phase' -Reason 'a later one' -Attempts 3"])
         self.assertEqual(proc.returncode, 0, proc.stderr)
         record = json.loads(path.read_text(encoding='utf-8'))
         self.assertEqual(record['phase'], 'first-phase')
-        self.assertEqual(record['reason'], '根因')
+        self.assertEqual(record['reason'], 'root cause')
         self.assertEqual(record['attempts'], 0)
 
     def test_clearing_takes_the_stale_marker_away(self):
-        """链续上以后旧标记没有意义了：清掉它，清一个不存在的标记也不算失败。"""
+        """Once the chain is joined again the old marker means nothing: clear it, and clearing a
+        marker that is not there is not a failure either."""
         self.pwsh_or_skip()
         sb = self.make()
         marker = _marker_module()
         path = marker.marker_path(sb.root, self.CYCLE)
-        marker.write(path, marker.record(self.CYCLE, 'old-phase', '上一次的事故'))
+        marker.write(path, marker.record(self.CYCLE, 'old-phase', 'the previous accident'))
         proc, _ = self.probe(sb, body=['Clear-CallbackFailureMarker', 'Clear-CallbackFailureMarker'])
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertFalse(path.exists(), '链续上了，旧标记还躺在盘上')
+        self.assertFalse(path.exists(), 'the chain is joined again, yet the old marker is still on disk')
         self.assertIn('cleared a stale callback failure marker', proc.stdout)
 
     def no_path(self):
-        """一台没有 python 的机器的环境：同一个环境，去掉 PATH。"""
+        """The environment of a machine with no python: this same environment with PATH taken out."""
         return {key: value for key, value in os.environ.items() if key.upper() != 'PATH'}
 
     def test_the_marker_gets_written_with_no_python_on_the_machine(self):
-        """壳侧写标记不经过 python：解释器不在的那台机器上，这条写入照样落盘。
+        """The shell's marker write does not go through python: on a machine with no interpreter
+        that write still lands on disk.
 
-        这是那一层自己写盘的唯一理由 —— spawner 的运行点可能没有 python，而 PowerShell 没法 import
-        `marker.py`；这条写入又恰恰是链断掉之后唯一留给人的入口。清空 PATH、也不给 `-PythonExe`，
-        标记仍要出现。
+        That is the only reason this layer writes its own disk -- the point a spawner runs on may
+        have no python, and PowerShell cannot import `marker.py`; and this write is exactly the one
+        door left to a human after the chain breaks. Empty PATH and no `-PythonExe`, and the marker
+        must still appear.
         """
         self.pwsh_or_skip()
         sb = self.make()
         proc, path = self.probe(sb, python=False, env=self.no_path(), body=[
-            "Write-CallbackFailureMarker -Phase 'no-python' -Reason '解释器不在' -Attempts 2"])
+            "Write-CallbackFailureMarker -Phase 'no-python' -Reason 'no interpreter' -Attempts 2"])
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertTrue(path.is_file(), '没有 python 就没写出标记：这条写入又依赖解释器了')
-        self.assertEqual('解释器不在', json.loads(path.read_text(encoding='utf-8'))['reason'])
+        self.assertTrue(path.is_file(), 'the no-python beat wrote no marker: this write needs python')
+        self.assertEqual('no interpreter', json.loads(path.read_text(encoding='utf-8'))['reason'])
 
     def test_the_shape_the_shell_writes_is_the_python_side_one(self):
-        """两份实现（`marker.py` 与壳侧）长出同一份记录：同一组键、同一句人话、同一个落点。
+        """Two implementations (`marker.py` and the shell) grow the same record: the same key set,
+        the same sentence, the same landing place.
 
-        形状没法共享（理由见上一条），所以这条用例是防漂移的那一半：哪一边改了字段名、改了那句
-        人话、改了 attempts 的记法，它当场判红。`detected_at` 的**形状**也钉在这里：上面那条等价
-        断言会把每个 `_at` 字段折成 `<ts>`（`normalise`），对时刻的形状一个字都没说，所以壳侧写下
-        的那个时刻自己判一次 —— 恒 6 位小数、字面 `Z`，并且能被 `clock.ISO_FMT` 读回来。
+        The shape cannot be shared (see the case above), so this case is the anti-drift half: if
+        either side renames a field, changes that sentence, or changes how attempts is written, it
+        goes red on the spot. `detected_at`'s **shape** is pinned here too: the equivalence assertion
+        above folds every `_at` field to `<ts>` (`normalise`), which says nothing about the moment's
+        shape, so the moment the shell wrote is judged on its own -- always 6 fractional digits, a
+        literal `Z`, and readable back by `clock.ISO_FMT`.
         """
         self.pwsh_or_skip()
         sb = self.make()
         proc, path = self.probe(sb, python=False, env=self.no_path(), body=[
-            "Write-CallbackFailureMarker -Phase 'shape-phase' -Reason '同一份记录' -Attempts 2"])
+            "Write-CallbackFailureMarker -Phase 'shape-phase' -Reason 'the same record' -Attempts 2"])
         self.assertEqual(proc.returncode, 0, proc.stderr)
         written = json.loads(path.read_text(encoding='utf-8'))
-        expected = _marker_module().record(self.CYCLE, 'shape-phase', '同一份记录', attempts=2,
+        expected = _marker_module().record(self.CYCLE, 'shape-phase', 'the same record', attempts=2,
                                            workspace=sb.root)
         self.assertEqual(normalise(written), normalise(expected),
-                         '壳侧那份记录与 marker.record() 漂开了')
+                         'the shell record drifted from marker.record()')
         moment = written['detected_at']
         self.assertRegex(moment, DETECTED_AT_SHAPE,
-                         '壳侧写下的时刻不是 clock 的微秒形状：恒 6 位小数、字面 `Z`')
+                         'the moment the shell wrote is not the microsecond shape clock defines')
         self.assertIsNotNone(datetime.strptime(moment, _clock().ISO_FMT),
-                             '壳侧写下的时刻 clock.ISO_FMT 读不回来')
+                             'clock.ISO_FMT cannot read back the moment the shell wrote')
 
     def test_a_failed_write_leaves_no_temporary_file_behind(self):
-        """改名重试耗尽时盘上不留残渣：临时文件只在这一拍里有意义。
+        """When the rename retries run out no residue is left on disk: the temp file only means
+        something inside this beat.
 
-        读者此刻正开着目标文件（Windows 上普通 `open()` 不带 FILE_SHARE_DELETE），改名会一直被拒 ——
-        四次退避用尽后这一拍只警告一声，标记仍是落盘的那一份，标记目录里不许剩下 `.tmp-<pid>`。
+        A reader has the target file open right now (on Windows a plain `open()` carries no
+        FILE_SHARE_DELETE), so the rename is refused again and again -- once the four backoffs are
+        used up this beat only warns, the marker is still the one on disk, and no `.tmp-<pid>` may
+        be left in the marker directory.
         """
         self.pwsh_or_skip()
         sb = self.make()
@@ -214,19 +230,21 @@ class TestTheSpawnerShell(Base):
         self.addCleanup(held.close)
 
         proc, _ = self.probe(sb, body=[
-            "Write-CallbackFailureMarker -Phase 'held' -Reason '读者不松手'"])
+            "Write-CallbackFailureMarker -Phase 'held' -Reason 'the reader will not let go'"])
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual('{"stale": true}', path.read_text(encoding='utf-8'),
-                         '这一拍把标记写下去了？读者还开着那份文件')
+                         'did this beat write the marker? the reader still has that file open')
         self.assertEqual([], sorted(item.name for item in path.parent.glob('*.tmp-*')),
-                         '重试耗尽后临时文件留在了标记目录里')
+                         'the temp file stayed in the marker directory after the retries ran out')
 
     def test_a_directory_on_the_marker_path_is_a_write_failure(self):
-        """落点被同名目录占着时不许谎报成功。
+        """A directory of the same name on the landing place must not be reported as success.
 
-        那种情况下 `Move-Item` 会把临时文件搬进目录里、还不报错 —— 于是这一拍会喊「已写下降级标记」，
-        而工具要读的那个文件根本不在。这里当场认失败：警告里点名落点是目录，目录里什么都不留。
+        In that case `Move-Item` moves the temp file into the directory and reports no error -- so
+        this beat would shout "the degradation marker was written" while the file the tool reads is
+        not there at all. It fails on the spot here: the warning names the landing place as a
+        directory, and nothing is left inside the directory.
         """
         self.pwsh_or_skip()
         sb = self.make()
@@ -235,22 +253,24 @@ class TestTheSpawnerShell(Base):
         path.mkdir(parents=True, exist_ok=True)
 
         proc, _ = self.probe(sb, body=[
-            "Write-CallbackFailureMarker -Phase 'dir' -Reason '落点被占'"])
+            "Write-CallbackFailureMarker -Phase 'dir' -Reason 'the landing place is taken'"])
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn('落点是目录', proc.stdout + proc.stderr)
-        self.assertTrue(path.is_dir(), '这一拍把占位子的那个目录动了')
+        self.assertIn('the landing place is a directory', proc.stdout + proc.stderr)
+        self.assertTrue(path.is_dir(), 'this beat touched the directory that occupied the place')
         self.assertEqual([], sorted(item.name for item in path.iterdir()),
-                         '这一拍把标记搬进了那个目录里')
+                         'this beat moved the marker into that directory')
         self.assertEqual([], sorted(item.name for item in path.parent.glob('*.tmp-*')),
-                         '这一拍在标记目录里留下了临时文件')
+                         'this beat left a temp file in the marker directory')
 
 
 class TestDSHSpawnFailures(Base):
-    """`spawn/dsh-spawn.ps1`：DSH 这一半自己的失败拍，真进程驱动。
+    """`spawn/dsh-spawn.ps1`: DSH's own failure beat, driven as a real process.
 
-    整条链的下一棒全押在这个脚本上，所以开不出会话的每一拍都要留下降级标记。基址不成形是这一半
-    在**任何调用之前**就断掉的那一拍（URL 读到就判），所以这一趟碰不到任何端点 —— 而标记照样落盘。
+    The whole chain's next hand-off rests on this script, so every beat that cannot open a session
+    must leave the degradation marker. A malformed base URL is the beat this half breaks on
+    **before any call** (the URL is judged as soon as it is read), so that run reaches no endpoint --
+    and the marker still lands on disk.
     """
 
     CYCLE = 'dsh-base-case'
@@ -268,7 +288,7 @@ class TestDSHSpawnFailures(Base):
                                '-WebUrl', 'http://:8080'],
                               capture_output=True, text=True, encoding='utf-8', errors='replace')
         self.assertNotEqual(proc.returncode, 0)
-        self.assertTrue(marker.is_file(), '基址不成形那一拍没留下降级标记')
+        self.assertTrue(marker.is_file(), 'the malformed-base-URL beat left no degradation marker')
         record = json.loads(marker.read_text(encoding='utf-8'))
         self.assertEqual(record['cycle_id'], self.CYCLE)
         self.assertEqual(record['phase'], 'auth')

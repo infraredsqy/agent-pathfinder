@@ -16,62 +16,79 @@ from .store import (CYCLE_VALID_STATUSES, PARALLEL_DEFAULT, VALID_NODE_RESULTS,
 from .pipeline_loader import _load_pipeline
 
 
-# ── cycle tags: 这条线在哪些节点里挑人 ─────────────────────────────────────────
-# `cycle.tags` 是这条线的**选材范围**：每一次挑选都用这一份。新的 cycle 一律要给；空范围只剩
-# 存量记录与过滤助手自己的空集分支会读到。词表与 dag-manage.py 的那份是同样三个词（那边管节点，
-# 这边管 cycle 的范围）；一份摆在两个工具里的约定，靠一个测试比对，免得两边分头长出自己的词。
+# ── cycle tags: which nodes this line picks from ────────────────────
+# `cycle.tags` is this line's **range to pick from**: every pick reads this one. A new cycle must
+# always give it; an empty range is read only by records already on disk and by the filter helper's
+# own empty-set branch. The vocabulary is the same three words as dag-manage.py's (that one governs
+# nodes, this one the cycle's range); one convention sitting in two tools is held together by a
+# test, so the two sides do not grow their own words.
 VALID_TAGS = ('writing', 'coding', 'art')
 
 
 def _require_tags(tags: list, verb: str) -> None:
-    """开一条新线必须有选材范围；空范围拒收，并把 `--tags` 写进提示。
+    """A new line must state the range it picks from; an empty range is refused, with `--tags` in
+    the hint.
 
-    一条线**属于哪一支**（它有没有权因维护度量插维护节点）也由这份 tag 表达：没有 tags 的
-    cycle 会让「谁有权反应维护度量」多出第二种答案。存量 cycle 照跑，这条闸门只对新的调用生效。
+    Which branch a line **belongs to** (whether it may have a maintenance node inserted for a
+    maintenance metric) is expressed by this tag too: a cycle with no tags would give "who may
+    react to a maintenance metric" a second answer. Cycles already on disk keep running; this gate
+    applies to new calls only.
     """
     if tags:
         return
-    print(f'Error: {verb} 必须给 --tags（这条线的选材范围）。'
-          f'例如：{verb} <slug> --tags coding。'
-          f'可用的词：{"/".join(VALID_TAGS)}（也可以是词表外的词，照收）。'
-          f'这条线的每一次挑选、以及维护通道的适用领域，都读这一份范围。',
+    print(f'Error: {verb} must be given --tags (the range this line picks from). '
+          f'For example: {verb} <slug> --tags coding. '
+          f'Known words: {"/".join(VALID_TAGS)} (a word outside the vocabulary is fine too; it is '
+          f'taken as given). '
+          f'Every pick this line makes, and where its maintenance channel applies, read this one '
+          f'range.',
           file=sys.stderr)
     sys.exit(2)
 
 
-# ── cycle policies: 一条线自己带的规则 ─────────────────────────────────────────
-# `cycle.policies` 是可选的：没写这个键的 cycle 落盘时就是今天这份形状，读的时候按默认值补。
-# 头一条是 `when_shelved` —— 节点收了尾却没交付（它于是被搁置、等人救），这条线是停下等人，还是接着
-# 挑下一个节点。默认 `stop`：缺省值必须落在保守那一边。
-# 第二条是 `parallel` —— 这条线同时能握几个节点、开几个会话。默认 1（一次一格）。它是**上限**：
-# 节点能不能并排跑，另由依赖图说了算。
-# 与 `pipeline/store.py` 的那份是同一套词（那边管读，这边管写）。
+# ── cycle policies: rules a line carries itself ───────────────────────
+# `cycle.policies` is optional: a cycle that never wrote the key lands in exactly today's shape,
+# and the defaults fill it in on the way back out. The first is `when_shelved` -- a node closed out
+# without delivering (so it was shelved, waiting for a human to rescue it): does this line stop and
+# wait, or go on to pick the next node. Default `stop`: the default must fall on the conservative
+# side.
+# The second is `parallel` -- how many nodes this line holds, and how many sessions it opens, at
+# once. Default 1 (one slot at a time). It is a **cap**: whether nodes can run side by side is the
+# dependency graph's call.
+# The same set of words as `pipeline/store.py` (that one owns the reading, this one the writing).
 POLICY_DEFAULTS = {'when_shelved': 'stop', 'parallel': PARALLEL_DEFAULT}
 POLICY_VALUES = {'when_shelved': ('stop', 'continue')}
-#: 整数型策略：整数值，`off` 是取消。`parallel` 住在这里（下限 1：一条线至少握一格）。
+#: Integer policies: an integer value, with `off` to cancel. `parallel` lives here (floor 1: a line
+#: holds at least one slot).
 POLICY_COUNTS = ('parallel',)
-#: 数值型策略：没有候选值表，值按数字解析；`off` 是取消（缺省即"没配"）。
-#: 两条维护线就住在这里：它们是**这条线自己的规则**，与 `tags` 同类，
-#: 所以跟着 cycle 记录走 —— 一条不碰代码的线（`art` / `writing`）身上根本没有这两个键。
+#: Numeric policies: no candidate table, the value parses as a number; `off` cancels (absent means
+#: "not configured").
+#: The two maintenance lines live here: they are **this line's own rules**, the same kind of thing
+#: as `tags`, so they ride on the cycle record -- a line that never touches code (`art` /
+#: `writing`) does not carry either key at all.
 POLICY_NUMBERS = ('test_seconds_limit', 'issue_pool_weight_limit')
-#: 词表型策略：值必须在候选表里，`off` 是清除；没有默认值 —— 没配的线落在调用链的下一级，
-#: 行为不变。`spawner` 住在这里：这条线的会话由哪份 spawner 开
-#: （`dsh` / `zcode`）。只收词、不收路径：cycle 记录随 `.pf/` 跨机器合并，机器本地的路径
-#: 落进状态文件就是另一台机器上的死值；要路径的场合走单发 `--spawner <路径>`。
+#: Word policies: the value must be in the candidate table, `off` clears it, and there is no
+#: default -- a line that never configured it falls to the next level of the call chain, and
+#: nothing changes. `spawner` lives here: which spawner opens this line's sessions
+#: (`dsh` / `zcode`). Words only, never a path: the cycle record merges across machines with
+#: `.pf/`, so a machine-local path landing in the state file is a dead value on another machine;
+#: where a path is wanted, use the one-off `--spawner <path>`.
 POLICY_WORDS = ('spawner',)
 POLICY_WORD_CHOICES = {'spawner': ('dsh', 'zcode')}
-#: 合法策略键的并集：四张表就是全部来源，这里算一次 —— `cycle policy` 的报错与 argparse 的
-#: `choices`（经 `state-manage.py`）都取这一份。
+#: The union of legal policy keys: the four tables are the whole source, computed once here --
+#: `cycle policy`'s refusal and argparse's `choices` (through `state-manage.py`) both read this.
 POLICY_KEYS = tuple(sorted(set(POLICY_VALUES) | set(POLICY_NUMBERS) | set(POLICY_COUNTS)
                            | set(POLICY_WORDS)))
 
 
 def cycle_policy(cycle: dict) -> dict:
-    """这条线现在的有效策略：盘上没有的键（或写了个不认识的词）按默认值补齐。
+    """This line's effective policies right now: keys missing from disk (or holding a word nobody
+    recognizes) are filled in with their defaults.
 
-    数值型策略（`POLICY_NUMBERS`）与词表型策略（`POLICY_WORDS`）没有默认值：
-    没配就不出现在这份读数里。
-    整数型策略（`POLICY_COUNTS`）有默认值（`parallel` 缺省 1）；盘上写了个非整数就当没配。
+    Numeric policies (`POLICY_NUMBERS`) and word policies (`POLICY_WORDS`) have no default: not
+    configured means they do not appear in this reading.
+    Integer policies (`POLICY_COUNTS`) do have a default (`parallel` defaults to 1); a non-integer
+    on disk counts as not configured.
     """
     stated = cycle.get('policies') or {}
     out = {}
@@ -93,23 +110,26 @@ def cycle_policy(cycle: dict) -> dict:
 
 
 def _policy_count(value):
-    """盘上的一个整数型策略，或 `None`。只认盘上本来就是正整数的值。"""
+    """An integer policy off disk, or `None`. Only a value that is already a positive integer
+    counts."""
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         return None
     return value
 
 
 def _policy_number(value):
-    """盘上的一个数值型策略，或 `None`。只认盘上本来就是数的值：布尔与字符串一律当没配。"""
+    """A numeric policy off disk, or `None`. Only a value that is already a number counts: a boolean
+    and a string are both read as not configured."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return value
 
 
 def _parse_policy_number(key: str, text: str):
-    """命令行的数值型策略：正数落盘，`off` 取消。
+    """A numeric policy from the command line: a positive number lands on disk, `off` cancels.
 
-    0 与负数一律拒收 —— 线是"最后一个可接受的数"，0 等于把每一个读数都判成越线。
+    0 and negative numbers are refused outright -- the line is "the last acceptable number", so 0
+    would judge every reading as over the line.
     """
     if str(text).strip().lower() == 'off':
         return None
@@ -127,7 +147,8 @@ def _parse_policy_number(key: str, text: str):
 
 
 def _parse_policy_count(key: str, text: str):
-    """命令行的整数型策略：正整数落盘，`off` 取消（缺省 1）。"""
+    """An integer policy from the command line: a positive integer lands on disk, `off` cancels
+    (default 1)."""
     if str(text).strip().lower() == 'off':
         return None
     try:
@@ -144,7 +165,9 @@ def _parse_policy_count(key: str, text: str):
 
 
 def _parse_policy_word(key: str, text: str):
-    """命令行的词表型策略：候选表里的词落盘，`off` 清除（清除即"没配"，落回调用链的下一级）。"""
+    """A word policy from the command line: a word from the candidate table lands on disk, `off`
+    clears it (clearing means "not configured", falling back to the next level of the call
+    chain)."""
     if str(text).strip().lower() == 'off':
         return None
     if text not in POLICY_WORD_CHOICES.get(key, ()):
@@ -155,13 +178,16 @@ def _parse_policy_word(key: str, text: str):
 
 
 def _parse_cycle_tags(raw: str | list | None) -> list:
-    """`--tags coding,writing` → `['coding', 'writing']`：去空白、归一、去重，保序。
+    """`--tags coding,writing` → `['coding', 'writing']`: strip blanks, dedupe, keep the order.
 
-    词表外的 tag 警告一行就收下：词表是一份给人看的约定，engine 照单全收 —— 真冒出第四类
-    工作时，写进去就能用。同义词层已删：这里不做归一，过滤一律按字面比。
+    A tag outside the vocabulary is taken with a one-line warning: the vocabulary is a convention
+    for people to read, and the engine takes anything -- if a fourth kind of work really shows up,
+    writing it in is enough to use it. The synonym layer is gone: nothing is normalized here, and
+    filtering always compares literally.
 
-    收字符串也收 list：`cycle start` 先把命令行拆好再建 cycle，`cycle create` 直接拿人敲的那串。
-    两种形状都从这一个入口过，`art` 才不会在某条路上被拆成 `['a','r','t']`。
+    Takes a string and takes a list: `cycle start` splits the command line first and then creates
+    the cycle, while `cycle create` takes the string a human typed. Both shapes come through this
+    one door, so `art` cannot be split into `['a','r','t']` on one of the two paths.
     """
     if isinstance(raw, (list, tuple)):
         raw = ','.join(str(x) for x in raw)
@@ -172,8 +198,9 @@ def _parse_cycle_tags(raw: str | list | None) -> list:
             out.append(tag)
     unknown = [t for t in out if t not in VALID_TAGS]
     if unknown:
-        print(f'Warning: tag {", ".join(unknown)} 不在词表 {"/".join(VALID_TAGS)} 里；照收，'
-              f'但它只能和写了同一个词的节点对上。', file=sys.stderr)
+        print(f'Warning: tag {", ".join(unknown)} is not in the vocabulary {"/".join(VALID_TAGS)}; '
+              f'taken as given, but it can only match a node that wrote the same word.',
+              file=sys.stderr)
     return out
 
 
@@ -192,9 +219,10 @@ def cmd_cycle_create(cycle_id: str, title: str | None,
 
     The cycle starts with nothing in hand: `cycle hold` is what claims the first node.
     """
-    # 命令行那串先过一遍唯一的解析入口：`cycle start` 会先拆好再调到这里，人直接敲
-    # `cycle create --tags art` 时到这里还是原样的一串。两条路都必须落到同一份 list 上，
-    # 否则 `art` 会在其中一条路上被当成三个字母。
+    # The command-line string goes through the one parsing door first: `cycle start` splits it
+    # before calling in here, while a human typing `cycle create --tags art` arrives with the string
+    # untouched. Both paths must land on the same list, or `art` is read as three letters on one of
+    # them.
     tags = _parse_cycle_tags(tags)
     _require_tags(tags, 'pf cycle create')
     with _ledger_lock():
@@ -233,13 +261,15 @@ def cmd_cycle_create(cycle_id: str, title: str | None,
 
 
 def cmd_cycle_policy(cycle_id: str, key: str, value: str) -> None:
-    """记下这条线的一条策略，并把生效后的整份策略报回来。
+    """Write down one policy for this line, and report the whole effective set back.
 
-    `policies` 是**这条线**的属性（与 `tags` 同一类东西），所以它跟着 cycle 记录走，而不是跟着
-    某一次调用：这条线上的每一步、以及每一次收尾，读的都是同一份。
+    `policies` is a property of **this line** (the same kind of thing as `tags`), so it rides on
+    the cycle record rather than on one call: every step this line takes, and every close, reads
+    the same one.
 
-    数值型策略（维护线那两条）收一个正数，`off` 把这一条去掉；整数型（`parallel`）收一个正整数；
-    词表型（`spawner`）收候选表里的词，`off` 把这一条去掉。
+    A numeric policy (the two maintenance lines) takes a positive number and `off` drops it; an
+    integer one (`parallel`) takes a positive integer; a word one (`spawner`) takes a word from the
+    candidate table and `off` drops it.
     """
     if key in POLICY_NUMBERS:
         stored = _parse_policy_number(key, value)
@@ -284,9 +314,10 @@ def cmd_cycle_start(cycle_id: str, title: str | None,
     pick happens while the cycle is being created, so a set that only landed in the cycle record
     would be too late for the first node.
 
-    `--parallel` 是这条线同时握几格：它落的正是 `policies.parallel` 那一格（`cycle policy` 写的
-    是同一个键），所以开局这一次挑到几格、以后每一次收尾补几格，取的是同一个数。不给就用缺省
-    （一次一格）。
+    `--parallel` is how many slots this line holds at once: it lands in exactly the
+    `policies.parallel` slot (`cycle policy` writes the same key), so how many slots this opening
+    pick takes, and how many each later close refills, are one and the same number. Not given means
+    the default (one slot at a time).
 
     Refuses while another cycle is still active, unless `--force`. The alternative -- two active
     cycles -- makes the next bare `next` an `ask_user`, which an unattended run cannot answer, and
@@ -300,27 +331,30 @@ def cmd_cycle_start(cycle_id: str, title: str | None,
 
     tags = _parse_cycle_tags(tags)
     _require_tags(tags, 'pf cycle start')
-    # 命令行那一格过 `cycle policy` 用的同一个解析口：正整数落盘，`off` 落回缺省。
+    # The command-line slot goes through the same parsing door `cycle policy` uses: a positive
+    # integer lands on disk, `off` falls back to the default.
     stated = _parse_policy_count('parallel', parallel) if parallel is not None else None
     with _ledger_lock():
         project = _resolve_project_root(Path.cwd())
-        # 开局钉几格与收尾补几格是同一件事：`parallel` 说这条线同时握几个节点。这一次挑选的
-        # `limit` 与开局钉几格都是它 —— `cycle_policy` 是拿它的唯一来源，命令行给了就先问它一次，
-        # 没给就是这条新线落盘后的那个缺省值。
+        # How many slots the opening pins and how many each close refills are one thing:
+        # `parallel` says how many nodes this line holds at once. This pick's `limit` and the opening
+        # pins both read it -- `cycle_policy` is the one source for it, asked once when the command
+        # line gives it, and the default this new line lands with when it does not.
         stated_or_default = {'parallel': stated} if stated is not None else {}
         cap = cycle_policy({'policies': stated_or_default})['parallel']
         ranked = pipeline.ranked_ready_nodes(project, limit=cap, tags=tags)
         if not ranked:
             blocked = pipeline.tag_blocked_ready_nodes(project, tags)
             if blocked:
-                # 图里有活，只是不归这条线管。这句话要让人一眼看出差在哪儿：换一套 --tags 就行。
-                print('Error: --tags ' + ','.join(tags) + ' 这个过滤集里没有 ready 节点；'
-                      '图里这些就绪节点被 tag 挡在外面：\n'
+                # There is work in the graph; it is just not this line's to run. The
+                # sentence must show a human at a glance what differs: one more --tags and it is.
+                print('Error: --tags ' + ','.join(tags) + ': this filter set has no ready node; '
+                      'these ready nodes in the graph are kept out by tag:\n'
                       + '\n'.join(pipeline.tag_blocked_lines(blocked))
-                      + '\n把 --tags 改宽一点（没有 tag 的节点在任何范围里都在）。', file=sys.stderr)
+                      + '\nWiden --tags (a node with no tag is in every range).', file=sys.stderr)
                 sys.exit(2)
-            print('Error: 图里没有 ready 节点 —— 没有可执行的活。先让 pf-route 建好图，再开机。',
-                  file=sys.stderr)
+            print('Error: the graph has no ready node -- there is no work to run. Have pf-route '
+                  'build the graph first, then start the line.', file=sys.stderr)
             sys.exit(2)
         node = ranked[0]
         cmd_cycle_create(cycle_id, title, force=force, tags=tags)
@@ -331,7 +365,8 @@ def cmd_cycle_start(cycle_id: str, title: str | None,
         holding = [{'id': n['id'], 'since': cycle['created_at']} for n in ranked[:cap]]
         _set_holding(cycle, holding)
         _write_state(state)
-    # 名单是按这条线的 `parallel` 取的，所以「后面还排着多少」这次读不出来 —— 不报，也不猜。
+    # The list was taken by this line's `parallel`, so "how many more are queued behind" cannot be
+    # read this time -- it is not reported, and not guessed.
     print(f'STARTED: cycle "{cycle_id}" → {node.get("title", node["id"])}'
           + (f'  ({len(holding)} node(s) pinned)' if len(holding) > 1 else ''))
 
@@ -355,13 +390,14 @@ def cmd_cycle_list() -> None:
 
 
 def cmd_cycle_current() -> None:
-    """现在要紧的那几条线：每一条 `active` 的，**以及每一条手上有节点的**。
+    """The lines that matter right now: every `active` one, **and every one with a node in hand**.
 
-    第二条是这里存在的原因：一条不在服务中的线照样握着它没收尾的节点 —— 那正是人必须看见的
-    状态（活停在半路，而这条线不会自己往前走；只列 active 的读数里没有它）。
+    The second is why this exists: a line out of service still holds the node it never closed out
+    -- and that is exactly the state a human must see (the work stopped half way, and this line
+    will not move on by itself; a reading that lists only the active ones does not have it).
 
-    一条线可以同时握着多个节点（`parallel` 策略）：这份读数把每一个都列出来，各自的认领时刻也
-    就在每一行上。
+    A line can hold several nodes at once (the `parallel` policy): this reading lists every one of
+    them, each with its own claim moment on its own line.
     """
     state = _read_state()
     lines = [c for c in state['cycles']
@@ -370,7 +406,7 @@ def cmd_cycle_current() -> None:
         print('No active cycles.')
         return
     for c in lines:
-        # ● 在服务中，○ 不在 —— 一眼能看出这条线会不会自己往前走。
+        # ● in service, ○ not -- one glance says whether this line moves on by itself.
         mark = '●' if c.get('status') == 'active' else '○'
         policy = ', '.join(f'{k}={v}' for k, v in cycle_policy(c).items())
         print(f'{mark} {c["id"]} — {c.get("title","")}  [{c.get("status", "?")}]')
@@ -418,8 +454,9 @@ def cmd_cycle_hold(cycle_id: str, node_id: str) -> None:
     ever be able to settle it (`cycle close` reads ONE holder). The lock makes the scan-then-write
     one atomic step.
 
-    一条线同时可以握多个节点（`parallel` 策略），所以往已经有节点的这条线上再 pin 一个不是错误
-    —— 这一笔就是「再开一格」；同一个 id 重 pin 放行（重启语义）。
+    A line can hold several nodes at once (the `parallel` policy), so pinning one more onto a line
+    that already has nodes is not an error -- that write is "open one more slot"; re-pinning the
+    same id is allowed (restart semantics).
     """
     with _ledger_lock():
         state = _read_state()
@@ -449,12 +486,13 @@ def cmd_cycle_retry(cycle_id: str, node_id: str, summary: str | None,
     Retrying a node whose run came back not delivered needs this: without it the old terminal signal
     stays on disk, so the next reader calls it finished again -- an infinite retry that never retries.
 
-    默认把条子重写成 `pending`（重试留下的记号，读者照红灯等）。`--drop` 连条子都不留：重试真正
-    起步的那一步 —— 只要还有一张 `pending` 条子，`next` 就永远答 `wait`，一个字节都推不动
-    （这条卡住过一条线）。
+    By default the note is rewritten as `pending` (the mark a retry leaves behind, and readers wait
+    on it as on a red light). `--drop` leaves no note at all: that is the step a retry really starts
+    from -- as long as one `pending` note is there, `next` always answers `wait` and not a byte
+    moves (this has stalled a line).
     """
     if drop:
-        # 装载放在锁外面：它不是这次读-改-写的一部分。
+        # Loading happens outside the lock: it is not part of this read-modify-write.
         pipeline = _load_pipeline()
     with _ledger_lock():
         state = _read_state()
@@ -464,9 +502,10 @@ def cmd_cycle_retry(cycle_id: str, node_id: str, summary: str | None,
         if drop:
             if sp.exists():
                 remove(sp)
-            # 会话那条记号也一并抹掉：留着它，重试根本派不出去（派发会把这一格跳过，见 nextcmd）。
-            # 这枚记号与 prompt / claim 同住一处（`prompts.started_marker`），这里只交出「哪条线、
-            # 哪一格」，落点算法不在这边再拼一份。
+            # The session's own stamp goes too: leaving it means the retry can never be dispatched
+            # (dispatch skips this slot; see nextcmd). That stamp lives in the same place as the
+            # prompt / claim (`prompts.started_marker`), and all this hands over is "which line,
+            # which slot" -- the landing rule is not spelled out a second time here.
             remove(pipeline.started_marker(ledger_dir_for(None).parent, cycle_id, node_id))
             print(f'Signal dropped (no ticket left): {sp}')
             return
@@ -481,8 +520,9 @@ def cmd_cycle_close(cycle_id: str, node_id: str, result: str) -> None:
     """Record the step and let the node go.
 
     The node leaves the cycle's hand here, which is what lets the next pick take it (or the close
-    command open the next one). 这条线上握着的其它节点不动。The DAG status is a separate writer's
-    job -- the conductor runs `dag-manage status` itself -- so this only owns the cycle's own record.
+    command open the next one). The other nodes this line holds are left alone. The DAG status is a
+    separate writer's job -- the conductor runs `dag-manage status` itself -- so this only owns the
+    cycle's own record.
     """
     if result not in VALID_NODE_RESULTS:
         print(f'Error: --result must be one of {sorted(VALID_NODE_RESULTS)}', file=sys.stderr)
@@ -515,10 +555,11 @@ def cmd_cycle_close(cycle_id: str, node_id: str, result: str) -> None:
 
 
 def cmd_cycle_status(cycle_id: str, status: str) -> None:
-    """把一条线放进或拿出服务。
+    """Put a line into service, or take it out.
 
-    记录里只落 `active` / `inactive`：一条线停下来的原因写在停手那一刻的 reason 里，状态只回答
-    「它该不该往前走」。这条命令也是人把一条线重新拉起来的那只手 —— 工具自己永远不会写 `active`。
+    Only `active` / `inactive` land in the record: why a line stopped is written in the reason at
+    the moment it stopped, and the status only answers "should it move on". This command is also
+    the hand a human uses to pull a line back up -- the tool itself never writes `active`.
     """
     if status not in CYCLE_VALID_STATUSES:
         print(f'Error: cycle status must be one of {sorted(CYCLE_VALID_STATUSES)}', file=sys.stderr)

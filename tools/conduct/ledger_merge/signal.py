@@ -14,8 +14,8 @@ from pathlib import Path
 
 from .generic import _UNDECIDED, _as_dict, _both_changed, _merge_mapping, _three_way
 
-#: 终态：这一格的活有结论了 —— `completed` 交付了，`failed` / `stopped` 没交付。
-#: `pending` 是还没结论的记号（重试留下的），永远进不了这张表。
+#: Terminal: this slot's work has a verdict -- `completed` delivered, `failed` / `stopped` did not.
+#: `pending` is the mark of no verdict yet (what a retry leaves) and never enters this table.
 TERMINAL_SIGNAL_STATUSES = ('completed', 'failed', 'stopped')
 
 
@@ -27,7 +27,7 @@ def merge_signal(base, ours, theirs, rep, ours_path=None, theirs_path=None) -> d
         if _both_changed(b, o, t):
             return _by_mtime(o, t, ours_path, theirs_path, rep, key)
         return _three_way(b, o, t)
-    return _merge_mapping(_as_dict(base), _as_dict(ours), _as_dict(theirs), rep, '条子', resolve)
+    return _merge_mapping(_as_dict(base), _as_dict(ours), _as_dict(theirs), rep, 'note', resolve)
 
 
 def _signal_status(base_value, ours_value, theirs_value, rep, ours_path, theirs_path):
@@ -38,16 +38,16 @@ def _signal_status(base_value, ours_value, theirs_value, rep, ours_path, theirs_
     t_terminal = theirs_value in TERMINAL_SIGNAL_STATUSES
     if o_terminal != t_terminal:
         winner = ours_value if o_terminal else theirs_value
-        rep.decide(f'条子: status 终态压过非终态 → {winner!r}'
-                   f'（ours={ours_value!r} theirs={theirs_value!r}）')
+        rep.decide(f'note: status terminal beats non-terminal -> {winner!r}'
+                   f' (ours={ours_value!r} theirs={theirs_value!r})')
         return winner
-    return _by_mtime(ours_value, theirs_value, ours_path, theirs_path, rep, 'status 同档')
+    return _by_mtime(ours_value, theirs_value, ours_path, theirs_path, rep, 'status, same tier')
 
 
 def _by_mtime(ours_value, theirs_value, ours_path, theirs_path, rep, what):
     winner, side = _newer_side(ours_value, theirs_value, ours_path, theirs_path)
-    rep.decide(f'条子: {what} 两侧都改 → 取 mtime 较新的一侧（{side}；'
-               f'{_mtime_note(ours_path, theirs_path)}）')
+    rep.decide(f'note: {what} both sides changed it -> take the side with the newer mtime ({side}; '
+               f'{_mtime_note(ours_path, theirs_path)})')
     return winner
 
 
@@ -68,4 +68,4 @@ def _mtime_note(ours_path, theirs_path) -> str:
         return (f'%A mtime={Path(ours_path).stat().st_mtime:.3f} / '
                 f'%B mtime={Path(theirs_path).stat().st_mtime:.3f}')
     except (OSError, TypeError):
-        return '有一侧没有文件'
+        return 'one side has no file'

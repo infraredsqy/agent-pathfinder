@@ -117,11 +117,13 @@ class Sandbox:
         dag['nodes'][uid] = {'title': title, 'status': status, 'mode': mode,
                              'dependencies': list(deps)}
         if tags:
-            # 没打 tag 的节点在记录里就是今天这份形状：`tags` 这个键根本不出现。
+            # A node with no tag looks like this in the ledger today: the `tags` key does not
+            # appear at all.
             dag['nodes'][uid]['tags'] = list(tags)
         if weight:
-            # weight 同 tags：键只在真写过时出现。传个词表外的值进来，就是「读不准按
-            # standard」那条兜底的测试。
+            # `weight` is the same as `tags`: the key appears only when it was really written.
+            # Passing a value outside the vocabulary is what tests the "an unknown word reads as
+            # standard" fallback.
             dag['nodes'][uid]['weight'] = weight
         self.write_dag(dag['nodes'])
         node_dir = self.root / '.pf' / 'nodes' / uid
@@ -144,7 +146,7 @@ class Sandbox:
         ids, prev = [], None
         for i in range(count):
             uid = f'{prefix}-{i:02d}'
-            self.add_node(uid, f'节点 {i}', mode=mode, deps=[prev] if prev else ())
+            self.add_node(uid, f'Node {i}', mode=mode, deps=[prev] if prev else ())
             ids.append(uid)
             prev = uid
         return ids

@@ -50,12 +50,12 @@ def _flag_broken_dependency(merged, ours, theirs, rep) -> None:
         for dep in row.get('dependencies') or []:
             if dep in ids or _was_broken(ours, uid, dep) or _was_broken(theirs, uid, dep):
                 continue
-            label = f'节点 {str(uid)[:8]}（依赖被合并删掉了）'
+            label = f'Node {str(uid)[:8]} (a dependency was deleted by the merge)'
             rep.conflict(label, 'dependencies', row.get('dependencies'), dep,
-                         f'合并删掉了 {str(dep)[:8]}，这一格的边还指着它：'
-                         f'`dag-manage undepend {str(uid)[:8]} --on {str(dep)[:8]}` 摘掉这条边，'
-                         f'或把被删的节点放回来。validate 会报 FAIL check=no_dangling，而在那之前'
-                         f'这条边被当成已满足（节点会显示 ready）')
+                         f'the merge deleted {str(dep)[:8]}, while this slot\'s edge still points at it: '
+                         f'`dag-manage undepend {str(uid)[:8]} --on {str(dep)[:8]}` takes that edge off, '
+                         f'or put the deleted node back. validate reports FAIL check=no_dangling, and '
+                         f'until then the edge reads as satisfied (the node shows ready)')
 
 
 def _was_broken(side, uid, dep) -> bool:
@@ -101,10 +101,11 @@ def _node_status(label, base_value, ours_value, theirs_value, rep):
     o, t = ours_value, theirs_value
     if o in NODE_STATUS_ORDER and t in NODE_STATUS_ORDER:
         higher = max(o, t, key=NODE_STATUS_ORDER.index)
-        rep.decide(f'{label}: status 按偏序取高 {higher!r}'
-                   f'（ours={ours_value!r} theirs={theirs_value!r}）')
+        rep.decide(f'{label}: status takes the higher rung {higher!r}'
+                   f' (ours={ours_value!r} theirs={theirs_value!r})')
         return ours_value if higher == o else theirs_value
-    rep.conflict(label, 'status', ours_value, theirs_value, 'status 不在词表里，偏序裁不了')
+    rep.conflict(label, 'status', ours_value, theirs_value,
+                 'status is not in the vocabulary; the rung order cannot trim it')
     return _MISSING
 
 
@@ -113,11 +114,11 @@ def _dependencies(label, base_value, ours_value, theirs_value, rep):
     if got is not _UNDECIDED:
         return got
     if not isinstance(ours_value, list) or not isinstance(theirs_value, list):
-        rep.conflict(label, 'dependencies', ours_value, theirs_value, '不是列表，裁不了')
+        rep.conflict(label, 'dependencies', ours_value, theirs_value, 'not a list, cannot trim')
         return _MISSING
     if not isinstance(base_value, list):
         rep.conflict(label, 'dependencies', ours_value, theirs_value,
-                     '没有 base（两侧都是新增），分不清是加边还是删边')
+                     'no base (both sides added), so an added edge cannot be told from a removed one')
         return _MISSING
     added_o = [d for d in ours_value if d not in base_value]
     removed_o = [d for d in base_value if d not in ours_value]
@@ -125,11 +126,11 @@ def _dependencies(label, base_value, ours_value, theirs_value, rep):
     removed_t = [d for d in base_value if d not in theirs_value]
     if not removed_o and not removed_t:
         merged = list(ours_value) + [d for d in theirs_value if d not in ours_value]
-        rep.decide(f'{label}: dependencies 两侧都只加边 → 取并集 {_fmt(merged)}')
+        rep.decide(f'{label}: dependencies both sides only added edges -> take the union {_fmt(merged)}')
         return merged
     rep.conflict(label, 'dependencies', ours_value, theirs_value,
-                 f'ours 加 {_fmt(added_o)} 删 {_fmt(removed_o)}；'
-                 f'theirs 加 {_fmt(added_t)} 删 {_fmt(removed_t)}')
+                 f'ours added {_fmt(added_o)} removed {_fmt(removed_o)}; '
+                 f'theirs added {_fmt(added_t)} removed {_fmt(removed_t)}')
     return _MISSING
 
 
@@ -141,8 +142,8 @@ def _text_field(label, key, base_value, ours_value, theirs_value, ours, theirs, 
     o_stamp, t_stamp = _get(ours, 'updated_at'), _get(theirs, 'updated_at')
     if all(isinstance(s, str) for s in (o_stamp, t_stamp)) and o_stamp != t_stamp:
         newer = 'ours' if o_stamp > t_stamp else 'theirs'
-        rep.decide(f'{label}: {key} 两侧都改 → 取 updated_at 较新的一侧（{newer} '
-                   f'{max(o_stamp, t_stamp)}）')
+        rep.decide(f'{label}: {key} both sides changed it -> take the side with the newer updated_at '
+                   f'({newer} {max(o_stamp, t_stamp)})')
         return ours_value if o_stamp > t_stamp else theirs_value
-    rep.conflict(label, key, ours_value, theirs_value, 'updated_at 分不出先后')
+    rep.conflict(label, key, ours_value, theirs_value, 'updated_at cannot order the two')
     return _MISSING

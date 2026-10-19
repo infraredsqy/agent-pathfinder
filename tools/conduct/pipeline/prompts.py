@@ -33,10 +33,11 @@ def launch_prompt_path(project: Path, cycle_id: str, node_id: str) -> Path:
 def started_marker(project: Path, cycle_id: str, node_id: str) -> Path:
     """The stamp a successful spawn leaves: this node's session is running.
 
-    `.pf/meta/launch/<cycle>/<node>/started` —— prompt 被会话拿走之后剩下的那枚记号。派发与
-    `--spawn` 见到它就不再把这一格交给 spawner（同一个节点上第二个会话收不回来），规划也不再
-    把它算进派发名单。重开那一格是 `cycle retry --drop`：它从 state 侧按同一个路径把
-    这枚记号抹掉。
+    `.pf/meta/launch/<cycle>/<node>/started` -- the stamp left behind once the prompt has been taken
+    by the session. Dispatch and `--spawn` stop handing this slot to the spawner when they see it (a
+    second session on the same node cannot be collected), and planning no longer counts it in the
+    dispatch list. Reopening that slot is `cycle retry --drop`: it wipes this stamp from the state
+    side along the same path.
     """
     return launch_dir(project, cycle_id) / node_id / 'started'
 
@@ -69,7 +70,8 @@ def write_prompt_file(project: Path, cycle_id: str, node_id: str, text: str) -> 
 def build_prompt_text(node_id: str) -> str:
     """One dispatch prompt: the invocation line, and nothing after it.
 
-    `/pf-conduct <node_id> [pipeline]` —— the FIRST non-empty line of prompt.txt（硬约束）。`[pipeline]`
+    `/pf-conduct <node_id> [pipeline]` -- the FIRST non-empty line of prompt.txt (a hard
+    constraint). `[pipeline]`
     ALWAYS there: it is how pf-conduct knows it is running inside the pipeline (rather than having been
     invoked by hand), which is what makes it end with the one closing command instead of reporting to a
     human. The node's mode is not on this line: it lives in the node's own record, which the session

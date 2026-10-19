@@ -54,7 +54,8 @@ def _cycle_status(label, base_value, ours_value, theirs_value, rep):
     got = _three_way(base_value, ours_value, theirs_value)
     if got is not _UNDECIDED:
         return got
-    rep.conflict(label, 'status', ours_value, theirs_value, '两侧的 cycle 状态是两个不同的词')
+    rep.conflict(label, 'status', ours_value, theirs_value,
+                 'the two sides name two different words for the cycle status')
     return _MISSING
 
 
@@ -65,4 +66,5 @@ def _path(label, base_value, ours_value, theirs_value, rep):
         identity=lambda step: step.get('node'),
         same_act=lambda prev, step: prev.get('result') == step.get('result'),
         order_by=lambda step: (step.get('ended_at') or step.get('started_at') or ''),
-        same_note=lambda tag, prev, step: f'同一个节点 {str(tag)[:8]} 两侧的 result 不同')
+        same_note=lambda tag, prev, step: f'the same node {str(tag)[:8]} has different results '
+                                        f'on the two sides')

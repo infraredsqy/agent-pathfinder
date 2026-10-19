@@ -1,12 +1,14 @@
-"""`tools/issue/storage.py` 的路径绑定：导入不绑项目，点名之后才读得到那个池子。
+"""Path binding in `tools/issue/storage.py`: importing binds no project, and the pool is only
+readable after a name is given.
 
-CLI 走 `issue_manager.py main()` 里的 `configure(cwd)`（`test_weight.py` 与 conduct 那套用例
-起的都是子进程，覆盖的就是那一条路）；这里盯的是进程内那条路 —— 没有点名时它出声停手，
-点过名之后它读的正是点名的那个项目。
+The CLI goes through `configure(cwd)` in `issue_manager.py main()` (`test_weight.py` and the conduct
+cases all start child processes, and that is the path they cover); what is watched here is the
+in-process path -- it speaks up and stops when nothing is named, and once a name is given it reads
+exactly the project that was named.
 
-跑法（两种都行）：
+How to run (either works):
 
-    python -m unittest discover -s issue/tests -t .      （cwd 在 tools/）
+    python -m unittest discover -s issue/tests -t .      (cwd in tools/)
     python issue/tests/test_storage_paths.py
 """
 
@@ -25,7 +27,7 @@ STORAGE_PY = Path(__file__).resolve().parent.parent / 'storage.py'
 
 
 def load_storage():
-    """`storage.py` 的一份新拷贝，按路径加载 —— 每个用例一份，绑定互不串味。"""
+    """A fresh copy of `storage.py` loaded by path -- one per case, so bindings do not leak."""
     spec = importlib.util.spec_from_file_location('issue_storage_case', STORAGE_PY)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -60,7 +62,7 @@ class TestThePoolModuleBindsNothingAtImport(unittest.TestCase):
         self.assertIn('configure', err.getvalue())
 
     def test_configure_reads_the_project_the_caller_named(self):
-        """cwd 落在别处：名字点给谁，就读谁。"""
+        """cwd is elsewhere: whoever is named is the one read."""
         other = Path(tempfile.mkdtemp(prefix='issue-paths-other-'))
         self.addCleanup(shutil.rmtree, other, ignore_errors=True)
         landed = other / '.pf' / 'issues' / 'issues.json'
