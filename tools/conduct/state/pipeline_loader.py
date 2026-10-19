@@ -16,4 +16,4 @@ def _load_pipeline(name: str = 'conduct_pipeline'):
     carry a stale environment between calls in the same process. `conduct_pipeline.py` is loaded the
     same way this package is -- see the bootstrap in `state-manage.py`.
     """
-    return _loader().load_by_path(name, HERE / 'pipeline' / 'conduct_pipeline.py')
+    return _loader().load_by_path(name, HERE / 'conduct_pipeline.py')

@@ -15,7 +15,7 @@ decoder, the process runner, and the two files `init` writes. What is pinned:
     the driver's own `main()` in this process, because the rules track the ledger's shape and
     change often, and a process start per rule case buys nothing over the same code called here
   * a conflict NEVER writes `<ours>` and exits non-zero (git then keeps ours and stops)
-  * the merged file is byte-for-byte what `conduct_state.store` / `dag-manage.py` would have written
+  * the merged file is byte-for-byte what `state.store` / `dag-manage.py` would have written
   * the program itself, through the shipped process (`TestDriverContract`, and it alone): the argv
     surface (`--dry-run`, the `%P` fourth argument), the exit codes, a file that is not a ledger
     refused -- the interface git actually invokes
@@ -60,9 +60,9 @@ LOADER = shared_loader()
 DRIVER = LOADER.load_by_path('ledger_merge_under_test', MERGE_PY, register=True, reuse=True)
 MERGE = LOADER.load_by_path('pf_conduct_ledger_merge', MERGE_PKG / '__init__.py',
                             package_dir=MERGE_PKG, register=True, reuse=True)
-STORE = LOADER.load_by_path('ledger_merge_test_conduct_state',
-                            CONDUCT_DIR / 'conduct_state' / '__init__.py',
-                            package_dir=CONDUCT_DIR / 'conduct_state',
+STORE = LOADER.load_by_path('pf_state_ledger_merge_test',
+                            CONDUCT_DIR / 'state' / '__init__.py',
+                            package_dir=CONDUCT_DIR / 'state',
                             register=True, reuse=True).store
 
 
@@ -874,7 +874,7 @@ class TestDriverContract(LedgerCase):
 class TestTheBytesAreTheToolsOwn(LedgerCase):
     """The merged file must be byte-for-byte what the tool would have written.
 
-    This is the whole reason the driver asks `conduct_state.store` and dag-manage for a record's own
+    This is the whole reason the driver asks `state.store` and dag-manage for a record's own
     bytes instead of doing its own `json.dumps`: a ledger that differs by one byte from what the tools
     write would show up as a change on every single merge, forever. The reference is the file the
     OWNER's writer really lands, so a writer that moves on its own turns these cases red.

@@ -7,7 +7,7 @@ Which of the two it is arrives as an argument: `spawn/host.py`'s `default_spawne
 a host that names no spawner, and `writer.resolve_spawner` is the pipeline's own answer to the same
 question.
 
-One caller reaches this file: `conduct_pipeline_impl/writer.spawn_session`, by way of `dispatch
+One caller reaches this file: `pipeline/writer.spawn_session`, by way of `dispatch
 <cycle>` and the one-shot `next --after <node_id> --spawn`. `chain-spawn.py` -- the CLI a skill-run
 chain uses to hand on the baton -- is a caller of THAT door rather than a second one, so every
 session in this tree starts through the same call.

@@ -3,7 +3,7 @@
 `instruction_is_live` reads an entry's state, `entry_scope` / `scope_binding` resolve its scope,
 `instruction_in_scope` judges visibility, and `live_instructions` lists what is visible.
 
-That judgement is deliberately THE one: `conduct_state/instruct.py` -- what `pf instruction list`
+That judgement is deliberately THE one: `state/instruct.py` -- what `pf instruction list`
 runs -- loads this module by path and asks it the same question with the reader's own place, rather
 than keeping a second reading of the rule. 两份判定就是一条指令被读成两样的来路。
 """
@@ -17,7 +17,7 @@ from .store import _state_module, active_cycles, load_dag, load_instructions, lo
 
 # ── instructions ─────────────────────────────────────────────────────────────
 
-#: `state` 缺省读作的那个词。词表正本在写侧（`conduct_state/instruct.py` 的 `LIVE_STATE`），
+#: `state` 缺省读作的那个词。词表正本在写侧（`state/instruct.py` 的 `LIVE_STATE`），
 #: 这一侧经装载器借它 —— 同一个词两处各写一遍，就是一处改了另一处读不懂的来路。
 LIVE_STATE = _state_module('instruct').LIVE_STATE
 

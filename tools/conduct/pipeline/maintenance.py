@@ -167,7 +167,7 @@ def thresholds_for(cycle: dict | None) -> dict:
     cycle policy`), which is why nobody has to write a sentence to configure one -- and why a line
     that has nothing to do with code simply does not carry them.
 
-    「配了数值型策略」= `conduct_state.cycles.POLICY_NUMBERS` 那张表里、这条线的记录上真写着的键
+    「配了数值型策略」= `state.cycles.POLICY_NUMBERS` 那张表里、这条线的记录上真写着的键
     （`parallel` 那样的整数键不在其中）；一个都没配时这份读数是空的，`crossed` 的空门就靠它 ——
     非空即「这条线至少配了一个度量」。表本身只有一处，取的就是写侧那一份。
     """

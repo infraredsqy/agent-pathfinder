@@ -82,14 +82,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-CONDUCT = HERE.parent                      # the conduct tool directory
+HERE = Path(__file__).resolve().parent      # the conduct tool directory: the entry sits at its top
+CONDUCT = HERE
 STATE_MANAGE = HERE / 'state-manage.py'
 #: Every child process this module starts is bounded by this many seconds. It lives
 #: HERE, in the entry module, with the command builders below and `_run`, because those are the
 #: names a caller patches on the loaded module: the test harness replaces `pipeline._run` with its
 #: in-process runner and sets `pipeline.CMD_TIMEOUT` to prove a hung child is reported. The logic
-#: modules in `conduct_pipeline_impl/` reach them through `seam`, which reads this module's globals at
+#: modules in `pipeline/` reach them through `seam`, which reads this module's globals at
 #: call time; a by-name import would freeze a copy and make every one of those patches invisible.
 CMD_TIMEOUT = 120
 
@@ -200,16 +200,17 @@ ISSUE_MANAGE = _tool_path('DSH_CONDUCT_ISSUE_MANAGE', CONDUCT.parent / 'issue' /
 
 
 def _load_impl():
-    """Load `conduct_pipeline_impl/` by path, fresh, and hand it back.
+    """Load `pipeline/` by path, fresh, and hand it back.
 
     By PATH, not by name, and with the name dropped from `sys.modules` first: every caller loads
     this file fresh (`tests/harness.py`, `handoff.py`, `state-manage.py`), and a by-name import
     would hand the second load the first load's modules. Inside the package, `from . import store`
     resolves through the registration the load makes.
     """
-    pkg = 'conduct_pipeline_impl'
-    return _loader().load_by_path(pkg, CONDUCT / pkg / '__init__.py',
-                                  package_dir=CONDUCT / pkg, register=True, fresh=True)
+    pkg = 'pf_pipeline'
+    impl_dir = CONDUCT / 'pipeline'
+    return _loader().load_by_path(pkg, impl_dir / '__init__.py',
+                                  package_dir=impl_dir, register=True, fresh=True)
 
 
 def _host():

@@ -21,7 +21,7 @@ from .pipeline_loader import _load_pipeline
 
 VALID_TARGETS = ('stage', 'boundary')
 
-#: `state` 缺省读作的那个词：一个没有 `state` 字段的条目按这个词算数。读侧（`conduct_pipeline_impl/instruct.py`）
+#: `state` 缺省读作的那个词：一个没有 `state` 字段的条目按这个词算数。读侧（`pipeline/instruct.py`）
 #: 经装载器借这个名字，不抄第二遍。
 LIVE_STATE = 'live'
 #: The account has two states, and one of them is written by the owner alone: `live` (in force) and
@@ -58,7 +58,7 @@ def _scope_rules():
 def valid_scopes() -> tuple:
     """`scope` 的词表：`conduct_pipeline` 的那一份，不是这里的第二个副本。
 
-    `SCOPES` 在 `conduct_pipeline_impl/instruct.py`（判定的正本）里；这个工具只借不抄 —— 抄一份
+    `SCOPES` 在 `pipeline/instruct.py`（判定的正本）里；这个工具只借不抄 —— 抄一份
     的下场是给判定加第四个 scope 之后，`--scope` 先在 argparse 那一步把它拒了。
     """
     return _scope_rules().SCOPES

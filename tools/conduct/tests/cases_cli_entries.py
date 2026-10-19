@@ -162,7 +162,7 @@ class TestOneSpawner(Base):
         out; the planner produces no case that asks for one (a terminal ticket makes `record` answer
         `wait`).
         """
-        source = (CONDUCT_DIR / 'pipeline' / 'handoff.py').read_text(encoding='utf-8')
+        source = (CONDUCT_DIR / 'handoff.py').read_text(encoding='utf-8')
         for gone in ('SPAWNER_SCRIPT', 'spawner_script', 'spawn_session', self.ARGV_FINGERPRINT):
             self.assertNotIn(gone, source, f'{gone} is back in handoff.py')
 

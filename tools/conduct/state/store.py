@@ -254,7 +254,7 @@ def _read_state(project: str | None = None) -> dict:
 def _read_dag(project: str | None = None) -> dict:
     """这个项目的图：`ideas.json` 的节点表，或空表。
 
-    读的是盘上那个词，一个字段都不补（`conduct_pipeline_impl/store.py` 的 `load_dag` 是给判据
+    读的是盘上那个词，一个字段都不补（`pipeline/store.py` 的 `load_dag` 是给判据
     用的那份，它会把节点 mode 填上）。
     """
     data = _read_json(_record_path(project, 'ideas.json'), 'ideas.json') or {}

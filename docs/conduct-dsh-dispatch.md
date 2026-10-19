@@ -10,7 +10,7 @@
 
 ## 一、谁开这个会话
 
-`conduct_pipeline_impl/writer.py` 的 `spawn_session()` 是管线**唯一**开会的口：它经 `spawn/conduct_spawn.py`
+`pipeline/writer.py` 的 `spawn_session()` 是管线**唯一**开会的口：它经 `spawn/conduct_spawn.py`
 调 `dsh-spawn.ps1`，把 `dispatch` 动作写下的那份 prompt 发出去。入口是 `pf next --spawn`——干活会话收尾
 时那一条；`--plan` 是只读预览，绝不 spawn。技能自跑的链（`spawn/chain-spawn.py`）自己只是一个 CLI 壳，
 开会话那一拍同样落在这道门上：会话便条、标记的写与清都由它带着。**claim 那一条它拿不到**：claim 只认领

@@ -42,7 +42,7 @@ from harness import (DAG_MANAGE, GIT, SIGNAL_PY, STATE_MANAGE, Sandbox, _child_e
 __all__ = ['TestLedgerLock', 'TestWorktreeRedirect', 'TestSpawnClaim', 'TestOneNodeOneCycle']
 
 PYTHON = sys.executable
-CONDUCT_DIR = Path(pipeline.__file__).resolve().parent.parent
+CONDUCT_DIR = Path(pipeline.__file__).resolve().parent
 
 
 class TestLedgerLock(unittest.TestCase):

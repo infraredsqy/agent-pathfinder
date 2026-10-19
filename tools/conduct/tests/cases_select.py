@@ -20,14 +20,14 @@ from harness import DAG_MANAGE, STATE_MANAGE, _fresh_module, finish_node, run_da
 
 
 def _state_cycles_module():
-    """`conduct_state` 是带相对导入的包，不能按单文件加载：照 state-manage.py 自己的引导，
+    """`state` 是带相对导入的包，不能按单文件加载：照 state-manage.py 自己的引导，
     以包形式按路径整包装进来，取装好的 cycles 子模块。装前先清同名旧条目，本文件里的
     两次加载互不串。
     """
-    name = 'conduct_state_for_vocab'
+    name = 'pf_state_for_vocab'
     for stale in [n for n in sys.modules if n == name or n.startswith(name + '.')]:
         del sys.modules[stale]
-    pkg_dir = STATE_MANAGE.parent.parent / 'conduct_state'
+    pkg_dir = STATE_MANAGE.parent / 'state'
     spec = importlib_util.spec_from_file_location(
         name, pkg_dir / '__init__.py', submodule_search_locations=[str(pkg_dir)])
     mod = importlib_util.module_from_spec(spec)
@@ -405,11 +405,11 @@ class TestNodeTags(Base):
         self.assertEqual(dag_mod.VALID_TAGS, cycles_mod.VALID_TAGS)
 
     def test_the_borrowed_cycle_policy_tables_read_the_same_by_value(self):
-        """impl 借的是 `conduct_state/cycles.py` 那一份正本，两个包各自装载同一个文件。
+        """impl 借的是 `state/cycles.py` 那一份正本，两个包各自装载同一个文件。
 
         这里钉的是那条边界：两份读数**按值相等**（`==`）。两个包各按自己的名字装载，拿到的是两个
         模块对象，所以跨包 `is` 不成立，谁也不该拿 `is` 去比这两份；要改这张表，改的是
-        `conduct_state/cycles.py` 那个文件本身。
+        `state/cycles.py` 那个文件本身。
         """
         cycles_mod = _state_cycles_module()
 

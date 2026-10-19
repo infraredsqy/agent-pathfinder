@@ -45,7 +45,7 @@ def _require_tags(tags: list, verb: str) -> None:
 # 挑下一个节点。默认 `stop`：缺省值必须落在保守那一边。
 # 第二条是 `parallel` —— 这条线同时能握几个节点、开几个会话。默认 1（一次一格）。它是**上限**：
 # 节点能不能并排跑，另由依赖图说了算。
-# 与 `conduct_pipeline_impl/store.py` 的那份是同一套词（那边管读，这边管写）。
+# 与 `pipeline/store.py` 的那份是同一套词（那边管读，这边管写）。
 POLICY_DEFAULTS = {'when_shelved': 'stop', 'parallel': PARALLEL_DEFAULT}
 POLICY_VALUES = {'when_shelved': ('stop', 'continue')}
 #: 整数型策略：整数值，`off` 是取消。`parallel` 住在这里（下限 1：一条线至少握一格）。

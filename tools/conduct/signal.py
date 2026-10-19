@@ -19,8 +19,8 @@ import json
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-CONDUCT = HERE.parent                      # the conduct tool directory
+HERE = Path(__file__).resolve().parent      # the conduct tool directory: the entry sits at its top
+CONDUCT = HERE
 
 # 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
 SHARED = CONDUCT.parent / 'shared'
@@ -42,7 +42,7 @@ _STORE = None
 
 
 def _store():
-    """`conduct_state.store`, loaded by path -- the record's owner, and the one writer of a signal.
+    """`state.store`, loaded by path -- the record's owner, and the one writer of a signal.
 
     The record commands (state / dag / issue) do not write where cwd points when cwd is a linked
     worktree: they map the worktree back to the main tree, because `.pf/` lives there and only
@@ -54,8 +54,8 @@ def _store():
     """
     global _STORE
     if _STORE is None:
-        _STORE = _loader().load_by_path('pf_conduct_state_store',
-                                        CONDUCT / 'conduct_state' / 'store.py',
+        _STORE = _loader().load_by_path('pf_state_store',
+                                        CONDUCT / 'state' / 'store.py',
                                         register=True, reuse=True)
     return _STORE
 
@@ -72,7 +72,7 @@ def write_signal(cycle: str, node: str, status: str, summary: str,
     instead of shelling out to a second Python start on the last line of every node.
 
     The record -- its six keys, its path under `.pf/signals/`, its timestamp -- belongs to
-    `conduct_state.store`, which writes it: this function checks what a caller handed over and hands
+    `state.store`, which writes it: this function checks what a caller handed over and hands
     it on. `base_dir` is that store's signals directory, for a caller that already resolved the
     project root (`handoff.py` does, from a worktree cwd); it is where THIS one write lands and
     nothing more -- the store's own binding is left exactly where it was, and a write that names no

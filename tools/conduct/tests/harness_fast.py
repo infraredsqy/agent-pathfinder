@@ -339,7 +339,7 @@ class InProcessDagManage:
 
         The five verbs the pipeline needs: `list [-n N]` (the tool's own node ranking), `status <node>
         completed|shelved` (the close marks the node), and -- for the maintenance channel's graph edit
-        (`conduct_pipeline_impl.maintenance`) -- `add`, `depend` and `undepend`. Each one calls the
+        (`pipeline.maintenance`) -- `add`, `depend` and `undepend`. Each one calls the
         project's own `cmd_*`, so a uuid is really minted and an edge is really written; only the
         process start is gone. Everything else falls through as a non-zero exit, which
         `ranked_ready_nodes` already knows how to read.

@@ -13,7 +13,7 @@ The two tools it leans on, each by the same rule -- the sibling directory of the
 tool's own variable for a review draft or a drill copy that points at the real tool:
 
     DSH_CONDUCT_DAG_MANAGE   where `dag-manage.py` is (it owns the graph's bytes)
-    DSH_CONDUCT_STATE_DIR    where the `conduct_state` package is (it owns the other three records)
+    DSH_CONDUCT_STATE_DIR    where the `state` package is (it owns the other three records)
 
 Which ledger file is this? (the fourth argument)
 ------------------------------------------------
@@ -34,7 +34,7 @@ every line. `git merge` would then stop on a conflict that is not one, or worse,
 produce a nonsense mixture of the two files. So the merge is done on the parsed records, and the
 result is written back through the tools' OWN writers, byte for byte the way `state-manage.py` /
 `dag-manage.py` would have written it: this module asks each file's owner for the record's bytes
-(`conduct_state.store.record_bytes`, `dag-manage.py`'s `ideas_bytes`) and hands them back to that
+(`state.store.record_bytes`, `dag-manage.py`'s `ideas_bytes`) and hands them back to that
 same owner to land (`write_record_bytes` / `write_ideas_bytes`), so a merge's judgement and its bytes
 come from one tree and the two formats can never drift apart.
 
@@ -183,21 +183,21 @@ def _load_by_path(name: str, path: Path, **kwargs):
 DAG_MANAGE = _loader().load_shared('toolpath').tool_path(
     'DSH_CONDUCT_DAG_MANAGE', HERE.parent / 'dag' / 'dag-manage.py')
 CONDUCT_STATE = _loader().load_shared('toolpath').tool_path(
-    'DSH_CONDUCT_STATE_DIR', HERE / 'conduct_state')
+    'DSH_CONDUCT_STATE_DIR', HERE / 'state')
 
 _STORE = None
 _DAG = None
 
 
 def store():
-    """`conduct_state.store`: the tool's own reader and atomic writer, loaded by path.
+    """`state.store`: the tool's own reader and atomic writer, loaded by path.
 
-    Under a private name, so a caller that already has `conduct_state` loaded (the test harness, an
+    Under a private name, so a caller that already has the state package loaded (the test harness, an
     in-process launcher) keeps its own copy.
     """
     global _STORE
     if _STORE is None:
-        pkg = _load_by_path('pf_ledger_conduct_state', CONDUCT_STATE / '__init__.py',
+        pkg = _load_by_path('pf_ledger_state', CONDUCT_STATE / '__init__.py',
                             package_dir=CONDUCT_STATE)
         _STORE = pkg.store
     return _STORE

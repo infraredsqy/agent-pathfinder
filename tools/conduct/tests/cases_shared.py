@@ -211,7 +211,7 @@ class TestOneSharedDoor(unittest.TestCase):
         形状一样，读它的人与改它的动机却是另一件事。数量钉住，是为了让「再加一处」也必须先经过
         这条用例。
         """
-        self.assertEqual({'shared/clock.py': 2, 'conduct/conduct_pipeline_impl/writer.py': 2},
+        self.assertEqual({'shared/clock.py': 2, 'conduct/pipeline/writer.py': 2},
                          _timestamp_spellings(),
                          '记录的格式字符串长出了第二份正本')
 
@@ -219,7 +219,7 @@ class TestOneSharedDoor(unittest.TestCase):
         """Two `_read_json` with two failure conventions was the drift; the tree keeps the CLI
         layer's door and every other reader asks the shared one."""
         owners = sorted(_relative(path) for path, name in _definitions() if name == '_read_json')
-        self.assertEqual(['conduct/conduct_state/store.py'], owners)
+        self.assertEqual(['conduct/state/store.py'], owners)
 
     def test_the_replace_reaches_the_filesystem_from_one_place(self):
         """`os.replace` 的调用点只有 `shared/jsonio.py` 一处。
@@ -431,7 +431,7 @@ class TestOneWriterPerRecord(Base):
     """One signal writer, and the record it lands is the store's own."""
 
     def test_signal_py_carries_no_writer_of_its_own(self):
-        source = (CONDUCT_DIR / 'pipeline' / 'signal.py').read_text(encoding='utf-8')
+        source = (CONDUCT_DIR / 'signal.py').read_text(encoding='utf-8')
         for gone in ('os.replace', 'tempfile', '%Y-%m-%dT%H:%M:%SZ', 'json.dump'):
             self.assertNotIn(gone, source, f'signal.py writes the record itself again ({gone})')
         self.assertIn('_write_signal', source, 'signal.py writes the record through the store')

@@ -408,7 +408,7 @@ class TestContract(Base):
         函数的签名；其中大半是重推 argparse 已有的缺省，另有两个是同一个答案算两遍。收成一个名字
         空间之后，加旗标就是 parser 一行加读它的那一行。
         """
-        source = (CONDUCT_DIR / 'conduct_state' / 'nextcmd.py').read_text(encoding='utf-8')
+        source = (CONDUCT_DIR / 'state' / 'nextcmd.py').read_text(encoding='utf-8')
         tree = ast.parse(source)
         for name in ('cmd_next', 'cmd_dispatch'):
             fn = next(node for node in tree.body
@@ -432,7 +432,7 @@ class TestContract(Base):
                          '导出面上又多了一个拼这行的名字')
 
     def test_the_impl_package_keeps_the_one_export_list(self):
-        """导出面只有 `conduct_pipeline_impl/__init__.py` 那一张表。
+        """导出面只有 `pipeline/__init__.py` 那一张表。
 
         模块级的第二张名单没有读者，却跟包的那张分头长：两边列的名字各说各话时，谁也没报错。层里
         不留名单，就没有第二处可漂。
@@ -445,7 +445,7 @@ class TestContract(Base):
             return False
 
         carrying = [path.name for path in
-                    sorted((CONDUCT_DIR / 'conduct_pipeline_impl').glob('*.py'))
+                    sorted((CONDUCT_DIR / 'pipeline').glob('*.py'))
                     if carries_a_list(path)]
         self.assertEqual(['__init__.py'], carrying)
 
@@ -611,7 +611,7 @@ class TestOneChildProcessPath(Base):
         真的用上它才算。
         """
         offenders = []
-        for path in sorted((CONDUCT_DIR / 'conduct_pipeline_impl').glob('*.py')):
+        for path in sorted((CONDUCT_DIR / 'pipeline').glob('*.py')):
             tree = ast.parse(path.read_text(encoding='utf-8'))
             used = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
             imported = {alias.name for node in ast.walk(tree)
