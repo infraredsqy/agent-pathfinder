@@ -62,6 +62,45 @@ def _definitions():
                 yield path, node.name
 
 
+def _top_level_assignments(path: Path):
+    """(name, value node) for every module-level assignment in one shipped file."""
+    for node in ast.parse(path.read_text(encoding='utf-8')).body:
+        if isinstance(node, ast.Assign):
+            targets = [t for t in node.targets if isinstance(t, ast.Name)]
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            targets = [node.target]
+        else:
+            continue
+        for target in targets:
+            yield target.id, node.value
+
+
+def _literal_owners(words):
+    """Which shipped file spells each of `words` as a string constant: `relative/path:word`, sorted.
+
+    A literal is judged as a whole value, never as a substring: a help text or a docstring that
+    mentions a path in prose is not a second spelling of it.
+    """
+    found = set()
+    for path in shipped_sources():
+        for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
+            if isinstance(node, ast.Constant) and node.value in words:
+                found.add(f'{_relative(path)}:{node.value}')
+    return sorted(found)
+
+
+def _timestamp_spellings():
+    """Every shipped file that states a `%Y-%m-%dT…` format, with how many times."""
+    counts = {}
+    for path in shipped_sources():
+        hits = [node for node in ast.walk(ast.parse(path.read_text(encoding='utf-8')))
+                if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and '%Y-%m-%dT' in node.value]
+        if hits:
+            counts[_relative(path)] = len(hits)
+    return counts
+
+
 def _path_load_calls(path: Path):
     """Every `spec_from_file_location(...)` call site in one shipped file, as AST nodes."""
     return [node for node in ast.walk(ast.parse(path.read_text(encoding='utf-8')))
@@ -202,10 +241,60 @@ class TestOneSharedDoor(unittest.TestCase):
                           'load_by_path': 'shared/loader.py'}, owners)
 
     def test_the_per_file_copies_of_those_primitives_are_gone(self):
-        """`_replace_with_retry` and `_unlink_with_retry` are the names the copies carried."""
+        """`_replace_with_retry` / `_unlink_with_retry` / `_shared` are the names the copies carried."""
         left = sorted(f'{_relative(path)}:{name}' for path, name in _definitions()
-                      if name in ('_replace_with_retry', '_unlink_with_retry'))
+                      if name in ('_replace_with_retry', '_unlink_with_retry', '_shared'))
         self.assertEqual([], left)
+
+    def test_the_shared_door_is_defined_once(self):
+        """`load_shared`：`shared/` 里某个文件按目录取的那一道门，只许在 `shared/loader.py` 定义。
+
+        与上面那条按名字去重的判据不同，这一条按**条数**判：一份名字 → 文件的映射会把第二个
+        定义悄悄盖掉，而第二个定义正是要拦的东西。
+        """
+        owners = sorted(f'{_relative(path)}:{name}' for path, name in _definitions()
+                        if name == 'load_shared')
+        self.assertEqual(['shared/loader.py:load_shared'], owners,
+                         '`load_shared` 被定义到了第二处：两道门各带一半的约定')
+
+    def test_the_ledger_contract_has_one_home(self):
+        """记录目录的契约只有一份正本：`shared/ledger.py`。
+
+        判据落在三处：那两个名字的**赋值**、那两个**拼法**（`.pf` 与设置文件的名字）的字符串常量、
+        以及 worktree 回主树那条判定的定义。别处只许取用（`from .store import LEDGER_NAME`、
+        store 的 `__getattr__`），不许自带一份 —— 一旦自带，改一处就不够了，而这正是这套纪律
+        要拦住的那件事：写下那第二份的人，下一次改动只会改到其中一处。
+        """
+        assigned = sorted(f'{_relative(path)}:{name}' for path in shipped_sources()
+                          for name, _value in _top_level_assignments(path)
+                          if name in ('LEDGER_NAME', 'INIT_MARKERS'))
+        with self.subTest(judged='两个名字的赋值'):
+            self.assertEqual(['shared/ledger.py:INIT_MARKERS', 'shared/ledger.py:LEDGER_NAME'],
+                             assigned, '这两个名字被赋值到了第二处：那就是第二份要与正本对齐的拼法')
+
+        with self.subTest(judged='两个拼法的字符串常量'):
+            self.assertEqual(['shared/ledger.py:.pf', 'shared/ledger.py:config.json'],
+                             _literal_owners(('.pf', 'config.json')),
+                             '这两个拼法被当成路径拼到了别处（只看整个字符串常量的值，帮助文本里'
+                             '提及路径的散文落在判据之外）')
+
+        with self.subTest(judged='worktree 回主树那条判定'):
+            roots = sorted(_relative(path) for path, name in _definitions()
+                           if name == 'resolve_project_root')
+            self.assertEqual(['shared/ledger.py'], roots,
+                             '这条判定被写到了第二处：记录目录底下的路径又要多一处对齐')
+
+    def test_the_timestamp_shapes_have_one_home(self):
+        """时刻的形状只有一份正本：`shared/clock.py`（微秒与秒级各一个常量、各一个「现在」）。
+
+        `writer.py` 那两处是既存例外，也是这里唯一允许的第二处：它们写的是 `SPAWN.claim` /
+        `started` 那两枚纯文本记号里的一行日志（`<pid> started <时刻>`），不是任何一条记录的时刻 ——
+        形状一样，读它的人与改它的动机却是另一件事。数量钉住，是为了让「再加一处」也必须先经过
+        这条用例。
+        """
+        self.assertEqual({'shared/clock.py': 2, 'conduct/conduct_pipeline_impl/writer.py': 2},
+                         _timestamp_spellings(),
+                         '记录的格式字符串长出了第二份正本')
 
     def test_one_reader_named_read_json_is_left(self):
         """Two `_read_json` with two failure conventions was the drift; the tree keeps the CLI
@@ -461,15 +550,17 @@ class TestTheMarkerContract(Base):
         self.assertNotIn('-NoVerify', dsh)
 
     def test_the_marker_path_follows_the_ledger_name(self):
-        """`.pf` 一改名，标记跟着记录走 —— 派发侧不再有一份自己的拼法。"""
+        """`.pf` 一改名，标记跟着记录走 —— 派发侧不再有一份自己的拼法。
+
+        名字的正本在 `shared/ledger.py`，所以改名就改在那里：`marker.py` 算落点、handoff 那一拍
+        写标记，两边都按它算，谁也没有第二份可以各自漂。
+        """
         sb = self.make()
-        store = shared_loader().load_by_path('pf_conduct_state_store',
-                                              CONDUCT_DIR / 'conduct_state' / 'store.py',
-                                              register=True, reuse=True)
+        ledger = _shared('pf_shared_ledger', 'ledger.py')
         marker = _marker_module()
         handoff = _fresh_module('handoff_marker_ledger_case', HANDOFF_PY)
-        self.addCleanup(setattr, store, 'LEDGER_NAME', store.LEDGER_NAME)
-        store.LEDGER_NAME = '.pf-moved'
+        self.addCleanup(setattr, ledger, 'LEDGER_NAME', ledger.LEDGER_NAME)
+        ledger.LEDGER_NAME = '.pf-moved'
 
         with contextlib.redirect_stderr(io.StringIO()):
             handoff._write_marker(sb.root, 'cyc', 'advance', '搬过家')

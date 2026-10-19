@@ -32,14 +32,11 @@ it has finished.
 import contextlib
 import importlib.util
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent   # the conduct tool directory
 
-# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
-# loaded by path through `loader.py`. These two functions are that bootstrap, identical in every file
-# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
 SHARED = HERE.parent / 'shared'
 
 _LOADER = None
@@ -55,61 +52,37 @@ def _loader():
     return _LOADER
 
 
-def _shared(name, filename):
-    """One file out of `tools/shared/`, the same module for every caller in this process.
+def _ledger():
+    """`tools/shared/ledger.py`: `.pf/` 的落点与 init 闸门 —— 正本一处。"""
+    return _loader().load_shared('ledger')
 
-    Loaded for use, not copied: the ledger lock's reentrancy record is one per process, and a second
-    copy of that module would give two of them.
-    """
-    return _loader().load_by_path(name, SHARED / filename, register=True, reuse=True)
-
-#: `.pf/` 这个名字。点开头，和 `.work/` 同款：一眼看得出是工具自己的家当。
-LEDGER_NAME = '.pf'
-#: init 写下的两枚文件。它们在不在，就是这个 `.pf/` 有没有 init 过的判据 —— 一条纯文件系统的
-#: 判据，不问 git（问 git 的话，提交档在 init 之后、第一次 `git add` 之前会被误判成没 init）。
-INIT_MARKERS = ('.gitignore', '.gitattributes')
+#: 这几个名字的正本在 `tools/shared/ledger.py`，本命名空间里照旧可用（`fork.py` / `initledger.py`
+#: 用 `from .store import …` 取它们，包的 `__all__` 也照旧收它们）。取而不是抄：这里不留第二份
+#: 值，也就没有第二处要和正本对齐的拼法。
+_FROM_LEDGER = {'LEDGER_NAME': 'LEDGER_NAME', 'INIT_MARKERS': 'INIT_MARKERS',
+                '_resolve_project_root': 'resolve_project_root'}
 
 
-def _resolve_project_root(cwd: Path) -> Path:
-    """cwd 即根，唯一的例外：cwd 是一条 linked worktree 的检出根时，回主树。
-
-    并行模式把节点的代码活放进 `.pf/worktrees/<短id>`，worker 的 cwd 落在 worktree 里；
-    而 worktree 是完整检出，提交档下里面有一份 fork 时刻的 `.pf/`——记录命令若认它，结转就
-    落在陈旧快照上，两条线互相看不见对方的认领。worktree 根的 `.git` 是一个**文件**
-    （`gitdir: <主树>/.git/worktrees/<名字>`），主树里是目录：顺着指针走，`worktrees` 的
-    上三级就是主树根。submodule 的 `.git` 文件指向 `.git/modules/...`，不是 worktree，
-    留在 cwd 不动。主树没有 `.pf/` 时（不是管线项目）不挪，让后面的错误当场响。
-
-    dag-manage.py 与 issue/storage.py 各有一份同样的函数：三个工具没有共同的包可以放，
-    这是一份摆在三处的约定。
-    """
-    dot_git = cwd / '.git'
-    if not dot_git.is_file():
-        return cwd
-    try:
-        first_line = dot_git.read_text(encoding='utf-8', errors='replace').strip()
-    except OSError:
-        return cwd
-    if not first_line.startswith('gitdir:'):
-        return cwd
-    target = first_line.split(':', 1)[1].strip()
-    gitdir = Path(target)
-    if not gitdir.is_absolute():
-        gitdir = (cwd / gitdir).resolve()
-    if gitdir.parent.name != 'worktrees':
-        return cwd
-    main = gitdir.parent.parent.parent          # <main>/.git/worktrees/<name> → <main>
-    if (main / LEDGER_NAME).is_dir():
-        return main
-    return cwd
-
+def __getattr__(name: str):
+    """本模块里那几个名字：从 `shared/ledger.py` 那份正本取（见 `_FROM_LEDGER`）。"""
+    if name in _FROM_LEDGER:
+        return getattr(_ledger(), _FROM_LEDGER[name])
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
 
 #: 一个根：`.pf/`。`meta/`、`worktrees/`、`nodes/<id>/temp/` 都是它底下被忽略的子目录，
 #: 各自由下面的 `*_dir_for()` 算出来，绝不再从别的根拼一条 `.pf/` 底下的路径出来。
-#: cwd 在导入那一刻定死（worktree 里则回主树，见 `_resolve_project_root`）。带 `--project`
-#: 的命令绕开它，见 `ledger_dir_for()`。
-PROJECT_ROOT = _resolve_project_root(Path.cwd())
-LEDGER_DIR = PROJECT_ROOT / LEDGER_NAME
+#: cwd 在导入那一刻定死（worktree 里则回主树，见 `shared/ledger.py` 的 `resolve_project_root`）。带
+#: `--project` 的命令绕开它，见 `ledger_dir_for()`。
+PROJECT_ROOT = _ledger().resolve_project_root(Path.cwd())
+LEDGER_DIR = _ledger().ledger_dir_for(PROJECT_ROOT)
+
+
+def _explicit_project(project):
+    """调用方点名的那一个项目根：`~` 展开、取绝对 —— `--project` 是人手敲的那串字。
+
+    `None` 不走这里：`ledger_dir_for(None)` 要的是本拷贝导入时绑定的那个根（见下面）。
+    """
+    return Path(project).expanduser().resolve()
 
 
 def ledger_dir_for(project: str | None = None) -> Path:
@@ -123,35 +96,32 @@ def ledger_dir_for(project: str | None = None) -> Path:
     """
     if project is None:
         return LEDGER_DIR
-    return Path(project).expanduser().resolve() / LEDGER_NAME
+    return _ledger().ledger_dir_for(_explicit_project(project))
 
 
 def meta_dir_for(project: str | None = None) -> Path:
     """Where the dispatch plumbing lives (`<project>/.pf/meta/`): launch prompts, the FORK record,
     the broken-chain marker, the ledger lock. The same rule as `ledger_dir_for`, one level down."""
-    return ledger_dir_for(project) / 'meta'
+    return _ledger().meta_dir_of(ledger_dir_for(project))
 
 
 def nodes_dir_for(project: str | None = None) -> Path:
     """Where each node's own directory lives (`<project>/.pf/nodes/`): its spec, its report group
     and the `temp/` it generates. The same rule as `ledger_dir_for`, one level down."""
-    return ledger_dir_for(project) / 'nodes'
+    return _ledger().nodes_dir_of(ledger_dir_for(project))
 
 
 def require_initialized(project: str | None = None) -> None:
     """这个 `.pf/` 必须已经 init 过，否则什么都不许写。
 
     别的命令都不创建 `.pf/`，唯一会顺手创建它的是锁的 `mkdir` —— 那正是要挡的：一个没 init 的
-    `.pf/` 既没被 track 也没被 ignore，下一次 `git add -A` 就把整个目录扫进团队库。判据是 init
-    写下的那两枚文件（见 `INIT_MARKERS`），纯文件系统，不问 git。
+    `.pf/` 既没被 track 也没被 ignore，下一次 `git add -A` 就把整个目录扫进团队库。判据与那句话
+    在 `tools/shared/ledger.py`（纯文件系统，不问 git）；`project` 点过名时那句示例命令行带上它。
     """
     ledger = ledger_dir_for(project)
-    if ledger.is_dir() and all((ledger / m).is_file() for m in INIT_MARKERS):
+    if _ledger().is_initialized(ledger):
         return
-    tail = f' --project "{project}"' if project else ''
-    print(f'Error: {ledger} 没 init 过（缺 '
-          f'{" 或 ".join(INIT_MARKERS)}）。先在这个项目里跑：\n'
-          f'  pf init{tail}', file=sys.stderr)
+    print(f'Error: {_ledger().init_message(ledger, project=project)}', file=sys.stderr)
     sys.exit(1)
 
 
@@ -175,7 +145,7 @@ def _ledger_lock(project: str | None = None, timeout: float | None = None):
     record here. A caller that cannot get it within `timeout` is told loudly and exits 1: wedging
     silently is the one failure this must not have.
     """
-    lock = _shared('pf_shared_ledgerlock', 'ledgerlock.py')
+    lock = _loader().load_shared('ledgerlock')
     kwargs = {} if timeout is None else {'timeout': timeout}
     try:
         with lock.ledger_lock(ledger_dir_for(project), gate=lambda: require_initialized(project),
@@ -193,11 +163,14 @@ VALID_NODE_RESULTS = {'completed', 'failed', 'stopped'}
 CYCLE_VALID_STATUSES = {'active', 'inactive'}
 #: 一条线同时能握几个节点 —— `parallel` 策略的缺省值：不开并行就是 1。
 PARALLEL_DEFAULT = 1
-ISO_FMT = '%Y-%m-%dT%H:%M:%SZ'
+#: state.json / 条子 / 常备指令 / FORK 记录用的那个时刻形状：秒级。正本是 `tools/shared/clock.py`
+#: 的 `ISO_FMT_SECONDS`；`ISO_FMT` 是本文件与读它的用例一直叫的那个名字，指的还是这一个形状。
+ISO_FMT = _loader().load_shared('clock').ISO_FMT_SECONDS
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime(ISO_FMT)
+    """这个记录的时刻：`tools/shared/clock.py` 的秒级形状（微秒那一种是图与池子的）。"""
+    return _loader().load_shared('clock').now_seconds()
 
 
 def _atomic_write(path: Path, data: dict) -> None:
@@ -207,7 +180,7 @@ def _atomic_write(path: Path, data: dict) -> None:
     reader) is `tools/shared/jsonio.py`; this layer is the CLI, so a failure is a message and exit 1.
     """
     try:
-        _shared('pf_shared_jsonio', 'jsonio.py').atomic_write_json(path, data)
+        _loader().load_shared('jsonio').atomic_write_json(path, data)
     except Exception as e:
         print(f'Error: write failed: {e}', file=sys.stderr)
         sys.exit(1)
@@ -221,7 +194,7 @@ def record_bytes(data: dict) -> bytes:
     那份比对：两串一模一样，那枚文件就原样留着，一个字节都不碰。判据只有写方给得出 —— 驱动若自己
     `json.dumps` 一遍，这边哪天改了格式，往后每一次合并都会看起来像有改动。
     """
-    return _shared('pf_shared_jsonio', 'jsonio.py').json_bytes(data)
+    return _loader().load_shared('jsonio').json_bytes(data)
 
 
 def write_record_bytes(path, payload: bytes) -> None:
@@ -232,7 +205,7 @@ def write_record_bytes(path, payload: bytes) -> None:
     `DSH_CONDUCT_STATE_DIR` 指向真工具时，不会拿一棵树的判据去对另一棵树的落盘。谁持锁、写完之后
     怎么收场是调用方的事，这里只有这次落盘。
     """
-    _shared('pf_shared_jsonio', 'jsonio.py').atomic_write_bytes(path, payload)
+    _loader().load_shared('jsonio').atomic_write_bytes(path, payload)
 
 
 def _read_json(path: Path, label: str) -> dict | None:
@@ -243,7 +216,7 @@ def _read_json(path: Path, label: str) -> dict | None:
     `JsonReadError`. **CLI 入口负责退，包内只抛**：这里就是那道门 —— 打印读者自己的那句话并
     exit 1；进程内直接调 `read_json_strict` 的调用方拿到的是异常，由它自己决定怎么办。
     """
-    jsonio = _shared('pf_shared_jsonio', 'jsonio.py')
+    jsonio = _loader().load_shared('jsonio')
     try:
         return jsonio.read_json_strict(path, label)
     except jsonio.JsonReadError as e:
@@ -389,7 +362,7 @@ def _write_signal(cycle_id: str, node_id: str, status: str, summary: str, output
         'outputs': outputs, 'timestamp': _now(),
     }
     try:
-        _shared('pf_shared_jsonio', 'jsonio.py').atomic_write_json(sig_path, sig)
+        _loader().load_shared('jsonio').atomic_write_json(sig_path, sig)
     except Exception as e:
         print(f'Error: write signal failed: {e}', file=sys.stderr)
         sys.exit(1)

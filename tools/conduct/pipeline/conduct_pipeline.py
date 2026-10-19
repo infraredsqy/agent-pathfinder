@@ -159,9 +159,7 @@ def _capture(cmd: list, cwd: Path) -> str:
 #  Loading a neighbouring file, and the implementation package
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
-# loaded by path through `loader.py`. This function is that bootstrap, the same shape in every file
-# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
 SHARED = CONDUCT.parent / 'shared'
 
 _LOADER = None
@@ -184,8 +182,7 @@ def _tool_path(env_var: str, default):
     keeps `DSH_CONDUCT_DAG_MANAGE` and `DSH_CONDUCT_ISSUE_MANAGE` meaning the same thing here as they
     do in the merge driver.
     """
-    toolpath = _loader().load_by_path('pf_shared_toolpath', SHARED / 'toolpath.py',
-                                      register=True, reuse=True)
+    toolpath = _loader().load_shared('toolpath')
     return toolpath.tool_path(env_var, default)
 
 

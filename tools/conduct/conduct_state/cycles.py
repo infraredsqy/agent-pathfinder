@@ -10,8 +10,8 @@ import sys
 from pathlib import Path
 
 from .store import (CYCLE_VALID_STATUSES, PARALLEL_DEFAULT, VALID_NODE_RESULTS,
-                    _find_cycle, _holding_ids, _holding_of, _ledger_lock, _now, _read_signal,
-                    _read_state, _resolve_project_root, _set_holding, _signal_path, _shared,
+                    _find_cycle, _holding_ids, _holding_of, _ledger_lock, _loader, _now,
+                    _read_signal, _read_state, _resolve_project_root, _set_holding, _signal_path,
                     _write_signal, _write_state, ledger_dir_for)
 from .pipeline_loader import _load_pipeline
 
@@ -460,7 +460,7 @@ def cmd_cycle_retry(cycle_id: str, node_id: str, summary: str | None,
         state = _read_state()
         _find_cycle(state, cycle_id)
         sp = _signal_path(cycle_id, node_id)
-        remove = _shared('pf_shared_jsonio', 'jsonio.py').unlink_with_retry
+        remove = _loader().load_shared('jsonio').unlink_with_retry
         if drop:
             if sp.exists():
                 remove(sp)

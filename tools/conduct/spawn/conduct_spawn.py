@@ -53,6 +53,9 @@ _SESSION_IN_LINE = (re.compile(r'^spawned:\s*session\s+(\S+)'),
 
 HERE = Path(__file__).resolve().parent
 
+# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
+SHARED = HERE.parent.parent / 'shared'
+
 _LOADER = None
 
 
@@ -60,8 +63,7 @@ def _loader():
     """`tools/shared/loader.py`: the one loader, for the modules this tree keeps outside `shared/`."""
     global _LOADER
     if _LOADER is None:
-        spec = importlib.util.spec_from_file_location('pf_shared_loader',
-                                                     HERE.parent.parent / 'shared' / 'loader.py')
+        spec = importlib.util.spec_from_file_location('pf_shared_loader', SHARED / 'loader.py')
         _LOADER = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(_LOADER)
     return _LOADER

@@ -43,9 +43,7 @@ import sys
 import types
 from pathlib import Path
 
-# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
-# loaded by path through `loader.py`. These two functions are that bootstrap, identical in every file
-# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
 SHARED = Path(__file__).resolve().parents[2] / 'shared'
 
 _LOADER = None
@@ -61,13 +59,19 @@ def _loader():
     return _LOADER
 
 
-def _shared(name, filename):
-    """One file out of `tools/shared/`, the same module for every caller in this process.
+def _ledger():
+    """`tools/shared/ledger.py`: `.pf/` 的落点与那两枚设置文件的落点 —— 正本一处。"""
+    return _loader().load_shared('ledger')
 
-    Loaded for use, not copied: the ledger lock's reentrancy record is one per process, and a second
-    copy of that module would give two of them.
-    """
-    return _loader().load_by_path(name, SHARED / filename, register=True, reuse=True)
+#: 设置文件的名字：正本在 `tools/shared/ledger.py`，本包只是收下那个值（包的 `__all__` 收它）。
+_FROM_LEDGER = {'CONFIG_NAME': 'CONFIG_NAME'}
+
+
+def __getattr__(name: str):
+    """本模块里那几个取自正本的名字（见 `_FROM_LEDGER`）。"""
+    if name in _FROM_LEDGER:
+        return getattr(_ledger(), _FROM_LEDGER[name])
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
 
 
 # ── the writer package's own two files, borrowed ─────────────────────────────
@@ -145,7 +149,7 @@ def normalize_mode(mode: str | None) -> str:
 
 def ledger_dir(project: Path) -> Path:
     """`<project>/.pf/`: everything this tool writes for one project lives under it."""
-    return Path(project) / '.pf'
+    return _ledger().ledger_dir_for(project)
 
 
 def meta_dir(project: Path) -> Path:
@@ -155,7 +159,7 @@ def meta_dir(project: Path) -> Path:
     -- none of them is part of the record `.pf/` keeps, which is why this is its own door.
     `.pf/.gitignore` keeps `meta/` out of both the project's history and the ledger's own.
     """
-    return ledger_dir(project) / 'meta'
+    return _ledger().meta_dir_for(project)
 
 
 # ── the settings: this project's, and the machine's underneath it ─────────────
@@ -163,22 +167,22 @@ def meta_dir(project: Path) -> Path:
 # 工具的正本，管线只读其中一格（维护通道那个开关）。所以这里只读、只交出两层：出厂默认与词表留在
 # 写那一侧（`conduct_state/config.py`），读的那一格自己说它认什么词。
 
-#: 设置文件的名字，两层同名：`<项目>/.pf/config.json` 与 `~/.pf/config.json`。
-CONFIG_NAME = 'config.json'
+#: 设置文件的名字，两层同名：`<项目>/.pf/config.json` 与 `~/.pf/config.json`。取自正本（见
+#: `_FROM_LEDGER`），本模块不拼第二个字面量。
 
 
 def global_config_path() -> Path:
     """这台机器那一层设置，`~/.pf/config.json` —— `pf config set --global` 写的同一份。
 
-    `PF_HOME_DIR` 把它指到沙箱（与写那一侧同一枚环境变量），否则它是谁的就是谁的。
+    `PF_HOME_DIR` 把它指到沙箱（与写那一侧同一枚环境变量），否则它是谁的就是谁的。家目录当作
+    "一个项目"来算那层落点，拼法也走同一个 `config_path_for`。
     """
     home = os.environ.get('PF_HOME_DIR') or str(Path.home())
-    # 家目录被当作"一个项目"来算那层落点：两层同名同形，拼法也走同一个 `ledger_dir`。
-    return ledger_dir(Path(home).expanduser()) / CONFIG_NAME
+    return _ledger().config_path_for(Path(home).expanduser())
 
 
 def project_config_path(project: Path) -> Path:
-    return ledger_dir(project) / CONFIG_NAME
+    return _ledger().config_path_for(project)
 
 
 def load_config(project: Path) -> dict:
@@ -190,7 +194,7 @@ def load_config(project: Path) -> dict:
     """
     out = {}
     for path in (global_config_path(), project_config_path(project)):
-        layer = _jsonio().read_json_strict(path, CONFIG_NAME)
+        layer = _jsonio().read_json_strict(path, _ledger().CONFIG_NAME)
         if isinstance(layer, dict):
             out.update(layer)
     return out
@@ -211,7 +215,7 @@ _NOTE_NOW = object()
 
 def _jsonio():
     """`tools/shared/jsonio.py`: the tree's one reader and atomic writer for these JSON records."""
-    return _shared('pf_shared_jsonio', 'jsonio.py')
+    return _loader().load_shared('jsonio')
 
 
 def _session_note():
@@ -220,7 +224,7 @@ def _session_note():
     By path, like every other cross-file reference in this tree: nothing puts `tools/` on `sys.path`,
     so there is no name to import it by. The note keeps no state of its own, so callers share one.
     """
-    return _shared('pf_shared_sessionnote', 'session-note.py')
+    return _loader().load_shared('session-note')
 
 
 def session_note(project: Path, node_id: str) -> dict:

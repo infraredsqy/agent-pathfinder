@@ -23,7 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .store import LEDGER_NAME, _atomic_write, _now, _resolve_project_root
+from .store import _atomic_write, _ledger, _now, _resolve_project_root
 
 #: 短 id 的长度：uuid 第一段的 8 个字符。
 SHORT_ID_LEN = 8
@@ -36,7 +36,7 @@ def node_short_id(node_id: str) -> str:
 
 def worktree_path(project: Path, node_id: str) -> Path:
     """一个节点的并行 worktree 检出：`<project>/.pf/worktrees/<短id>`。"""
-    return Path(project) / LEDGER_NAME / 'worktrees' / node_short_id(node_id)
+    return _ledger().ledger_dir_for(project) / 'worktrees' / node_short_id(node_id)
 
 
 def worktree_branch(node_id: str) -> str:
@@ -49,7 +49,7 @@ def worktree_branch(node_id: str) -> str:
 
 def fork_record_path(project: Path, node_id: str) -> Path:
     """fork 的一次性记录：`<project>/.pf/meta/FORK-<短id>.json`。"""
-    return Path(project) / LEDGER_NAME / 'meta' / f'FORK-{node_short_id(node_id)}.json'
+    return _ledger().meta_dir_for(project) / f'FORK-{node_short_id(node_id)}.json'
 
 
 def _git(project: Path, *args) -> subprocess.CompletedProcess:
@@ -72,7 +72,8 @@ def cmd_fork_worktree(node_id: str) -> None:
     """
     project = _resolve_project_root(Path.cwd())
     short = node_short_id(node_id)
-    wt_rel = Path(LEDGER_NAME) / 'worktrees' / short
+    # git 要的是相对主树的那条路径：同一个落点，`worktree_path` 算一次，这里只取它的相对形式。
+    wt_rel = worktree_path(project, node_id).relative_to(project)
     branch = worktree_branch(node_id)
 
     probe = _git(project, 'rev-parse', '--show-toplevel')
@@ -134,8 +135,7 @@ def gate_close_on_fork(project: Path, node_id: str) -> None:
     record = fork_record_path(project, node_id)
     if not record.exists():
         return
-    short = node_short_id(node_id)
-    wt_rel = Path(LEDGER_NAME) / 'worktrees' / short
+    wt_rel = worktree_path(project, node_id).relative_to(project)
     branch = worktree_branch(node_id)
     remaining = []
     if worktree_path(project, node_id).exists():

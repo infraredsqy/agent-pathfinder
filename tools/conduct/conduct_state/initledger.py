@@ -29,8 +29,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .config import CONFIG_NAME
-from .store import LEDGER_NAME, _resolve_project_root
+from .store import LEDGER_NAME, _ledger, _resolve_project_root
 
 #: `.pf/` 底下三样机械空间。提交档下它替项目仓库挡住这三样，自成仓库时替那份仓库挡。
 GITIGNORE_BODY = """\
@@ -184,7 +183,7 @@ def cmd_init(project: str | None = None, mode: str = 'local', own_repo: bool = T
     作用，换档也只是再跑一次 —— `--local` 与 `--commit` 各自把 `info/exclude` 那一行安顿好。
     """
     root = Path(project).expanduser().resolve() if project else _resolve_project_root(Path.cwd())
-    ledger = root / LEDGER_NAME
+    ledger = _ledger().ledger_dir_for(root)
     own_repo = own_repo and mode == 'local'
     ledger.mkdir(parents=True, exist_ok=True)
     (ledger / '.gitignore').write_text(GITIGNORE_BODY, encoding='utf-8')
@@ -192,7 +191,7 @@ def cmd_init(project: str | None = None, mode: str = 'local', own_repo: bool = T
     (ledger / 'AGENTS.md').write_text(LEDGER_AGENTS_BODY, encoding='utf-8')
     # 设置文件：摆一个空对象，位置一眼可见；空对象读作"全按出厂默认"。已经有内容时一个字都不动
     # —— init 是幂等的，而这一份是人／agent 会往里写东西的，重跑一次不能把人写下的覆盖清掉。
-    config_file = ledger / CONFIG_NAME
+    config_file = _ledger().config_path_of(ledger)
     made_config = not config_file.exists()
     if made_config:
         config_file.write_text('{}\n', encoding='utf-8')

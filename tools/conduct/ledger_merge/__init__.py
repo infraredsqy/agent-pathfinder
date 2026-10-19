@@ -152,9 +152,7 @@ from .generic import (EXIT_CONFLICT, EXIT_OK, EXIT_USAGE, KIND_IDEAS, KIND_INSTR
 
 HERE = Path(__file__).resolve().parent.parent   # the conduct tool directory
 
-# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
-# loaded by path through `loader.py`. This function is that bootstrap, the same shape in every file
-# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
 SHARED = HERE.parent / 'shared'
 
 _LOADER = None
@@ -179,21 +177,12 @@ def _load_by_path(name: str, path: Path, **kwargs):
     return _loader().load_by_path(name, path, **kwargs)
 
 
-def _shared(name: str, filename: str):
-    """One file out of `tools/shared/`, the same module for every caller in this process.
-
-    Loaded for use, not copied: the ledger lock's reentrancy record is one per process, and a second
-    copy of that module would give two of them.
-    """
-    return _loader().load_by_path(name, SHARED / filename, register=True, reuse=True)
-
-
 #: The two tools this driver leans on: the sibling directories of the shipped tree, or the variable
 #: each one's name stands for (see this module's docstring). One rule for both, resolved by
 #: `tools/shared/toolpath.py`.
-DAG_MANAGE = _shared('pf_shared_toolpath', 'toolpath.py').tool_path(
+DAG_MANAGE = _loader().load_shared('toolpath').tool_path(
     'DSH_CONDUCT_DAG_MANAGE', HERE.parent / 'dag' / 'dag-manage.py')
-CONDUCT_STATE = _shared('pf_shared_toolpath', 'toolpath.py').tool_path(
+CONDUCT_STATE = _loader().load_shared('toolpath').tool_path(
     'DSH_CONDUCT_STATE_DIR', HERE / 'conduct_state')
 
 _STORE = None
@@ -241,7 +230,7 @@ def _read(path: Path, label: str):
         return None
     if not raw.strip():
         return None
-    jsonio = _shared('pf_shared_jsonio', 'jsonio.py')
+    jsonio = _loader().load_shared('jsonio')
     try:
         return jsonio.read_json_strict(path, label)
     except jsonio.JsonReadError as e:
@@ -264,7 +253,7 @@ def _write(kind: str, path: Path, payload: bytes) -> bool:
     The bytes go down through `_owner_write`, the same owner `_owner_bytes` computed them in, so the
     judgement and the landing are never two trees' answers.
     """
-    lock = _shared('pf_shared_ledgerlock', 'ledgerlock.py')
+    lock = _loader().load_shared('ledgerlock')
     try:
         with lock.ledger_lock(store().ledger_dir_for(), gate=store().require_initialized):
             _owner_write(kind, path, payload)
@@ -330,7 +319,7 @@ def run(args) -> int:
     ours_path, theirs_path, base_path = Path(args.ours), Path(args.theirs), Path(args.base)
     kind = (_kind_of(args.path) or _kind_of(args.ours) or _kind_of(args.theirs)
             or _kind_of(args.base))
-    jsonio = _shared('pf_shared_jsonio', 'jsonio.py')
+    jsonio = _loader().load_shared('jsonio')
     try:
         base = _read(base_path, f'base {base_path.name}')
         ours = _read(ours_path, f'ours {ours_path.name}')

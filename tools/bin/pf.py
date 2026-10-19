@@ -34,8 +34,7 @@ LEDGER_MERGE = CONDUCT / 'ledger-merge.py'
 #: why the doctor has to check it by name.
 SESSION_NOTE = TOOLS / 'shared' / 'session-note.py'
 
-# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
-# loaded by path through `loader.py`.
+# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
 SHARED = TOOLS / 'shared'
 
 _LOADER = None
@@ -51,23 +50,9 @@ def _loader():
     return _LOADER
 
 
-_STORE = None
-
-
-def _store():
-    """`conduct_state/store.py`, loaded by path: the one account of where a project's root is.
-
-    Every tool `pf` fronts resolves the root and the ledger through it -- `state-manage.py` and
-    `dag-manage.py` and the issue tool alike -- so the health check asks the same place instead of
-    carrying a reading of its own (`handoff.py` borrows from here the same way). `.pf/`'s name is
-    its too: a second copy of that word is a second answer to "which directory is the ledger".
-    """
-    global _STORE
-    if _STORE is None:
-        _STORE = _loader().load_by_path('pf_conduct_state_store',
-                                        CONDUCT / 'conduct_state' / 'store.py',
-                                        register=True, reuse=True)
-    return _STORE
+def _ledger():
+    """`tools/shared/ledger.py`: `.pf/` 的落点与 init 闸门 —— `pf` 只读它，不借任何工具的包。"""
+    return _loader().load_shared('ledger')
 
 #: This tree's own version. Release tags are `v<version>`, and every build handed to someone
 #: carries its own number -- one number, one content.
@@ -191,12 +176,12 @@ def _run(*argv: str) -> int:
 def _project_root(start: Path) -> Path:
     """This project's root, read the way every tool `pf` fronts reads it: `start` itself,
     except inside a linked worktree, where it is the main tree the worktree was forked from."""
-    return _store()._resolve_project_root(start)
+    return _ledger().resolve_project_root(start)
 
 
 def _ledger_name() -> str:
-    """`.pf/`, named once, in `store`."""
-    return _store().LEDGER_NAME
+    """`.pf/`, named once, in the ledger contract."""
+    return _ledger().LEDGER_NAME
 
 
 def _git(project: Path, *args: str) -> subprocess.CompletedProcess:
@@ -226,14 +211,14 @@ def cmd_doctor(fix: bool = False) -> int:
         problems += 1
 
     root = _project_root(Path.cwd())
-    ledger = _store().ledger_dir_for(str(root))
+    ledger = _ledger().ledger_dir_for(str(root))
     print(f'项目根：{root}')
     if not ledger.is_dir():
         print(f'  · 这里还没有 {_ledger_name()}/（新项目跑 `pf init`）')
         return 1 if problems else 0
 
     gaps = []
-    markers = _store().INIT_MARKERS
+    markers = _ledger().INIT_MARKERS
     missing = [m for m in markers if not (ledger / m).is_file()]
     if missing:
         gaps.append(f'{_ledger_name()}/ 缺 {" 和 ".join(missing)}')
