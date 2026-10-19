@@ -8,7 +8,7 @@ Two rules that are not obvious:
 
   * a node a cycle is holding RIGHT NOW is skipped. Its temp is where the session running it is
     writing raw output this minute; clearing it would take that evidence away mid-flight.
-  * every live worktree is swept too (`.pf/worktrees/<短id>/.pf/nodes/<id>/temp/`). The prompts
+  * every live worktree is swept too (`.pf/worktrees/<short id>/.pf/nodes/<id>/temp/`). The prompts
     send workers to the MAIN tree for snapshots, but a worker that reads the path wrong creates the
     directory in the worktree instead, and a sweep that only looked at the main tree would leave it
     there to die with the checkout.
@@ -18,25 +18,28 @@ import shutil
 
 from .store import _holding_of, _read_state, ledger_dir_for, nodes_dir_for
 
-#: 正在干活的节点不扫。`--force` 留给"那个节点已经死了、却还握在 cycle 手里"这一种。
-RUNNING_NOTE = '正被 cycle 握着，跳过'
+#: A node that is working right now is not swept. `--force` is for the one case of "that node is dead
+#: and yet the cycle still holds it".
+RUNNING_NOTE = 'held by a cycle right now; skipped'
 
 
 def _held_node_ids(project: str | None) -> set:
-    """盘上所有 cycle 此刻握着的节点 id —— 读的是这个项目自己的 state.json。
+    """Every node id the cycles on disk are holding right now -- read from this project's own state.json.
 
-    「读 state」与「读 holding」是两件事，这里各走各的门：`_read_state` 是那份记录的门（读坏了
-    当场响），`_holding_of` 是认领的规范形。读不懂时若给一个静默的空集，就等于把「没有一个节点
-    被握着」这句话借给 clean-temp —— 它会照着这句话把正在用的 temp 删掉。
+    "Reading state" and "reading holding" are two different things, and each goes through its own door
+    here: `_read_state` is that record's door (a broken read shouts on the spot), `_holding_of` is the
+    canonical shape of a claim. Handing back a silent empty set on an unreadable state would lend
+    clean-temp the sentence "no node is held" -- and it would delete the temp in use on that sentence.
     """
     state = _read_state(project)
     return {item['id'] for cycle in state.get('cycles') or [] for item in _holding_of(cycle)}
 
 
 def _nodes_roots(project: str | None) -> list:
-    """每一处可能长出 temp 的 nodes 根：主树的，加上每一棵还活着的 worktree 里的。
+    """Every nodes root a temp could grow under: the main tree's, plus each live worktree's.
 
-    worktree 是主树的完整检出，所以它自己那棵就是「又是一个项目根」：同一个 `nodes_dir_for`。
+    A worktree is a full checkout of the main tree, so its own root is "one more project root": the
+    same `nodes_dir_for`.
     """
     ledger = ledger_dir_for(project)
     roots = [(nodes_dir_for(project), '')]
@@ -75,7 +78,7 @@ def cmd_clean_temp(project: str | None = None, node: str | None = None,
                 targets.append(row)
 
     if not targets and not running:
-        print('没有 temp 目录可清。')
+        print('There is no temp directory to clear.')
         return
 
     for name, _temp_dir in running:
@@ -83,12 +86,12 @@ def cmd_clean_temp(project: str | None = None, node: str | None = None,
     for name, _temp_dir in targets:
         files = [f for f in _temp_dir.rglob('*') if f.is_file()]
         size = sum(f.stat().st_size for f in files)
-        print(f'{name[:8]}  {len(files):4d} 个文件  {size / 1024:8.1f} KB')
-    print(f'共 {len(targets)} 个 temp 目录可清'
-          + (f'，另有 {len(running)} 个正在干活、跳过。' if running else '。'))
+        print(f'{name[:8]}  {len(files):4d} files  {size / 1024:8.1f} KB')
+    print(f'{len(targets)} temp directories can be cleared'
+          + (f'; another {len(running)} are working right now and skipped.' if running else '.'))
 
     if not confirm:
-        print('加 --yes 删除（逐文件判断不做，整个目录一起走）。')
+        print('Add --yes to delete (no per-file judgement: the whole directory goes).')
         return
 
     removed = 0
@@ -96,4 +99,4 @@ def cmd_clean_temp(project: str | None = None, node: str | None = None,
         shutil.rmtree(temp_dir, ignore_errors=True)
         if not temp_dir.exists():
             removed += 1
-    print(f'已删除 {removed} 个 temp 目录。')
+    print(f'Removed {removed} temp directories.')

@@ -5,10 +5,10 @@ worker already wrote; what that call still decides is whether to carry on, which
 why. The guards next to it are the states a close may NOT be settled over -- no ticket at all,
 somebody else's node, a node that already left the line.
 
-挑选那一头（起点 / 过滤集 / weight）住在 `cases_select.py`；线的持有与两条驱动通路住在
-`cases_contract.py`。
+The picking side (start / filter set / weight) lives in `cases_select.py`; the line's holding and the
+two driven paths live in `cases_contract.py`.
 
-    python -m unittest conduct.tests.cases_close         # 这个文件单独跑
+    python -m unittest conduct.tests.cases_close         # this file on its own
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ class TestWorkerClosesItsOwnNode(Base):
 
     def finished_node(self, sb, cli=False):
         """Pin the node, let its worker report `completed`."""
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         first = sb.next()
         WorkerSession(sb).work(first)
@@ -42,8 +42,8 @@ class TestWorkerClosesItsOwnNode(Base):
 
     def test_it_closes_the_node_and_spawns_the_next_one(self):
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.add_node(NODE2, '另一条支线', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
+        sb.add_node(NODE2, 'another line', mode='auto')
         sb.start_cycle()
         first = sb.next()
         WorkerSession(sb).work(first)
@@ -75,7 +75,7 @@ class TestWorkerClosesItsOwnNode(Base):
         """A `running` signal is never a green light -- the rule every path enforces."""
         sb = self.make()
         first = self.finished_node(sb)
-        sb.write_signal('cyc', NODE, 'pending', '还没跑完')
+        sb.write_signal('cyc', NODE, 'pending', 'not finished yet')
 
         settled, proc = sb.next_cli('--after', first['node_id'])
 
@@ -87,8 +87,8 @@ class TestWorkerClosesItsOwnNode(Base):
     def test_naming_the_wrong_node_changes_nothing(self):
         """The guard runs before every write, so a mistyped node id leaves the run untouched."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.add_node(NODE2, '另一条支线', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
+        sb.add_node(NODE2, 'another line', mode='auto')
         sb.start_cycle()
         sb.set_current_node(NODE)
         sb.write_signal('cyc', NODE, 'completed', 'done')
@@ -105,8 +105,8 @@ class TestWorkerClosesItsOwnNode(Base):
         """A worker that reports `failed` is asking to be looked at, and the DAG's node status is
         where that shows: the node becomes `shelved`, out of play until a human revives it."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.add_node(NODE2, '另一条支线', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
+        sb.add_node(NODE2, 'another line', mode='auto')
         sb.start_cycle()
         first = sb.next()
         WorkerSession(sb, fail_nodes={NODE}).work(first)
@@ -136,7 +136,7 @@ class TestWorkerClosesItsOwnNode(Base):
         """`--after` is aimed by node alone, so an id that is not any cycle's current node has to
         be refused by name -- with a reading of where every cycle actually stands."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
 
         _, proc = sb.next_cli('--after', NODE3, check=False)
@@ -152,7 +152,7 @@ class TestCloseGuards(Base):
         """No ticket means nothing to settle. The tool must not read "no signal" as "delivered":
         closing here would throw away the work the session is still doing."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         sb.next()
         before = sb.tree_hashes()
@@ -167,10 +167,10 @@ class TestCloseGuards(Base):
 
     def test_a_running_signal_is_not_a_green_light(self):
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         sb.next()
-        sb.write_signal('cyc', NODE, 'pending', '重试已备好')
+        sb.write_signal('cyc', NODE, 'pending', 'retry is ready')
         action = sb.next()
 
         self.assertEqual(action['action'], 'wait')
@@ -181,7 +181,7 @@ class TestCloseGuards(Base):
         """Asked twice with the ticket on disk and the close not yet run, the answer is the same
         and nothing is consumed -- the whole point of `wait` being a stable state."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         sb.next()
         sb.write_signal('cyc', NODE, 'completed', 'done')
@@ -208,8 +208,8 @@ class TestCloseGuards(Base):
         self.assertEqual(sb.path_nodes(), ids)
         self.assertEqual(driver.nodes_closed, ids)
         self.assertEqual([sb.dag_status(uid) for uid in ids], ['completed'] * 3)
-        self.assertEqual([uid for uid, _ in driver.dispatched], ids)   # 派发顺序=链序
-        self.assertEqual(sb.cycle()['status'], 'inactive')             # 收尾把线下线
+        self.assertEqual([uid for uid, _ in driver.dispatched], ids)   # dispatch order = chain order
+        self.assertEqual(sb.cycle()['status'], 'inactive')             # the close takes the line off
 
     def test_the_cycle_can_be_driven_by_the_cli_alone(self):
         """The shipped path end to end: `next --after <node> --spawn` closes one node and pins the

@@ -1,26 +1,32 @@
-"""`parallel=2` 的机械闸：写盘互斥锁、worktree 回主树、一个节点一次只许一个会话、
-一次认领只归一条线。
+"""The mechanical gates behind `parallel=2`: the on-disk mutex, the worktree return to the main
+tree, one session per node at a time, and one claim belonging to one line only.
 
-两条 cycle 线并排跑（`并行：worktree` 模式）时，这几件事是并发的：
+With two cycles running side by side (`parallel: worktree` mode), these things race:
 
-  * 四份整文件读-改-写的记录（state / ideas / instructions / issues）被两个进程同时走 ——
-    锁不住就互相整份覆盖。这里用**真进程**对撞：四个 `instruct add` 同时起跑，四条都得在。
-  * worker 的 cwd 落在 `.pf/worktrees/<短id>` 里，那里有一份 fork 时刻的 `.pf/` 检出 ——
-    记录命令认了它就是两条线各记各的。这里用**真 git worktree** 证明：cwd 在 worktree 里，
-    结转与图标记落主树，worktree 里那份检出一个字节不动；收尾时不经 handoff.py 直接跑的
-    signal.py 同样落主树。
-  * 同一节点的派发被双触发（定时抢救撞上在途派发）时，第二个必须被拒 —— 开出两个会话的
-    代价没法回收。这里用 SPAWN.claim 的五个面证明：在途拒收、活 pid 不论多旧都拒、
-    失败放行、死 pid 的条子按时效判——没到 30 分钟照拒，陈旧了才接管。
-  * 两条线在收尾交叠窗口各自 pin 同一节点，会开出双 session 且永远收不了尾——这里证明
-    锁内的跨 cycle 守卫把第二个 pin 响亮拒掉，同一条线的重 pin（重启语义）放行。
+  * Four whole-file read-modify-write records (state / ideas / instructions / issues) walked by two
+    processes at once -- without the lock they overwrite each other whole. Here **real processes**
+    collide: four `instruct add` start together, and all four must land.
+  * A worker's cwd sits in `.pf/worktrees/<short id>`, where a `.pf/` checkout from fork time is --
+    if the record commands trusted it, the two lines would each keep their own books. Here a **real
+    git worktree** proves it: with cwd in the worktree, the close and the graph marks land in the
+    main tree, the checkout in the worktree does not move a byte, and signal.py run directly at
+    close time (bypassing handoff.py) also lands in the main tree.
+  * When one node's dispatch is triggered twice (a timed rescue colliding with an in-flight
+    dispatch), the second must be refused -- the cost of two open sessions cannot be reclaimed.
+    Here the five faces of SPAWN.claim prove it: an in-flight claim refuses, a live pid refuses no
+    matter how old, a failure releases, and a dead pid's note is judged by staleness -- under 30
+    minutes it still refuses, and only once stale is it taken over.
+  * Two lines pinning the same node in the overlapping close window would open two sessions and
+    never close out -- here the cross-cycle guard inside the lock refuses the second pin loudly,
+    while a re-pin of the same id on its own line (restart semantics) passes.
 
-`parallel` 策略那一半（一条线同时握几格、收尾怎么补格）在 `cases_parallel_slots.py`；
-fork-worktree 与它的收尾兜底闸在 `cases_fork.py`（真 git、真 CLI，单独一个文件才压得住
-单文件耗时；跑法与注册见那份文件的文件头）。
+The other half -- the `parallel` policy (how many slots a line holds at once, how a close refills
+them) -- is in `cases_parallel_slots.py`; fork-worktree and its close-time fallback gate are in
+`cases_fork.py` (real git, real CLI; only a file of its own keeps the per-file runtime down; how to
+run it and its registration are in that file's header).
 
-    python conduct/tests/cases_parallel.py         # 这个文件单独跑
-    python conduct/tests/test_conduct_pipeline.py      # 跟全套件一起
+    python conduct/tests/cases_parallel.py         # run this file alone
+    python conduct/tests/test_conduct_pipeline.py      # with the whole suite
 """
 from __future__ import annotations
 
@@ -46,19 +52,22 @@ CONDUCT_DIR = Path(pipeline.__file__).resolve().parent
 
 
 class TestLedgerLock(unittest.TestCase):
-    """四个并发 `instruction add`：锁住读-改-写，四条全落；没有锁时后写者整份覆盖。"""
+    """Four concurrent `instruction add`: the lock serializes read-modify-write, so all four land;
+    without it the last writer overwrites the whole file."""
 
     def test_concurrent_instruction_adds_all_survive(self):
         tmp = tempfile.TemporaryDirectory(prefix='conduct-lock-')
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
-        # init 的两枚文件：锁只肯落在 init 过的 `.pf/` 里，这四发并发写都要拿它。
+        # init's two marker files: the lock only sits in an init-ed `.pf/`, and all four
+        # concurrent writes need it.
         init_markers(root)
         env = _child_env()
-        # 四个进程同时起跑：读-改-写的窗口彼此重叠，锁把它们排成队。
+        # Four processes start together: their read-modify-write windows overlap, and the lock
+        # queues them.
         procs = [subprocess.Popen(
             [PYTHON, '-X', 'utf8', str(STATE_MANAGE), 'instruction', 'add',
-             '--text', f'并发条目 {n}', '--scope', 'global', '--said-by', 'parallel-test'],
+             '--text', f'concurrent entry {n}', '--scope', 'global', '--said-by', 'parallel-test'],
             cwd=str(root), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding='utf-8', errors='replace')
             for n in range(4)]
@@ -68,7 +77,7 @@ class TestLedgerLock(unittest.TestCase):
                              f'add #{n} failed: {err}')
         data = json.loads((root / '.pf' / 'instructions.json').read_text(encoding='utf-8'))
         texts = [i['text'] for i in data['instructions']]
-        self.assertEqual(sorted(texts), sorted(f'并发条目 {n}' for n in range(4)),
+        self.assertEqual(sorted(texts), sorted(f'concurrent entry {n}' for n in range(4)),
                          'a concurrent writer was erased: the lock did not hold')
         ids = [i['id'] for i in data['instructions']]
         self.assertEqual(len(set(ids)), len(ids), 'two entries minted the same id')
@@ -76,7 +85,8 @@ class TestLedgerLock(unittest.TestCase):
 
 @unittest.skipUnless(GIT, 'git is not on PATH')
 class TestWorktreeRedirect(unittest.TestCase):
-    """cwd 在 linked worktree 里时，记录命令回主树；worktree 里的检出不动。"""
+    """With cwd in a linked worktree, the record commands return to the main tree; the worktree's
+    checkout does not move."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(prefix='conduct-wt-')
@@ -84,14 +94,14 @@ class TestWorktreeRedirect(unittest.TestCase):
         self.repo = Path(tmp.name) / 'main'
         self.repo.mkdir(parents=True)
         git(self.repo, 'init', '-b', 'main')
-        # init 的两枚文件。这个仓库是"提交档"：`.pf/` 跟着一起进库，靠 `.pf/.gitignore`
-        # 把 meta/ 与 worktrees/ 挡在外面。
+        # init's two marker files. This repo is the "committed" flavour: `.pf/` goes into the repo
+        # with everything else, and `.pf/.gitignore` keeps meta/ and worktrees/ out.
         pf = init_markers(self.repo)
         (pf / 'state.json').write_text(json.dumps(
             {'cycles': [{'id': 'cyc', 'title': 't', 'status': 'active', 'holding': [],
                          'path': []}]}, indent=2), encoding='utf-8')
         (pf / 'ideas.json').write_text(json.dumps(
-            {'nodes': {NODE: {'title': '节点', 'status': 'todo', 'mode': 'auto',
+            {'nodes': {NODE: {'title': 'node', 'status': 'todo', 'mode': 'auto',
                               'dependencies': []}}}, indent=2), encoding='utf-8')
         git(self.repo, 'add', '-A')
         git(self.repo, 'commit', '-m', 'seed', '--no-gpg-sign')
@@ -122,12 +132,13 @@ class TestWorktreeRedirect(unittest.TestCase):
         self.assertEqual(stale['nodes'][NODE]['status'], 'todo')
 
     def test_the_standalone_signal_script_lands_in_the_main_tree(self):
-        """worker 在 worktree 里直接跑 signal.py（不经 handoff.py）时，条子也必须落主树。
+        """When a worker runs signal.py straight in the worktree (bypassing handoff.py), the note
+        must still land in the main tree.
 
-        handoff.py 自己先解主树再传 base_dir；signal.py 单飞时没人替它解，只能靠它自己对
-        worktree 的认知——这里是那份认知的证明。
+        handoff.py resolves the main tree itself before passing base_dir; nobody resolves it for a
+        solo signal.py, so it must carry that knowledge on its own -- this is the proof of it.
         """
-        proc = run_argv([SIGNAL_PY, 'cyc', NODE, 'completed', '-s', 'worktree 收尾', '-o', '{}'],
+        proc = run_argv([SIGNAL_PY, 'cyc', NODE, 'completed', '-s', 'worktree close', '-o', '{}'],
                         cwd=self.wt, check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
@@ -139,12 +150,14 @@ class TestWorktreeRedirect(unittest.TestCase):
 
 
 class TestSpawnClaim(unittest.TestCase):
-    """SPAWN.claim 的五个面：在途拒收、活 pid 不论多旧都拒、失败放行、死 pid 按时效判——新鲜的拒、陈旧的了断。"""
+    """The five faces of SPAWN.claim: an in-flight claim refuses, a live pid refuses no matter how
+    old, a failure releases, and a dead pid's note is judged by staleness -- fresh refuses, stale
+    takes over."""
 
     def setUp(self):
         self.sb = Sandbox()
         self.addCleanup(self.sb.close)
-        self.sb.add_node(NODE, '界面设计', mode='auto')
+        self.sb.add_node(NODE, 'UI design', mode='auto')
         self.sb.start_cycle()
         self.prompt = (self.sb.root / '.pf' / 'meta' / 'launch' / 'cyc' / NODE / 'prompt.txt')
         self.prompt.parent.mkdir(parents=True, exist_ok=True)
@@ -171,7 +184,8 @@ class TestSpawnClaim(unittest.TestCase):
         self.assertIn('SPAWN.claim', proc.stderr, 'the refusal must name the claim it tripped on')
 
     def test_a_live_pid_refuses_the_dispatch_even_when_the_claim_is_stale(self):
-        """claim 上的 pid 还活着，派发就可能真的还在飞：不论多旧都不许接管。"""
+        """The pid on the claim is still alive, so the dispatch may really still be in flight: no
+        takeover, however old the claim."""
         self.claim.write_text(f'{os.getpid()} started long-ago', encoding='utf-8')
         old = time.time() - 31 * 60
         os.utime(self.claim, (old, old))
@@ -181,7 +195,8 @@ class TestSpawnClaim(unittest.TestCase):
         self.assertTrue(self.claim.exists(), "a live pid's claim must not be taken over")
 
     def test_a_dead_pid_falls_back_to_the_staleness_rule(self):
-        """写 claim 的进程已经死了：接管回归 30 分钟时效——新鲜的拒、陈旧的了断。"""
+        """The process that wrote the claim is dead: takeover falls back to the 30-minute staleness
+        rule -- fresh refuses, stale takes over."""
         finished = subprocess.Popen([PYTHON, '-c', 'pass'])
         finished.wait()
         self.claim.write_text(f'{finished.pid} started long-ago', encoding='utf-8')
@@ -193,7 +208,8 @@ class TestSpawnClaim(unittest.TestCase):
                          'the successful spawn cleans the launch dir, claim included')
 
     def test_a_dead_pid_with_a_fresh_claim_refuses_the_dispatch(self):
-        """死 pid 但条子新鲜：时效没到就还不算陈旧，接管不许提前 —— 派发被拒，条子留在原地。"""
+        """A dead pid but a fresh note: with the staleness window not yet reached it is not stale,
+        and takeover may not run early -- the dispatch is refused and the note stays where it is."""
         finished = subprocess.Popen([PYTHON, '-c', 'pass'])
         finished.wait()
         self.claim.write_text(f'{finished.pid} started just-now', encoding='utf-8')
@@ -210,12 +226,13 @@ class TestSpawnClaim(unittest.TestCase):
 
 
 class TestOneNodeOneCycle(unittest.TestCase):
-    """cycle hold 的跨 cycle 守卫：一个节点一次只归一条线，第二条线 pin 上去要被点名拒掉。"""
+    """cycle hold's cross-cycle guard: a node belongs to one line at a time, and a second line
+    pinning it must be refused by name."""
 
     def setUp(self):
         self.sb = Sandbox(cli=True)
         self.addCleanup(self.sb.close)
-        self.sb.add_node(NODE, '界面设计', mode='auto')
+        self.sb.add_node(NODE, 'UI design', mode='auto')
         self.sb.create_cycle('cyc')
         self.sb.create_cycle('cyc2', force=True)
 
@@ -230,7 +247,8 @@ class TestOneNodeOneCycle(unittest.TestCase):
         self.assertEqual(['cyc'], holders, 'the second pin must not have landed')
 
     def test_repinning_the_same_id_on_its_own_cycle_stays_legal(self):
-        """同一条线对同一 id 的重 pin 是重启语义，守卫不许挡它。"""
+        """Re-pinning the same id on its own line is restart semantics; the guard must not block
+        it."""
         self.sb.set_current_node(NODE, cycle_id='cyc')
         proc = self.sb.set_current_node(NODE, cycle_id='cyc', check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr)

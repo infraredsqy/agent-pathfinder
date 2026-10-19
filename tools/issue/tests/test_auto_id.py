@@ -1,12 +1,15 @@
-"""自动 id 与一次批量入池的 id 分配：批内撞名让位，与池子里既有的那条撞名同样去重。
+"""Automatic ids and the id assignment of one batch pool entry: a duplicate inside the batch yields,
+and a duplicate of an entry already in the pool is de-duplicated the same way.
 
-自动 id 是「模块 + 标题的 slug 前 40 字符」，所以一次扫描里标题前缀相同的几条会算出同一个 id
-—— 它们各自都是真条目。这份用例盯两件事：撞名在批内自己让位（`-2`、`-3`，并在输出里点名），
-以及「池子里已经有这个 id」仍旧走 skip 那一支。两种情形各有各的答案，不共用一条分支。
+An automatic id is "module + the first 40 characters of the title's slug", so in one scan several
+rows with the same title prefix compute one id -- each of them is a real entry. This case watches
+two things: a duplicate yields inside the batch (`-2`, `-3`, and the row is named in the output),
+and "the pool already has this id" still takes the skip branch. The two situations have their own
+answers and share no branch.
 
-跑法（两种都行）：
+How to run (either works):
 
-    python -m unittest discover -s issue/tests -t .      （cwd 在 tools/）
+    python -m unittest discover -s issue/tests -t .      (cwd in tools/)
     python issue/tests/test_auto_id.py
 """
 
@@ -23,13 +26,13 @@ from pathlib import Path
 
 TOOL = Path(__file__).resolve().parent.parent / 'issue_manager.py'
 STORAGE_PY = TOOL.parent / 'storage.py'
-#: 50 个 x：slug 截到 40 字符之后，这一串标题前缀一模一样。
+#: 50 x's: once the slug is cut to 40 characters, every one of these titles shares one prefix.
 X = 'x' * 50
 SLUG = 'x' * 40
 
 
 def load_storage():
-    """`storage.py` 的一份拷贝，按路径加载 —— `_auto_id` 是纯函数，不碰任何项目。"""
+    """A copy of `storage.py` by path -- `_auto_id` is a pure function that touches no project."""
     spec = importlib.util.spec_from_file_location('issue_auto_id_case', STORAGE_PY)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -37,7 +40,7 @@ def load_storage():
 
 
 class TestAutoIdFromATitle(unittest.TestCase):
-    """标题进，id 出。"""
+    """A title in, an id out."""
 
     def setUp(self):
         self.auto_id = load_storage()._auto_id
@@ -47,23 +50,25 @@ class TestAutoIdFromATitle(unittest.TestCase):
         self.assertEqual('demo-untitled', self.auto_id({'module': 'demo', 'title': ''}))
 
     def test_a_title_with_no_ascii_word_characters_becomes_untitled(self):
-        self.assertEqual('demo-untitled', self.auto_id({'module': 'demo', 'title': '修复标题'}))
-        self.assertEqual('unknown-untitled', self.auto_id({'title': '修复标题'}))
+        # A title of pure punctuation carries no ASCII word character, so the slug comes out empty.
+        self.assertEqual('demo-untitled', self.auto_id({'module': 'demo', 'title': '!!!'}))
+        self.assertEqual('unknown-untitled', self.auto_id({'title': '!!!'}))
 
     def test_a_long_title_stops_at_forty_characters(self):
-        """撞名的来处：前 40 字符一样的标题，算出来的 id 是同一个。"""
+        """Where duplicates come from: titles whose first 40 characters are equal compute one id."""
         self.assertEqual(f'demo-{SLUG}', self.auto_id({'module': 'demo', 'title': f'{X} alpha'}))
         self.assertEqual(self.auto_id({'module': 'demo', 'title': f'{X} alpha'}),
                          self.auto_id({'module': 'demo', 'title': f'{X} beta'}))
 
 
 class BatchCase(unittest.TestCase):
-    """一个 temp 假项目：记录目录摆成 init 过的样子，批量入池起真进程。"""
+    """A temp fake project: the ledger looks init-ed, and batch pool entry runs a real process."""
 
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix='issue-auto-id-'))
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
-        # 两枚标记文件就是「这个记录目录 init 过」的凭据：写命令见不到它们会停手。
+        # The two marker files are the proof that "this ledger has been init-ed": a write command
+        # stops without them.
         ledger = self.root / '.pf'
         ledger.mkdir(parents=True, exist_ok=True)
         (ledger / '.gitignore').write_text('meta/\nworktrees/\ntemp/\n', encoding='utf-8')
@@ -106,9 +111,10 @@ class TestOneBatchOfAutoIds(BatchCase):
         self.assertEqual(3, len(self.ids()))
 
     def test_an_explicit_id_in_the_batch_holds_its_name_too(self):
-        """批内显式写下的 id 一样占位：后面自动算出来的那条让位。"""
+        """An id written out explicitly inside the batch holds its name too: a later automatic
+        one yields."""
         code, out, err = self.add_batch([{'id': 'demo-untitled', 'module': 'demo'},
-                                         {'module': 'demo', 'title': '修复标题'}])
+                                         {'module': 'demo', 'title': '!!!'}])
 
         self.assertEqual(code, 0, err or out)
         self.assertEqual(['demo-untitled', 'demo-untitled-2'], self.ids())
@@ -126,7 +132,8 @@ class TestOneBatchOfAutoIds(BatchCase):
         self.assertNotIn('disambiguated', out)
 
     def test_a_skipped_explicit_id_still_holds_its_name_for_the_next_row(self):
-        """row 1 的显式 id 撞上池子里那条 → 那一行 skip；row 2 自动算出的同一个 id 仍然让位。"""
+        """Row 1's explicit id collides with the pool's entry → that row skips; row 2 computes the
+        same id automatically and still yields."""
         code, out, err = self.cli('add', '--id', 'demo-old', '--title', 'old', '--module', 'demo')
         self.assertEqual(code, 0, err or out)
 

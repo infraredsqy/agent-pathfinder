@@ -42,7 +42,8 @@ import sys
 import types
 from pathlib import Path
 
-# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
+# Bootstrap: the loader is fetched by path too, so each file has to carry this bit itself (see
+# `shared/loader.py`).
 SHARED = Path(__file__).resolve().parents[2] / 'shared'
 
 _LOADER = None
@@ -59,47 +60,54 @@ def _loader():
 
 
 def _ledger():
-    """`tools/shared/ledger.py`: `.pf/` 的落点与那两枚设置文件的落点 —— 正本一处。"""
+    """`tools/shared/ledger.py`: where `.pf/` lands and where those two settings files land -- one
+    source."""
     return _loader().load_shared('ledger')
 
-#: 设置文件的名字：正本在 `tools/shared/ledger.py`，本包只是收下那个值（包的 `__all__` 收它）。
+#: The settings file's name: its one source is `tools/shared/ledger.py`, and this package only
+#: receives that value (the package's `__all__` takes it).
 _FROM_LEDGER = {'CONFIG_NAME': 'CONFIG_NAME'}
 
 
 def __getattr__(name: str):
-    """本模块里那几个取自正本的名字（见 `_FROM_LEDGER`）。"""
+    """The few names this module takes from their one source (see `_FROM_LEDGER`)."""
     if name in _FROM_LEDGER:
         return getattr(_ledger(), _FROM_LEDGER[name])
     raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
 
 
 # ── the writer package's own two files, borrowed ─────────────────────────────
-# 一条 cycle 的策略表与算法住 `state/cycles.py`（那边管写，`cycle policy`），holding 的
-# 规范读法住 `state/store.py`（那边管认领的读写）。这一侧只读它们，于是从正本取用，不
-# 各留一份：两份分头漂移就是「一条线配了 `zcode` 却读成没配」「两条线抢同一格」的来路。
+# A cycle's policy table and algorithms live in `state/cycles.py` (that side owns writing,
+# `cycle policy`), and holding's canonical reading lives in `state/store.py` (that side owns the
+# claim's reads and writes). This side only reads them, so it takes them from the one source rather
+# than keeping its own copy: two copies drifting apart is how "a line is configured for `zcode` but
+# read as unconfigured" and "two lines grab the same slot" come about.
 #
-# 两个包都是按路径加载的，互相 import 会绕出一个环，所以取的是**文件**：走本树唯一的装载器
-# （`tools/shared/loader.py`），在 `sys.modules` 里给这两个文件一个本包自己的包名 —— `cycles.py`
-# 开头那句 `from .store import ...` 需要一个能解析的包，而 `state/__init__.py` 不必执行
-# （它把写侧每一层都拉进来，这里只要两个文件）。
+# Both packages are loaded by path, and importing each other would wind a cycle, so what is taken is
+# the **file**: through this tree's one loader (`tools/shared/loader.py`), giving the two files a
+# package name of this package's own in `sys.modules` -- the `from .store import ...` opening
+# `cycles.py` needs a package to resolve against, and `state/__init__.py` need not run (it pulls in
+# every layer of the writing side, and here only two files are wanted).
 #
-# 这条借用的边界：**两个包各自装载同一个文件**（各按自己的名字注册），于是本进程里有两份模块
-# 对象，读出来的表**按值相等**（用例按 `==` 比对钉住 `POLICY_*` 那几张表），跨包的 `is` 不成立
-# —— 谁也不该拿 `is` 去比这两份。要改这张表，改的是 `state/cycles.py` 那个文件本身，
-# 这一侧跟着变；在这里再抄一份，就是两处分头漂。
+# The boundary of this borrowing: **the two packages each load the same file** (registering it under
+# their own name), so this process holds two module objects and the tables read out of them are
+# **equal by value** (cases pin the `POLICY_*` tables with `==`), while a cross-package `is` does
+# not hold -- nobody should compare these two with `is`. To change the table, change the file
+# `state/cycles.py` itself and this side follows; copying it again here is the same drift in two
+# places.
 
 _STATE_DIR = Path(__file__).resolve().parent.parent / 'state'
 _STATE_PKG = 'pf_pipeline_state_source'
 
 
 def _state_module(name: str):
-    """`state/<name>.py`，按路径加载，同一个文件在本进程里只有一份。"""
+    """`state/<name>.py`, loaded by path, one copy of each file per process."""
     if _STATE_PKG not in sys.modules:
         package = types.ModuleType(_STATE_PKG)
         package.__path__ = [str(_STATE_DIR)]
         sys.modules[_STATE_PKG] = package
     loader = _loader()
-    if name != 'store':                 # `cycles.py` 的第一句就是 `from .store import ...`
+    if name != 'store':                 # `cycles.py`'s first line is `from .store import ...`
         loader.load_by_path(f'{_STATE_PKG}.store', _STATE_DIR / 'store.py',
                             register=True, reuse=True)
     return loader.load_by_path(f'{_STATE_PKG}.{name}', _STATE_DIR / f'{name}.py',
@@ -109,7 +117,8 @@ def _state_module(name: str):
 _STATE_CYCLES = _state_module('cycles')
 _STATE_STORE = _state_module('store')
 
-#: 策略表与算法：`state/cycles.py` 的正本，这里只是它的另一个入口。
+#: The policy tables and algorithms: `state/cycles.py`'s one source, of which this is only another
+#: door.
 POLICY_DEFAULTS = _STATE_CYCLES.POLICY_DEFAULTS
 POLICY_VALUES = _STATE_CYCLES.POLICY_VALUES
 POLICY_COUNTS = _STATE_CYCLES.POLICY_COUNTS
@@ -118,28 +127,35 @@ POLICY_WORDS = _STATE_CYCLES.POLICY_WORDS
 POLICY_WORD_CHOICES = _STATE_CYCLES.POLICY_WORD_CHOICES
 cycle_policy = _STATE_CYCLES.cycle_policy
 
-#: 一个节点此刻拿在哪条线手里：认领的规范读法，`state/store.py` 的正本。
+#: Which line a node is held by right now: holding's canonical reading, whose one source is
+#: `state/store.py`.
 _holding_of = _STATE_STORE._holding_of
 _holding_ids = _STATE_STORE._holding_ids
 
 # ── the stored vocabularies, and the derived labels ──────────────────────────
-# 读进来的就是盘上那个词，写出去的也是这一个：词表外的词照字面读，绝不替它猜一个词
-# （与 `dag-manage.py` 同一条约定）。
-#: 节点状态：`todo` 在局中未交付（正在被某条 cycle 跑的节点也还是 todo）、`shelved` 出局等人、
-#: `completed` 已交付。
-#: cycle 状态只有两个：`active` 这条线该往前推、`inactive` 不要推。一条线停下来的原因不值得留
-#: 在状态里（停手那一刻的 reason 才是）。
-#: 节点执行模式：`manual` 是一个讨论格（没有 execute→review→fix 循环）、`checkpoint` 循环照跑但
-#: 收尾停下等人说一句继续、`auto` 收尾自己开下一个节点。三个词就是全部。
-#: 节点没写 mode 时的兜底，与 `dag-manage.py` 的 DEFAULT_MODE 同一个词。
+# What is read in is the word on disk, and that is what is written out too: a word outside the
+# vocabulary is read literally, and the tool never guesses one for it (the same convention as
+# `dag-manage.py`).
+#: Node status: `todo` is in play and not delivered (a node some cycle is running is still todo),
+#: `shelved` is out of play waiting for a human, `completed` is delivered.
+#: A cycle has only two statuses: `active` -- this line should push forward -- and `inactive` -- do
+#: not push. Why a line stopped is not worth keeping in the status (the reason at the moment it
+#: stopped is).
+#: Node execution mode: `manual` is a discussion slot (no execute→review→fix loop), `checkpoint`
+#: runs the loop but the close stops and waits for a human to say continue, `auto` has the close
+#: open the next node itself. Those three words are all of them.
+#: The fallback for a node that does not write a mode, the same word as `dag-manage.py`'s
+#: DEFAULT_MODE.
 DEFAULT_MODE = 'auto'
 
 
 def normalize_mode(mode: str | None) -> str:
-    """盘上那个词，或（没写时）兜底的 `auto` —— 这一条兜底的唯一拼法。
+    """The word on disk, or (when none is written) the `auto` fallback -- the one spelling of that
+    fallback.
 
-    读盘回填（`load_dag`）、取值（`nodes.mode_for`）、停手判据（`planner.stop_criterion`）都走这里：
-    多一个 mode 词时，这一处改完就齐了。
+    Reading the disk back (`load_dag`), taking the value (`nodes.mode_for`) and the stop criterion
+    (`planner.stop_criterion`) all come through here: adding a mode word is finished by changing
+    this one place.
     """
     return mode or DEFAULT_MODE
 
@@ -162,19 +178,24 @@ def meta_dir(project: Path) -> Path:
 
 
 # ── the settings: this project's, and the machine's underneath it ─────────────
-# 一个项目与一台机器的设置（`pf config` 管的那几格）。与记录不同，设置**不属于这条管线**：它是别的
-# 工具的正本，管线只读其中一格（维护通道那个开关）。所以这里只读、只交出两层：出厂默认与词表留在
-# 写那一侧（`state/config.py`），读的那一格自己说它认什么词。
+# A project's and a machine's settings (the cells `pf config` owns). Unlike the record, settings
+# **are not this pipeline's**: they are another tool's one source, and the pipeline reads one cell
+# of them (the maintenance channel's switch). So this only reads, and hands over only two layers:
+# the factory defaults and the vocabulary stay on the writing side (`state/config.py`), and the cell
+# being read says for itself which words it knows.
 
-#: 设置文件的名字，两层同名：`<项目>/.pf/config.json` 与 `~/.pf/config.json`。取自正本（见
-#: `_FROM_LEDGER`），本模块不拼第二个字面量。
+#: The settings file's name, the same for both layers: `<project>/.pf/config.json` and
+#: `~/.pf/config.json`. Taken from the one source (see `_FROM_LEDGER`), so this module spells no
+#: second literal.
 
 
 def global_config_path() -> Path:
-    """这台机器那一层设置，`~/.pf/config.json` —— `pf config set --global` 写的同一份。
+    """This machine's layer of settings, `~/.pf/config.json` -- the same one `pf config set
+    --global` writes.
 
-    落点由正本给出（`shared/ledger.py` 的 `home_config_path`，`PF_HOME_DIR` 那枚沙箱开关也在
-    那里读）：读这一侧与写那一侧于是解的是同一个「家」。
+    Where it lands is given by the one source (`shared/ledger.py`'s `home_config_path`, where the
+    `PF_HOME_DIR` sandbox switch is read too): the reading side and the writing side therefore
+    resolve the same "home".
     """
     return _ledger().home_config_path()
 
@@ -184,11 +205,14 @@ def project_config_path(project: Path) -> Path:
 
 
 def load_config(project: Path) -> dict:
-    """这个项目的设置：机器那一层，上面盖着项目那一层 —— 后写的那层赢。
+    """This project's settings: the machine's layer, with the project's layer covering it -- the layer
+    written later wins.
 
-    两层都可以不在（读作"没改过出厂默认"），也可以带着这个管线不认识的键（别人管它们）。这里
-    只交出写下来的东西：**每一格的词表与出厂默认由读它的那个判断自己说**（维护通道的
-    `maintenance.issue_repair_on`），一份设置里的一格跑到别处去解释，就是同一个词长出两种读法。
+    Either layer may be absent (read as "the factory default was never changed"), and either may
+    carry keys this pipeline does not know (others own them). This hands over only what is written
+    down: **each cell's vocabulary and factory default are stated by the judgement that reads it**
+    (the maintenance channel's `maintenance.issue_repair_on`) -- a cell of one settings file
+    explained somewhere else is how one word grows two readings.
     """
     out = {}
     for path in (global_config_path(), project_config_path(project)):

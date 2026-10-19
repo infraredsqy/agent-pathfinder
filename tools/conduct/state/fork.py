@@ -1,22 +1,28 @@
 """The parallel-mode fork: one worktree per node, and the record that proves it was closed out.
 
-并行模式（SKILL「并行：worktree」）把一个节点的代码活放进主树的
-`.pf/worktrees/<节点短id>` 检出里，分支 `pf/<节点短id>`（git 的 ref 名不许以点开头，分支就取目录名去掉那个点）；
-`.pf/` 自己永远落主树。今天这一套全靠人手敲 git 命令，两个门槛（主树干净、名字没被占）都靠备料那一下自律——
-而收尾那边只有 SKILL 的一句「合回清理做完再 handoff」，没人核对。这个模块把两头都变成
-工具闸：
+Parallel mode (the SKILL's "parallel: worktree") puts a node's code work into the main tree's
+`.pf/worktrees/<node short id>` checkout, on branch `pf/<node short id>` (a git ref name may not start
+with a dot, so the branch drops that dot from the directory name); `.pf/` itself always lands in the
+main tree. Today this is all hand-typed git commands, and both gates (a clean main tree, an unused
+name) rest on the prep step's own self-discipline -- while the closing side has only the SKILL's one
+line, "clean up the merge-back before handoff", and nobody checks it. This module turns both ends into
+tool gates:
 
-    fork-worktree <node_id>   备料末尾：检查主树干净、短 id 没被占，才 `git worktree add`，
-                              并写下 `.pf/meta/FORK-<短id>.json`（node / branch / head / at）
-    next --after <node_id>    收尾开头：盘上有 FORK 记录的节点，必须 worktree 与分支都已删
-                              （合回清理完成）才许结算；闸过了把记录摘掉
+    fork-worktree <node_id>   at the end of prep: check the main tree is clean and the short id is
+                              free, then `git worktree add`, and write
+                              `.pf/meta/FORK-<short id>.json` (node / branch / head / at)
+    next --after <node_id>    at the start of the close: a node with a FORK record on disk may only
+                              be settled once worktree and branch are both deleted (the merge-back is
+                              cleaned up); once the gate passes, the record is taken off
 
-记录为什么放 `.pf/meta/`：它是这一趟作业的过程物、不是要留下的东西，`.pf/.gitignore` 把
-`meta/` 挡在版本库外面，两种档位都一样。缺记录时收尾一个字节都不多动，这是回归底线；有了
-记录，合回没做完就响亮拒绝，两条线才不会在主树上互相踩。
+Why the record lives in `.pf/meta/`: it is this run's process material, not something to keep, and
+`.pf/.gitignore` keeps `meta/` out of the repository in both modes. With no record the close does not
+touch one byte more -- that is the regression floor; with a record, an unfinished merge-back is refused
+loudly, so two lines do not step on each other in the main tree.
 
-短 id 口径：节点全 id 的前 `SHORT_ID_LEN` 个字符（uuid 的第一段）。`cmd_cycle_current` 的节点列、
-merge driver 的冲突行都是这个截法，SKILL 的 `<节点短id>` 也是它。
+Short id rule: the first `SHORT_ID_LEN` characters of the node's full id (the uuid's first segment).
+`cmd_cycle_current`'s node column and the merge driver's conflict line both cut it that way, and the
+SKILL's `<node short id>` is the same.
 """
 
 import subprocess
@@ -25,36 +31,38 @@ from pathlib import Path
 
 from .store import _atomic_write, _ledger, _loader, _now, _resolve_project_root
 
-#: 短 id 的长度：uuid 第一段的 8 个字符。
+#: The short id's length: the 8 characters of the uuid's first segment.
 SHORT_ID_LEN = 8
 
 
 def node_short_id(node_id: str) -> str:
-    """节点全 id 的短形式：并行模式的 worktree 目录与分支名都由它命名。"""
+    """The short form of a node's full id: the parallel mode's worktree directory and branch name are both named from it."""
     return node_id[:SHORT_ID_LEN]
 
 
 def worktree_path(project: Path, node_id: str) -> Path:
-    """一个节点的并行 worktree 检出：`<project>/.pf/worktrees/<短id>`。"""
+    """One node's parallel worktree checkout: `<project>/.pf/worktrees/<short id>`."""
     return _ledger().ledger_dir_for(project) / 'worktrees' / node_short_id(node_id)
 
 
 def worktree_branch(node_id: str) -> str:
-    """一个节点的并行出口分支：`pf/<短id>`（SKILL「并行：worktree」的原话）。
+    """One node's parallel exit branch: `pf/<short id>` (the SKILL's "parallel: worktree" wording).
 
-    分支名取自记录目录：git 的 ref 名不许以点开头，于是目录 `.pf/` 对应的分支前缀就是 `pf/`。
+    The branch name comes from the ledger directory's name: a git ref name may not start with a dot,
+    so the branch prefix for the directory `.pf/` is `pf/`.
     """
     return f'pf/{node_short_id(node_id)}'
 
 
 def fork_record_path(project: Path, node_id: str) -> Path:
-    """fork 的一次性记录：`<project>/.pf/meta/FORK-<短id>.json`。"""
+    """A fork's one-off record: `<project>/.pf/meta/FORK-<short id>.json`."""
     return _ledger().meta_dir_for(project) / f'FORK-{node_short_id(node_id)}.json'
 
 
 def _git(project: Path, *args) -> subprocess.CompletedProcess:
-    """git 的一答，写法在 `tools/shared/gitcmd.py`。cwd 必须是解析后的主树根：并行模式的 fork 可能
-    是从 worktree 的 cwd 发起的，而主树干净与否、分支占没占、worktree 加在哪，问的都是主树。"""
+    """One answer from git; the way to ask is in `tools/shared/gitcmd.py`. cwd must be the resolved main
+    tree root: a parallel-mode fork may be started from a worktree's cwd, while whether the main tree is
+    clean, whether the branch is taken and where the worktree is added are all main-tree questions."""
     return _loader().load_shared('gitcmd').git(project, *args)
 
 
@@ -63,15 +71,17 @@ def _branch_exists(project: Path, branch: str) -> bool:
 
 
 def cmd_fork_worktree(node_id: str) -> None:
-    """备料的最后一拍：给这个节点开 worktree，并写下 fork 记录。
+    """The last beat of prep: fork a worktree for this node and write the fork record.
 
-    四道检查各点各名：git 本身没得用、主树不干净（他线可能正在收尾中段）、
-    检出目录已被占、出口分支已被占。worktree add 本身是原子的（分支重了 git 自己拒），
-    这里前置检查只为把「撞上了什么」说清楚，而不是让调用方去读 git 的 stderr。
+    Four checks, each naming its own failure: git itself unusable, a dirty main tree (another line may
+    be mid-close), the checkout directory already taken, the exit branch already taken. `worktree add`
+    is atomic by itself (a duplicate branch is refused by git), so the checks up front are only there to
+    say clearly WHAT was hit, rather than making the caller read git's stderr.
     """
     project = _resolve_project_root(Path.cwd())
     short = node_short_id(node_id)
-    # git 要的是相对主树的那条路径：同一个落点，`worktree_path` 算一次，这里只取它的相对形式。
+    # git wants that path relative to the main tree: one landing, computed once by `worktree_path`;
+    # here it is only taken in its relative form.
     wt_rel = worktree_path(project, node_id).relative_to(project)
     branch = worktree_branch(node_id)
 
@@ -123,13 +133,16 @@ def cmd_fork_worktree(node_id: str) -> None:
 
 
 def gate_close_on_fork(project: Path, node_id: str) -> None:
-    """收尾兜底：FORK 记录还在，合回就必须已经清完，否则不许结算。
+    """The close's backstop: while a FORK record is still there the merge-back must be finished, or the
+    node may not be settled.
 
-    合回是三步（SKILL「并行：worktree」）：worktree 里并出口分支、主树 squash 合入、然后
-    `git worktree remove` + `git branch -D`。第三步没做，说明这次收尾走的是并行路径但没走完
-    ——再往下 handoff、派发，下一格就开在一个还挂着旧分支的树上。所以：worktree 目录或
-    出口分支任何一个还在，就在写任何东西之前响亮拒绝；两样都清了，才摘掉记录放行。
-    盘上没有记录的节点从这里原样通过（连 git 都不问）：非并行收尾一个字节都不多动。
+    The merge-back is three steps (the SKILL's "parallel: worktree"): merge the exit branch inside the
+    worktree, squash it into the main tree, then `git worktree remove` + `git branch -D`. The third step
+    not done means this close took the parallel path but did not finish it -- carry on to handoff and
+    dispatch, and the next slot opens on a tree still carrying an old branch. So: if the worktree
+    directory or the exit branch is still there, refuse loudly before writing anything; only when both
+    are gone is the record taken off and the close let through. A node with no record on disk passes
+    through here unchanged (git is not even asked): a non-parallel close touches not one byte more.
     """
     record = fork_record_path(project, node_id)
     if not record.exists():
@@ -138,13 +151,14 @@ def gate_close_on_fork(project: Path, node_id: str) -> None:
     branch = worktree_branch(node_id)
     remaining = []
     if worktree_path(project, node_id).exists():
-        remaining.append(f'worktree {worktree_path(project, node_id)} 还在')
+        remaining.append(f'worktree {worktree_path(project, node_id)} is still there')
     if _branch_exists(project, branch):
-        remaining.append(f'分支 {branch} 还在')
+        remaining.append(f'branch {branch} is still there')
     if remaining:
-        print(f'Error: 节点 {node_id} 的合回没做完（{"；".join(remaining)}）。先照 SKILL'
-              f'「并行：worktree」把合回清完（`git worktree remove {wt_rel.as_posix()}` 与 '
-              f'`git branch -D {branch}`），再收尾这个节点；确认这个节点没走过 fork 时，'
-              f'删掉 {record} 再来。收尾什么都没改。', file=sys.stderr)
+        print(f'Error: Node {node_id}: the merge-back is unfinished ({"; ".join(remaining)}). Clean the '
+              f'merge-back up first, as the SKILL says ("parallel: worktree"): `git worktree remove '
+              f'{wt_rel.as_posix()}` and `git branch -D {branch}` -- then close this node; if you know it '
+              f'never went through a fork, delete {record} and come back. The close changed nothing.',
+              file=sys.stderr)
         sys.exit(2)
     record.unlink(missing_ok=True)

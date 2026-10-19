@@ -132,10 +132,12 @@ def _capture(cmd: list, cwd: Path) -> str:
     same loud failure, and it lives here next to `_run` because it is the same seam: a caller
     patching child processes patches this too.
 
-    这两个函数是**子进程仅有的两条路**（同一条缝的两半）：包里的模块一律经 `seam.run` /
-    `seam.capture` 走到这里，谁都不自己 `subprocess`。子进程输出怎么解码也由这里定：一律
-    `errors='replace'` —— 这台机器的控制台代码页是 GBK，而 PYTHONIOENCODING 未必设过，读回来的
-    字节宁可带替换符，也不能让解码异常把整条管线掀翻。
+    These two functions are **the only two ways to a child process** (two halves of one seam):
+    every module in the package reaches them through `seam.run` / `seam.capture`, and none of them
+    calls `subprocess` itself. How a child's output is decoded is settled here too: always
+    `errors='replace'` -- this machine's console code page is GBK and PYTHONIOENCODING is not
+    necessarily set, so the bytes read back may as well carry replacement characters rather than
+    have a decode error take the whole pipeline down.
     """
     try:
         proc = subprocess.run([str(c) for c in cmd], cwd=str(cwd), capture_output=True,
@@ -159,7 +161,8 @@ def _capture(cmd: list, cwd: Path) -> str:
 #  Loading a neighbouring file, and the implementation package
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
+# Bootstrap: the loader is fetched by path too, so every file has to carry this paragraph itself
+# (see `shared/loader.py`).
 SHARED = CONDUCT.parent / 'shared'
 
 _LOADER = None
@@ -246,26 +249,30 @@ globals().update({name: getattr(_impl, name) for name in _impl.__all__})
 # the code cannot drift: the same list answers "what can `next` hand me". This dict is the single
 # source of the names.
 ACTIONS = {
-    'dispatch':      '一个节点已钉住、prompt 已落盘 —— 把它派出去（`dispatch <cycle>` 就是干这个；'
-                     '`next --spawn` 是一次到位的同一次调用）',
-    'open_node':     '工具自己在钉下一个节点 —— 调用方读到的已经是那一格 dispatch',
-    'maintenance_due': '维护度量越线了，工具刚往图里插了一个维护节点并把它钉住 —— 走法与 '
-                       '`dispatch` 一样：prompt 已落盘、可以派发，区别只在于被钉住的是新插入的'
-                       '那个节点（提交并推送之后照样 `dispatch <cycle>`）',
-    'stop_pipeline': '没活了 / 有人叫停 / 这条线不在服务中 —— 收摊，把结局告诉用户',
-    'wait':          '还没到能动手的时候 —— 读 note / close_with，绝不轮询',
-    'ask_user':      '状态有歧义 —— 问人',
-    'no_cycle':      '还没有 cycle —— 开 cycle 要人的意图',
+    'dispatch':      'a node is pinned and the prompt has landed -- send it out (`dispatch <cycle>` '
+                     'is what does this; `next --spawn` is the same call done in one go)',
+    'open_node':     'the tool is pinning the next node itself -- what the caller reads is already '
+                     'that slot\'s dispatch',
+    'maintenance_due': 'a maintenance metric went over the line and the tool has just inserted a '
+                       'maintenance node into the graph and pinned it -- the walk is like '
+                       '`dispatch`: the prompt has landed and it can be dispatched, the only '
+                       'difference being that the pinned node is the newly inserted one (after '
+                       'committing and pushing, `dispatch <cycle>` all the same)',
+    'stop_pipeline': 'nothing left to do / somebody called a halt / this line is not in service -- '
+                     'close out and tell the user how it ended',
+    'wait':          'it is not yet time to act -- read note / close_with, never poll',
+    'ask_user':      'the state is ambiguous -- ask a human',
+    'no_cycle':      'there is no cycle yet -- opening one takes a human\'s intent',
 }
 
 
 def _render_contract() -> str:
-    lines = ['`next` 返回的 action 全集（判别式是 `action` 字段）：']
+    lines = ['the full set of actions `next` returns (the discriminant is the `action` field):']
     for name, what in ACTIONS.items():
         lines.append(f'  {name:<15} {what}')
     lines.append('')
-    lines.append('不变量：返回的 action **不带 `commands`** —— 命令由工具自己跑；'
-                 '调用方只读 `action`，做只有会话能做的事。')
+    lines.append('Invariant: the returned action **carries no `commands`** -- the tool runs the '
+                 'commands itself; the caller only reads `action` and does what only a session can do.')
     return '\n'.join(lines)
 
 
@@ -287,8 +294,9 @@ def main(argv=None) -> int:
     is refused where nothing is settled (`plan` / `record`): the preview spelling of a closing call is
     `plan` with the same answers.
     """
-    # 中文 everywhere：reason、options、contract 全是人话。两个流都按 UTF-8 走，否则控制台代码页
-    # （这台机器默认 GBK）把字节写歪，按 UTF-8 解码的父进程直接炸在读线程上（stdout 变 None）。
+    # Human words everywhere: reason, options and the contract are all prose. Both streams go out
+    # as UTF-8, otherwise the console code page (GBK by default on this machine) writes the bytes
+    # wrong and a parent process decoding as UTF-8 blows up in its read thread (stdout becomes None).
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, 'reconfigure'):
             stream.reconfigure(encoding='utf-8', errors='replace')

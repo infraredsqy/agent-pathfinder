@@ -20,9 +20,11 @@ from cases_base import NODE, NODE2, NODE3, Base, pipeline, skill_of  # noqa: E40
 from harness import (CONDUCT_DIR, Closer, Driver, WorkerSession,  # noqa: E402
                      _dag_hook, stop_after)
 
-#: 实现包自己的目录。`graph_readers` 按栈帧**所在的目录**认「包里的调用者」，不按文件名里的子串：
-#: 入口 `conduct_pipeline.py` 与 `state/pipeline_loader.py` 的路径里都含 `pipeline`，一个子串会把
-#: 它们也当成包内，那条「包外多一个调用者就当场抛」的边界于是静默放宽。
+#: The implementation package's own directory. `graph_readers` recognizes "a caller inside the
+#: package" by the stack frame's **directory**, not by a substring of the file name: the paths of the
+#: entry `conduct_pipeline.py` and of `state/pipeline_loader.py` both contain `pipeline`, and a
+#: substring match would count them as inside too, silently loosening the boundary that "one caller
+#: outside the package raises right there".
 _IMPL_DIR = CONDUCT_DIR / 'pipeline'
 
 
@@ -64,7 +66,7 @@ class TestNodeShape(Base):
         """That is what lets a human add nodes mid-run without steering the step in flight."""
         sb = self.ready_sandbox()
         sb.next()
-        sb.add_node(NODE2, '中途加的节点', mode='auto')
+        sb.add_node(NODE2, 'a node added mid-run', mode='auto')
         sb.write_signal('cyc', NODE, 'completed', 'done')
 
         self.assertEqual(sb.current_node(), NODE)
@@ -128,7 +130,7 @@ class TestSettleAndClose(Base):
     def test_a_ticket_on_disk_is_what_means_the_work_is_done(self):
         """The signal IS the outcome. There is no verdict to ask for and nobody to ask."""
         sb = self.pinned()
-        sb.write_signal('cyc', NODE, 'completed', 'pf-conduct 做完了')
+        sb.write_signal('cyc', NODE, 'completed', 'pf-conduct finished')
         waiting = sb.next()
 
         self.assertEqual(waiting['action'], 'wait')
@@ -161,8 +163,9 @@ class TestSettleAndClose(Base):
         self.assertEqual(sb.path_nodes(), [NODE])
 
     def test_a_stop_on_the_last_node_writes_the_same_status(self):
-        """停手只有一句话可写：`inactive`。「图上还剩没剩活」问的是当时的图，而图会长大，停下来的
-        线该不该接着跑是人说了算的事。"""
+        """Stopping has one word to write: `inactive`. "Is there work left in the graph" asks about
+        the graph at that moment, and a graph grows -- whether a stopped line should run on is a
+        human's call."""
         sb = self.pinned(extra_nodes=0)
         sb.write_signal('cyc', NODE, 'completed', 'done')
         action = sb.close_round(NODE, decision='stop')
@@ -175,15 +178,15 @@ class TestSettleAndClose(Base):
         single source of truth for that (the node becomes `shelved`: out of play, waiting for a human),
         the ticket says why in the worker's own words, and the run stops for a human."""
         sb = self.pinned()
-        sb.write_signal('cyc', NODE, 'failed', '我什么都没做出来')
+        sb.write_signal('cyc', NODE, 'failed', 'I produced nothing')
         action = sb.close_round(NODE)
 
         self.assertEqual(action['action'], 'stop_pipeline')
         self.assertEqual(sb.dag_status(NODE), 'shelved')
         self.assertEqual(sb.path()[0]['result'], 'failed')
         self.assertEqual(sb.cycle()['status'], 'inactive')
-        self.assertEqual(sb.read_signal('cyc', NODE)['summary'], '我什么都没做出来')
-        self.assertIn('没有交付', action.get('reason', ''))
+        self.assertEqual(sb.read_signal('cyc', NODE)['summary'], 'I produced nothing')
+        self.assertIn('did not deliver', action.get('reason', ''))
 
     def test_a_non_delivery_stops_even_if_the_close_said_continue(self):
         """The outcome is read off the ticket, so a `--continue` cannot launder a failure."""
@@ -198,7 +201,7 @@ class TestSettleAndClose(Base):
         """A ticket that is not `completed` is the worker saying it did not deliver: the node is
         parked in the DAG (`shelved`) and the line stops. The step records the word the ticket used."""
         sb = self.pinned()
-        sb.write_signal('cyc', NODE, 'stopped', '用户叫停了')
+        sb.write_signal('cyc', NODE, 'stopped', 'the user stopped it')
         action = sb.close_round(NODE)
 
         self.assertEqual(action['action'], 'stop_pipeline')
@@ -237,29 +240,32 @@ class TestSettleAndClose(Base):
 class TestStopRule(Base):
     """Instructions may only TIGHTEN the stop rule, never loosen it.
 
-    **要不要接着走，只看节点自己的 mode**：`checkpoint` 在收尾那一拍停下交人；`manual` 的人闸
-    在格子的会话里（整格与用户来回推进，条子上的 completed 就是用户那句「标成完成，继续」），
-    收尾后照 `auto` 接着走；同一个判断只有这一处出处。
+    **Whether to carry on depends on the node's own mode alone**: `checkpoint` stops at the closing
+    beat and hands back to a human; `manual`'s gate is in the slot's session (the whole slot moves
+    back and forth with the user, and the note's `completed` is the user's "mark it done, carry on"),
+    so it carries on like `auto` after the close; this one judgement has this one source.
     """
 
     def test_auto_carries_on_to_the_node_behind_it(self):
-        """三档里只有 `auto` 会自己开下一个节点：它是「全程不问、收尾自己接着走」那一档。"""
+        """Of the three tiers only `auto` opens the next node by itself: it is the tier that "asks
+        nothing along the way and carries on by itself at the close"."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.add_node(NODE2, '接着做', mode='auto', deps=[NODE])
+        sb.add_node(NODE, 'UI design', mode='auto')
+        sb.add_node(NODE2, 'carry on', mode='auto', deps=[NODE])
         sb.start_cycle()
         final, driver = self.run_to_stop(sb)
 
         self.assertEqual(final['action'], 'stop_pipeline')
-        self.assertEqual(len(driver.dispatched), 2, '两个节点都被派出去过')
+        self.assertEqual(len(driver.dispatched), 2, 'both nodes were dispatched')
         self.assertEqual(sb.path_nodes(), [NODE, NODE2])
 
     def test_a_manual_node_carries_on_once_the_user_releases_it(self):
-        """`manual` 的人闸在格子的会话里：整格就是与用户来回推进，条子上的 completed 就是
-        用户那句「标成完成，继续」。收尾这一拍不再设第二道闸——线照 `auto` 一样接着走。"""
+        """`manual`'s gate is in the slot's session: the whole slot moves back and forth with the
+        user, and the note's `completed` is the user's "mark it done, carry on". The closing beat
+        sets no second gate -- the line carries on just like `auto`."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='manual', deps=())
-        sb.add_node(NODE2, '下一个', mode='auto', deps=[NODE])
+        sb.add_node(NODE, 'UI design', mode='manual', deps=())
+        sb.add_node(NODE2, 'the next one', mode='auto', deps=[NODE])
         sb.start_cycle()
         final, driver = self.run_to_stop(sb)
 
@@ -268,32 +274,35 @@ class TestStopRule(Base):
         self.assertEqual(len(driver.dispatched), 2)
 
     def test_checkpoint_hands_back_to_the_user_at_the_end_of_its_node(self):
-        """中间那一档：一轮循环跑完、记录收干净，然后停下来等人说一句「继续」。
+        """The middle tier: one round of the cycle runs, the record closes clean, then it stops and
+        waits for a human to say "carry on".
 
-        与 `auto` 的差别只有一处 —— 收尾不自己开下一个节点；节点内部的跑法一模一样。
+        The only difference from `auto` is one place -- the close does not open the next node
+        itself; inside a node the run is exactly the same.
         """
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='checkpoint')
-        sb.add_node(NODE2, '接着做', mode='auto', deps=[NODE])
+        sb.add_node(NODE, 'UI design', mode='checkpoint')
+        sb.add_node(NODE2, 'carry on', mode='auto', deps=[NODE])
         sb.start_cycle()
         final, driver = self.run_to_stop(sb)
 
         self.assertEqual(final['action'], 'stop_pipeline')
-        self.assertEqual(sb.path_nodes(), [NODE], '这个节点交出去了')
+        self.assertEqual(sb.path_nodes(), [NODE], 'this node was handed back')
         self.assertEqual(sb.dag_status(NODE), 'completed')
-        self.assertEqual(len(driver.dispatched), 1, '下一个节点没被开起来')
+        self.assertEqual(len(driver.dispatched), 1, 'the next node was not opened')
         self.assertEqual(sb.dag_status(NODE2), 'todo')
         self.assertIn('checkpoint', final['reason'])
         self.assertEqual(sb.cycle()['status'], 'inactive',
-                         '停手把线转成 inactive；放回服务的那条命令在 reason 里')
+                         'stopping turns the line inactive; the command that puts it back in '
+                         'service is in the reason')
         self.assertIn('cycle status cyc active', final['reason'])
 
     def test_a_continue_cannot_loosen_the_stop_rule(self):
         """The hole the rule exists to close: the closing call says carry on, the node's own mode
         says hand back to the user. The rule wins, and the worker is told why."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='checkpoint')
-        sb.add_node(NODE2, '下一个', mode='auto', deps=[NODE])
+        sb.add_node(NODE, 'UI design', mode='checkpoint')
+        sb.add_node(NODE2, 'the next one', mode='auto', deps=[NODE])
         sb.start_cycle()
         sb.next()
         sb.write_signal('cyc', NODE, 'completed', 'done')
@@ -306,7 +315,7 @@ class TestStopRule(Base):
         sb = self.make()
         ids = sb.add_chain(3)
         sb.start_cycle()
-        sb.instruct('做完两个节点就停', scope='cycle', target='boundary', stop_after_nodes=2)
+        sb.instruct('stop after two nodes', scope='cycle', target='boundary', stop_after_nodes=2)
         final, _ = self.run_to_stop(sb)
 
         self.assertEqual(final['action'], 'stop_pipeline')
@@ -314,11 +323,11 @@ class TestStopRule(Base):
         self.assertEqual(sb.dag_status(ids[2]), 'todo')
 
     def test_the_second_close_is_where_a_cap_of_two_stops(self):
-        """跑够 N 个就停: at the N-th close every one of them has already been delivered."""
+        """Stop after N: at the N-th close every one of them has already been delivered."""
         sb = self.make()
         ids = sb.add_chain(2)
         sb.start_cycle()
-        sb.instruct('跑够一个就停', scope='cycle', target='boundary', stop_after_nodes=1)
+        sb.instruct('stop after one', scope='cycle', target='boundary', stop_after_nodes=1)
         final, driver = self.run_to_stop(sb)
 
         self.assertEqual(sb.path_nodes(), [ids[0]])
@@ -362,7 +371,7 @@ class TestAttention(Base):
         "stopped" with no why has to go and reconstruct it from the state. That lever is the node's
         own mode now, and nothing else."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='checkpoint')
+        sb.add_node(NODE, 'UI design', mode='checkpoint')
         sb.start_cycle()
         final, _ = self.run_to_stop(sb)
 
@@ -373,7 +382,7 @@ class TestAttention(Base):
         """The worker's `failed` ticket is the verdict; what a human is handed is the node it left
         `shelved`, under `kind: node_shelved`."""
         sb = self.ready_sandbox()
-        sb.write_signal('cyc', NODE, 'failed', '完全失败')
+        sb.write_signal('cyc', NODE, 'failed', 'a total failure')
         action = sb.close_round(NODE)
 
         self.assertIn('node_shelved', self.kinds(action))
@@ -386,11 +395,11 @@ class TestAttention(Base):
         """A node left `shelved` in the DAG is still parked several steps later, and the stop
         package is the only place a session would ever hear about it."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.add_node(NODE2, '另一条支线', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
+        sb.add_node(NODE2, 'another line', mode='auto')
         sb.start_cycle()
         sb.next()
-        sb.write_signal('cyc', NODE, 'failed', '没做出来')
+        sb.write_signal('cyc', NODE, 'failed', 'produced nothing')
         first = sb.close_round(NODE)
         self.assertIn('node_shelved', self.kinds(first))
 
@@ -416,7 +425,7 @@ class TestAttention(Base):
         self.assertIn(NODE, planned['close_with'])
         self.assertEqual(sb.path(), [], 'the preview consumed the ticket')
 
-        sb.write_signal('cyc', NODE, 'failed', '完全失败')
+        sb.write_signal('cyc', NODE, 'failed', 'a total failure')
         failed_plan = sb.plan()
         self.assertEqual(failed_plan['action'], 'wait')
 
@@ -427,26 +436,29 @@ class TestAttention(Base):
 
 
 class TestShelvedPolicy(Base):
-    """`when_shelved`: 节点收了尾却没交付（它于是变成 shelved）时，这条线停还是接着走。
+    """`when_shelved`: when a node closes out without delivering (so it becomes shelved), does this
+    line stop or carry on.
 
-    策略是**这条线**的属性（与 `tags` 同一类东西）：写在 cycle 记录里，跟着它走，缺省是 `stop`
-    —— 读不准时停下等人，总比一条线自己跑下去强。
+    The policy is a property of **this line** (the same kind of thing as `tags`): written in the
+    cycle record, travelling with it, defaulting to `stop` -- when a reading is uncertain, stopping
+    for a human beats a line running on by itself.
     """
 
     def pair(self):
         """Two auto nodes in a line, the cycle pinned on the first one."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.add_node(NODE2, '接着做', mode='auto', deps=[NODE])
+        sb.add_node(NODE, 'UI design', mode='auto')
+        sb.add_node(NODE2, 'carry on', mode='auto', deps=[NODE])
         sb.start_cycle()
         return sb
 
     def test_the_default_is_stop(self):
-        """没写 policies 的 cycle 在记录里就是今天这份形状：默认 stop，节点标 shelved，线停下等人。"""
+        """A cycle that never wrote `policies` has today's shape in the record: default `stop`, the
+        node marked `shelved`, the line stopping for a human."""
         sb = self.pair()
         self.assertNotIn('policies', sb.cycle())
 
-        sb.write_signal('cyc', NODE, 'failed', '没做出来')
+        sb.write_signal('cyc', NODE, 'failed', 'produced nothing')
         action = sb.close_round(NODE)
 
         self.assertEqual(action['action'], 'stop_pipeline')
@@ -456,13 +468,14 @@ class TestShelvedPolicy(Base):
         self.assertEqual([i['kind'] for i in action['attention']], ['node_shelved'])
 
     def test_continue_does_not_unblock_the_dependents_of_a_shelved_node(self):
-        """shelved 的节点一个依赖都没满足：它在局外等人，等它的活跑不了 —— `continue` 说的是这
-        条线接着走，没说这个节点算交付了。"""
+        """A `shelved` node satisfies no dependency: it waits out of play and the work waiting on it
+        cannot run -- `continue` says this line carries on, not that this node counts as
+        delivered."""
         sb = self.pair()
         sb.set_policy('cyc', 'when_shelved', 'continue')
         self.assertEqual(sb.cycle()['policies'], {'when_shelved': 'continue'})
 
-        sb.write_signal('cyc', NODE, 'failed', '这个没做出来')
+        sb.write_signal('cyc', NODE, 'failed', 'this one produced nothing')
         action = sb.close_round(NODE)
 
         self.assertEqual(sb.dag_status(NODE), 'shelved', 'the node was parked')
@@ -472,14 +485,15 @@ class TestShelvedPolicy(Base):
         self.assertIn(NODE, [i.get('node_id') for i in action.get('attention', [])])
 
     def test_continue_walks_on_to_a_node_that_is_still_reachable(self):
-        """`continue` 的意思就是「照交付了那样往下走」：图里另有就绪的活时，它真的被挑起来。"""
+        """`continue` means "walk on as if it had delivered": when the graph holds other ready work,
+        it really is picked up."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.add_node(NODE2, '另一条支线', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
+        sb.add_node(NODE2, 'another line', mode='auto')
         sb.start_cycle()
         sb.set_policy('cyc', 'when_shelved', 'continue')
 
-        sb.write_signal('cyc', NODE, 'failed', '这个没做出来')
+        sb.write_signal('cyc', NODE, 'failed', 'this one produced nothing')
         action = sb.close_round(NODE)
 
         self.assertEqual(sb.dag_status(NODE), 'shelved')
@@ -488,14 +502,15 @@ class TestShelvedPolicy(Base):
         self.assertEqual(sb.cycle()['status'], 'active', 'the line is still in service')
 
     def test_the_stop_rule_still_wins_under_continue(self):
-        """策略只回答「非交付要不要接着走」，撬不动节点自己的 mode。"""
+        """The policy only answers "does a non-delivery carry on"; it cannot move the node's own
+        mode."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='checkpoint')
-        sb.add_node(NODE2, '另一条支线', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='checkpoint')
+        sb.add_node(NODE2, 'another line', mode='auto')
         sb.start_cycle()
         sb.set_policy('cyc', 'when_shelved', 'continue')
 
-        sb.write_signal('cyc', NODE, 'failed', '没做出来')
+        sb.write_signal('cyc', NODE, 'failed', 'produced nothing')
         action = sb.close_round(NODE)
 
         self.assertEqual(action['action'], 'stop_pipeline')
@@ -518,7 +533,8 @@ class TestShelvedPolicy(Base):
         self.assertNotIn('policies', sb.cycle(), 'a refused write still wrote something')
 
     def test_a_numeric_policy_lands_as_a_number_and_off_clears_it(self):
-        """数值型策略（维护线那两条）：正数落盘为数字本身，`off` 把这一条去掉。"""
+        """Numeric policies (the maintenance line's two): a positive number lands as the number
+        itself, and `off` drops the entry."""
         sb = self.pair()
         proc = sb.set_policy('cyc', 'test_seconds_limit', '15', cli=True)
 
@@ -533,7 +549,8 @@ class TestShelvedPolicy(Base):
         self.assertNotIn('test_seconds_limit', cleared.stdout)
 
     def test_set_policy_prints_the_effective_set(self):
-        """写一条，报回来的是**生效后**的整份策略（人不用自己去拼默认值）。"""
+        """Write one, and what comes back is the whole **effective** policy set (a human need not
+        assemble the defaults himself)."""
         sb = self.pair()
         proc = sb.set_policy('cyc', 'when_shelved', 'continue', cli=True)
 
@@ -542,8 +559,9 @@ class TestShelvedPolicy(Base):
         self.assertEqual(sb.cycle()['policies'], {'when_shelved': 'continue'})
 
     def test_current_lists_the_lines_that_matter_and_their_policy(self):
-        """`cycle current` 要列的是当下要紧的线：每条 active 的，**以及每条手上有节点的** —— 一条不在
-        服务中的线停在半路，正是人必须看见的那种状态。"""
+        """`cycle current` has to list the lines that matter right now: every active one, **and every
+        one holding a node** -- a line out of service and parked mid-way is exactly the state a human
+        must see."""
         sb = self.pair()
         sb.set_policy('cyc', 'when_shelved', 'continue')
         pinned = sb.current_node()
@@ -563,18 +581,20 @@ class TestShelvedPolicy(Base):
 
 
 class TestShelvedNodes(Base):
-    """出局等人的节点（`shelved`）不进就绪集，也不从人头那份清单里消失。
+    """A node out of play waiting for a human (`shelved`) does not enter the ready set, and does not
+    vanish from the human-facing list either.
 
-    这个状态是收尾自己写的：一个节点没交付（条子 `failed` / `stopped`）就落到它身上，谁都不许
-    开工，等一句 `pf dag revive` 把它放回去。所以两条都要钉住 —— 它不被当成可开工，也不静悄悄
-    地从读者眼前掉出去。
+    This status is written by the close itself: a node that did not deliver (a `failed` / `stopped`
+    note) lands on it, nobody may start it, and it waits for a `pf dag revive` to put it back. So
+    both have to be pinned -- it is not treated as startable, and it does not quietly drop out of the
+    reader's sight.
     """
 
     def shelved_graph(self):
         """One parked node and one in play: both shapes this build really writes."""
         sb = self.make()
-        sb.add_node(NODE, '出局等人', status='shelved', mode='auto')
-        sb.add_node(NODE2, '在局中', status='todo', mode='auto')
+        sb.add_node(NODE, 'shelved, waiting for a human', status='shelved', mode='auto')
+        sb.add_node(NODE2, 'in play', status='todo', mode='auto')
         return sb
 
     def test_the_ready_set_leaves_the_parked_ones_out(self):
@@ -599,28 +619,31 @@ class TestShelvedNodes(Base):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  节点没写 mode：兜底一处，四道门同一个词
+#  a node that did not write mode: one fallback, one word at four gates
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestTheModeWord(Base):
-    """`store.normalize_mode` 是这条兜底的唯一拼法。
+    """`store.normalize_mode` is the one spelling of this fallback.
 
-    读盘回填（`load_dag`）、取值（`nodes.mode_for`）、挑选（`dag_ready_nodes`）、停手判据
-    （`planner.stop_criterion`）四道门报出来的词必须一样：两处各持一份默认值时，加一个 mode 词
-    就会分头漂。
+    The word reported at four gates has to be the same: the disk read's backfill (`load_dag`), the
+    lookup (`nodes.mode_for`), the pick (`dag_ready_nodes`) and the stop rule
+    (`planner.stop_criterion`) -- with a default held in two places, adding one mode word drifts them
+    apart.
     """
 
     def nodes_without_the_key(self):
-        """一个记录里根本没有 `mode` 这个键的节点（手改的、老机器写的）。"""
+        """A node whose record has no `mode` key at all (hand-edited, or written by an old
+        machine)."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计')
+        sb.add_node(NODE, 'UI design')
         dag = sb.dag()
         del dag['nodes'][NODE]['mode']
         sb.write_dag(dag['nodes'])
         return sb
 
     def test_the_fallback_is_spelled_once_in_the_package(self):
-        """源码里 `or DEFAULT_MODE` 只有一处 —— 加一个 mode 词时改的就是它。"""
+        """`or DEFAULT_MODE` appears exactly once in the source -- that is the one to change when
+        adding a mode word."""
         sites = []
         for path in sorted((CONDUCT_DIR / 'pipeline').glob('*.py')):
             tree = ast.parse(path.read_text(encoding='utf-8'))
@@ -629,36 +652,38 @@ class TestTheModeWord(Base):
                       and any(isinstance(value, ast.Name) and value.id == 'DEFAULT_MODE'
                               for value in node.values)]
 
-        self.assertEqual(1, len(sites), f'兜底写了好几处：{sites}')
+        self.assertEqual(1, len(sites), f'the fallback is written in several places: {sites}')
         self.assertTrue(sites[0].startswith('store.py:'), sites)
 
     def test_a_node_that_leaves_the_key_out_reads_as_auto_everywhere(self):
-        """记录里没这个键时，四道门读出来的是同一个词。"""
+        """With no such key in the record, the four gates read out the same word."""
         sb = self.nodes_without_the_key()
         sb.start_cycle()
 
         dag = pipeline.store.load_dag(sb.root)
-        self.assertEqual('auto', dag['nodes'][NODE]['mode'], '读盘时没有回填')
-        self.assertEqual('auto', pipeline.nodes.mode_for(NODE, dag), '取值那道门')
-        self.assertEqual('auto', pipeline.dag_ready_nodes(sb.root)[0]['mode'], '就绪集里那一格')
+        self.assertEqual('auto', dag['nodes'][NODE]['mode'], 'the disk read did not backfill')
+        self.assertEqual('auto', pipeline.nodes.mode_for(NODE, dag), 'the lookup gate')
+        self.assertEqual('auto', pipeline.dag_ready_nodes(sb.root)[0]['mode'],
+                         'the slot in the ready set')
 
         action = sb.next()
         self.assertEqual('dispatch', action['action'], action)
-        self.assertEqual('auto', action['mode'], '派发报出来的那一格')
+        self.assertEqual('auto', action['mode'], 'the slot the dispatch reports')
 
         must_stop, why = pipeline.stop_criterion(sb.root, sb.cycle(), {'id': NODE})
-        self.assertFalse(must_stop, f'停手判据没走到 auto：{why}')
+        self.assertFalse(must_stop, f'the stop rule did not reach auto: {why}')
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  prompt 的落点：一处算法，报出来的那一份就是写下来的那一份
+#  where the prompt lands: one algorithm, and what is reported is what was written
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestThePromptPath(Base):
-    """`.pf/meta/launch/…` 在实现包里只有 `prompts.launch_dir` 一处拼法。"""
+    """`.pf/meta/launch/...` is spelled in exactly one place in the implementation package:
+    `prompts.launch_dir`."""
 
     def test_the_launch_path_is_built_in_one_file(self):
-        """拼 `launch` 这一段的文件只有 `prompts.py`。"""
+        """`prompts.py` is the only file that spells the `launch` segment."""
         sources = {path.name: path.read_text(encoding='utf-8')
                    for path in sorted((CONDUCT_DIR / 'pipeline').glob('*.py'))}
         sites = sorted(name for name, text in sources.items()
@@ -667,9 +692,10 @@ class TestThePromptPath(Base):
         self.assertEqual(['prompts.py'], sites)
 
     def test_the_dispatch_reports_the_path_the_writer_uses(self):
-        """派发报出来的 prompt 路径，与写口算出来的那一处逐字相同。"""
+        """The prompt path the dispatch reports is character-for-character the one the write side
+        computes."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计')
+        sb.add_node(NODE, 'UI design')
         sb.start_cycle()
 
         action = sb.next()
@@ -677,41 +703,50 @@ class TestThePromptPath(Base):
         expected = pipeline.prompts.launch_prompt_path(sb.root, 'cyc', NODE)
         self.assertEqual('dispatch', action['action'], action)
         self.assertEqual(Path(action['prompt']), expected)
-        self.assertTrue(expected.is_file(), '报出来的那一份就是写下来的那一份')
+        self.assertTrue(expected.is_file(), 'what is reported is what was written')
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  收尾这一趟：整份读图一次
+#  the closing pass: one whole read of the graph
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestTheCloseReadsTheGraphOnce(Base):
-    """收尾入口读一次图，判定按参数下传 —— 几条分支走的是同一份。"""
+    """The close entry reads the graph once and hands the judgement down as an argument -- several
+    branches walk the same one."""
 
     def graph_readers(self):
-        """把实现包**每一层自己绑定的** `load_dag` 都换成计数的包装，用例退出时还原。
+        """Replace **every layer's own bound** `load_dag` in the implementation package with a
+        counting wrapper, and put them back when the case exits.
 
-        层是从手上这个入口模块的全局里找的，不写死名单，也不看 `sys.modules`：这个包每被装载一次
-        就换一套模块对象（`fresh=True`），`sys.modules` 里那一份未必是这里跑的那一份。每一层拿的
-        都是自己 import 时绑定的那个函数对象，所以每一趟整份读图恰好记一次。记的是调用者的函数名
-        （不记行号，改一行注释不该判红）。
+        The layers are found in the globals of the entry module in hand, with no hard-coded list and
+        without looking at `sys.modules`: this package gets a fresh set of module objects every time
+        it is loaded (`fresh=True`), and the one in `sys.modules` need not be the one running here.
+        Each layer has the function object it bound when it imported, so one whole graph read is
+        counted exactly once per pass. What is recorded is the caller's function name (no line
+        numbers: editing a comment must not turn it red).
 
-        这个找法有两处**不响**的盲区，撞上哪一处都是静静地少记一笔：
+        This way of finding them has two **silent** blind spots, and hitting either one quietly misses
+        a count:
 
-          * 层内别名绑定：某一层在**自己模块内**把 `load_dag` 绑到另一个名字上（`_read = load_dag`），
-            入口模块的全局里就没有这个名字可换，那一层的读不计。
-          * 新层不进包命名空间：新加的实现层没有挂进入口模块的全局（例如只被别的层 import），
-            它连一次都不会被找到。
+          * an alias bound inside a layer: a layer binds `load_dag` to another name **inside its own
+            module** (`_read = load_dag`), so the entry module's globals have no such name to swap and
+            that layer's read is not counted.
+          * a new layer outside the package namespace: a newly added implementation layer is not
+            attached to the entry module's globals (imported by another layer only, say), and it is
+            never found even once.
 
-        边界是响的：`load_dag` 的调用者今天全在 `pipeline` 包里（计数包装按栈帧**所在的目录**认
-        调用者，`_IMPL_DIR` 就是那个目录），包外多出一个直接调用者时那句 `next(...)` 当场抛
-        `StopIteration`，不会静静地少记一笔 —— 入口与 `state/pipeline_loader.py` 的路径里也含
-        `pipeline` 这个词，按子串认会把它们算进来，正是这条边界要挡的那种静默。
+        The boundary is loud: `load_dag`'s callers are all inside the `pipeline` package today (the
+        counting wrapper recognizes a caller by the stack frame's **directory**, and `_IMPL_DIR` is
+        that directory), so one extra direct caller outside the package makes that `next(...)` raise
+        `StopIteration` right there instead of quietly missing a count -- the entry and
+        `state/pipeline_loader.py` also contain the word `pipeline` in their paths, and a substring
+        match would count them in, exactly the silence this boundary exists to block.
         """
         callers = []
         real = {}
         layers = [value for value in vars(pipeline).values()
                   if isinstance(value, types.ModuleType) and hasattr(value, 'load_dag')]
-        self.assertGreaterEqual(len(layers), 5, f'没找全读图的层：{layers}')
+        self.assertGreaterEqual(len(layers), 5, f'did not find every graph-reading layer: {layers}')
         for layer in layers:
             real[layer] = layer.load_dag
 
@@ -726,9 +761,10 @@ class TestTheCloseReadsTheGraphOnce(Base):
         return callers
 
     def test_a_close_with_nothing_left_reads_the_graph_once(self):
-        """手里最后一格收掉、图里没有活：这一趟只读一次图，读它的就是收尾入口。"""
+        """The last slot in hand is closed and the graph has no work: this pass reads the graph once,
+        and the close entry is what reads it."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计')
+        sb.add_node(NODE, 'UI design')
         sb.start_cycle()
         sb.write_signal('cyc', NODE, 'completed', 'done')
 
@@ -736,14 +772,15 @@ class TestTheCloseReadsTheGraphOnce(Base):
         action = sb.close_round(NODE)
 
         self.assertEqual('stop_pipeline', action['action'], action)
-        self.assertEqual({'_close_own_node'}, set(callers), f'读图的调用者：{callers}')
+        self.assertEqual({'_close_own_node'}, set(callers), f'the graph readers: {callers}')
 
     def test_a_close_that_stops_reads_the_graph_once_however_many_branches_it_walks(self):
-        """停手这一趟走的分支最多（就绪集、blocked 理由、点名节点的 tag、停手判据里指令那一趟的
-        scope 判定、attention 名单），读图的仍然只有收尾入口那一处。"""
+        """The stop pass walks the most branches (the ready set, the blocked reason, the named node's
+        tag, the instruction pass's scope judgement inside the stop rule, the attention list), and the
+        close entry is still the only reader of the graph."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计')
-        sb.add_node(NODE2, '出局等人', status='shelved')
+        sb.add_node(NODE, 'UI design')
+        sb.add_node(NODE2, 'shelved, waiting for a human', status='shelved')
         sb.start_cycle(tags=['coding'])
         sb.write_signal('cyc', NODE, 'completed', 'done')
 
@@ -752,13 +789,14 @@ class TestTheCloseReadsTheGraphOnce(Base):
 
         self.assertEqual('stop_pipeline', action['action'], action)
         self.assertTrue(action['attention'], action)
-        self.assertEqual({'_close_own_node'}, set(callers), f'读图的调用者：{callers}')
+        self.assertEqual({'_close_own_node'}, set(callers), f'the graph readers: {callers}')
 
     def test_a_close_with_another_node_still_in_flight_reads_the_graph_once(self):
-        """多格线手里还有一格在飞：这一格收掉、补不上第二格 → 停在「手里还有谁」那句上，读图一次。"""
+        """A multi-slot line still has one slot in flight: this slot closes and a second cannot be
+        filled -> it stops on the "who else is in hand" sentence, with one graph read."""
         sb = self.make()
-        sb.add_node(NODE, '甲')
-        sb.add_node(NODE2, '乙')
+        sb.add_node(NODE, 'first')
+        sb.add_node(NODE2, 'second')
         sb.start_cycle(parallel=2)
         sb.write_signal('cyc', NODE, 'completed', 'done')
 
@@ -766,14 +804,15 @@ class TestTheCloseReadsTheGraphOnce(Base):
         action = sb.close_round(NODE)
 
         self.assertEqual('stop_pipeline', action['action'], action)
-        self.assertIn(NODE2[:8], action['reason'], 'reason 该点名手里还有谁')
-        self.assertEqual([NODE2], sb.holding_ids(), '在飞的那一格还握着')
-        self.assertEqual({'_close_own_node'}, set(callers), f'读图的调用者：{callers}')
+        self.assertIn(NODE2[:8], action['reason'], 'the reason must name who else is in hand')
+        self.assertEqual([NODE2], sb.holding_ids(), 'the slot in flight is still held')
+        self.assertEqual({'_close_own_node'}, set(callers), f'the graph readers: {callers}')
 
     def test_a_multi_slot_close_that_cannot_fill_reads_the_graph_once(self):
-        """多格线手里就一格、图里没有第二格可补：走 blocked 理由那一支，读图一次。"""
+        """A multi-slot line holds one slot and the graph has no second one to fill: it takes the
+        blocked-reason branch, with one graph read."""
         sb = self.make()
-        sb.add_node(NODE, '甲')
+        sb.add_node(NODE, 'first')
         sb.start_cycle(parallel=2)
         sb.write_signal('cyc', NODE, 'completed', 'done')
 
@@ -781,19 +820,20 @@ class TestTheCloseReadsTheGraphOnce(Base):
         action = sb.close_round(NODE)
 
         self.assertEqual('stop_pipeline', action['action'], action)
-        self.assertEqual('图里没有就绪节点了', action['reason'])
-        self.assertEqual({'_close_own_node'}, set(callers), f'读图的调用者：{callers}')
+        self.assertEqual('the graph has no ready node left', action['reason'])
+        self.assertEqual({'_close_own_node'}, set(callers), f'the graph readers: {callers}')
 
     def test_a_close_that_fills_a_slot_reads_the_graph_once(self):
-        """补格那一趟：收尾读一次，当场补上来的那份 dispatch 自己再读一次。
+        """The fill pass: the close reads once, and the dispatch filled right there reads once more.
 
-        第二次读的是**派发那一格**（`_dispatch_many` 为 node 的标题与 mode 读图），与收尾这一趟
-        无关；收尾自己的判定一律用下传的那一份。
+        The second read is the **dispatch slot**'s (`_dispatch_many` reads the graph for the node's
+        title and mode) and has nothing to do with the closing pass; the close's own judgements always
+        use the one handed down.
         """
         sb = self.make()
-        sb.add_node(NODE, '甲')
-        sb.add_node(NODE2, '乙')
-        sb.add_node(NODE3, '丙')
+        sb.add_node(NODE, 'first')
+        sb.add_node(NODE2, 'second')
+        sb.add_node(NODE3, 'third')
         sb.start_cycle()
         sb.set_policy('cyc', 'parallel', 2)
         sb.set_current_node(NODE2)
@@ -803,15 +843,17 @@ class TestTheCloseReadsTheGraphOnce(Base):
         action = sb.close_round(NODE)
 
         self.assertEqual('dispatch', action['action'], action)
-        self.assertEqual(sorted(sb.holding_ids()), sorted([NODE2, NODE3]), '腾出来的那一格补上了')
+        self.assertEqual(sorted(sb.holding_ids()), sorted([NODE2, NODE3]),
+                         'the slot that was freed has been filled')
         self.assertEqual({'_close_own_node', '_dispatch_many'}, set(callers),
-                         f'读图的调用者：{callers}')
+                         f'the graph readers: {callers}')
 
     def test_the_pick_path_reads_the_graph_once_too(self):
-        """手里没有节点的那条路（开局挑人）也是一个入口读一次：过滤集挡住了就绪节点时，
-        它走 blocked 理由与 attention，读图的仍然只有 `_pick_next` 一处。"""
+        """The path with no node in hand (the opening pick) is also one entry with one read: when the
+        filter set blocks the ready nodes it takes the blocked reason and attention, and `_pick_next`
+        is still the only graph reader."""
         sb = self.make()
-        sb.add_node(NODE, '写文案', tags=['writing'])
+        sb.add_node(NODE, 'Write copy', tags=['writing'])
         sb.create_cycle('cyc', tags=['coding'])
 
         callers = self.graph_readers()
@@ -819,30 +861,33 @@ class TestTheCloseReadsTheGraphOnce(Base):
 
         self.assertEqual('stop_pipeline', action['action'], action)
         self.assertIn('writing', action['reason'])
-        self.assertEqual({'_pick_next'}, set(callers), f'读图的调用者：{callers}')
+        self.assertEqual({'_pick_next'}, set(callers), f'the graph readers: {callers}')
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  就绪集：读取端不替调用方截断
+#  the ready set: the read side does not truncate for its caller
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestTheReadySetIsWhole(Base):
-    """`ranked_ready_nodes` 不问就给整份就绪集：一次拿几格是线自己的事（`parallel`）。
+    """`ranked_ready_nodes` hands over the whole ready set when not asked: how many slots to take at
+    once is the line's own business (`parallel`).
 
-    这两条直接调读取端，不经过沙箱的规划入口，所以自己套一层 `_dag_hook`：排序由 dag-manage
-    自己的 `cmd_list` 回答（同一份实现），省掉的只是一次次进程启动。
+    These two call the read side directly, not through the sandbox's planning entry, so they wrap
+    themselves in a `_dag_hook`: the ranking is answered by dag-manage's own `cmd_list` (the same
+    implementation), and all that is saved is one process launch after another.
     """
 
     def nine_ready(self):
-        """九个互不依赖的就绪节点 —— 比任何「顺手写下的缺省行数」都多。"""
+        """Nine ready nodes that depend on nothing -- more than any "default row count written down
+        in passing"."""
         sb = self.make()
         ids = [f'n{i}-0000-4000-8000-00000000000{i}' for i in range(9)]
         for i, uid in enumerate(ids):
-            sb.add_node(uid, f'节点 {i}')
+            sb.add_node(uid, f'Node {i}')
         return sb, ids
 
     def test_the_reader_hands_over_the_whole_ranking(self):
-        """不问 limit 就是整份；要几行由调用方点名。"""
+        """Not asking for a limit means the whole thing; how many rows is the caller's to name."""
         sb, ids = self.nine_ready()
 
         with _dag_hook(sb.root):
@@ -855,7 +900,8 @@ class TestTheReadySetIsWhole(Base):
         self.assertEqual(3, len(three))
 
     def test_a_named_node_beyond_the_head_is_still_picked(self):
-        """`--node` 点名的节点排在第几个都认：它就绪、名字又对得上，选出来的就是它。"""
+        """A node named by `--node` is recognized wherever it ranks: it is ready and the name matches,
+        so it is the one chosen."""
         sb, ids = self.nine_ready()
         tail = ids[-1]
 
@@ -863,6 +909,6 @@ class TestTheReadySetIsWhole(Base):
             whole = pipeline.ranked_ready_nodes(sb.root)
             chosen = pipeline.pick_node(sb.root, tail)
 
-        self.assertEqual(tail, whole[-1]['id'], '这条用例要的是排名尾巴上的那个节点')
-        self.assertIsNotNone(chosen, '点名的节点在排名尾巴上就读不到了')
+        self.assertEqual(tail, whole[-1]['id'], 'this case needs the node at the tail of the ranking')
+        self.assertIsNotNone(chosen, 'a named node at the tail of the ranking was not found')
         self.assertEqual(tail, chosen['id'])

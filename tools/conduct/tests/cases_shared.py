@@ -166,54 +166,64 @@ class TestOneSharedDoor(unittest.TestCase):
         self.assertEqual([], left)
 
     def test_the_shared_door_is_defined_once(self):
-        """`load_shared`：`shared/` 里某个文件按目录取的那一道门，只许在 `shared/loader.py` 定义。
+        """`load_shared`: the door that takes a file in `shared/` by directory, defined only in
+        `shared/loader.py`.
 
-        与上面那条按名字去重的判据不同，这一条按**条数**判：一份名字 → 文件的映射会把第二个
-        定义悄悄盖掉，而第二个定义正是要拦的东西。
+        Unlike the by-name deduplication above, this one judges by **count**: a name -> file mapping
+        quietly lets the second definition shadow the first, and that second definition is exactly
+        what is being blocked.
         """
         owners = sorted(f'{_relative(path)}:{name}' for path, name in _definitions()
                         if name == 'load_shared')
         self.assertEqual(['shared/loader.py:load_shared'], owners,
-                         '`load_shared` 被定义到了第二处：两道门各带一半的约定')
+                         '`load_shared` is defined in a second place: two doors each holding half '
+                         'the contract')
 
     def test_the_ledger_contract_has_one_home(self):
-        """记录目录的契约只有一份正本：`shared/ledger.py`。
+        """The ledger's contract has one source: `shared/ledger.py`.
 
-        判据落在三处：那两个名字的**赋值**、那两个**拼法**（`.pf` 与设置文件的名字）的字符串常量、
-        以及 worktree 回主树那条判定的定义。别处只许取用（`from .store import LEDGER_NAME`、
-        store 的 `__getattr__`），不许自带一份 —— 一旦自带，改一处就不够了，而这正是这套纪律
-        要拦住的那件事：写下那第二份的人，下一次改动只会改到其中一处。
+        The judgement lands on three things: the **assignment** of those two names, the string
+        constants of those two **spellings** (`.pf` and the settings file's name), and the
+        definition of the worktree-to-main-tree rule. Elsewhere they may only be taken by reference
+        (`from .store import LEDGER_NAME`, store's `__getattr__`), never carried along -- once
+        carried, changing one place is not enough, and that is what this discipline is here to
+        block: whoever writes that second copy will only touch one of them next time.
         """
         assigned = sorted(f'{_relative(path)}:{name}' for path in shipped_sources()
                           for name, _value in _top_level_assignments(path)
                           if name in ('LEDGER_NAME', 'INIT_MARKERS'))
-        with self.subTest(judged='两个名字的赋值'):
+        with self.subTest(judged='the two names assigned'):
             self.assertEqual(['shared/ledger.py:INIT_MARKERS', 'shared/ledger.py:LEDGER_NAME'],
-                             assigned, '这两个名字被赋值到了第二处：那就是第二份要与正本对齐的拼法')
+                             assigned, 'these two names are assigned in a second place: that is a '
+                             'second spelling to keep aligned with the source')
 
-        with self.subTest(judged='两个拼法的字符串常量'):
+        with self.subTest(judged='the two spellings as string constants'):
             self.assertEqual(['shared/ledger.py:.pf', 'shared/ledger.py:config.json'],
                              _literal_owners(('.pf', 'config.json')),
-                             '这两个拼法被当成路径拼到了别处（只看整个字符串常量的值，帮助文本里'
-                             '提及路径的散文落在判据之外）')
+                             'these two spellings are assembled as paths somewhere else (only the '
+                             'whole value of a string constant counts -- prose in a help text that '
+                             'mentions a path falls outside the judgement)')
 
-        with self.subTest(judged='worktree 回主树那条判定'):
+        with self.subTest(judged='the worktree-to-main-tree rule'):
             roots = sorted(_relative(path) for path, name in _definitions()
                            if name == 'resolve_project_root')
             self.assertEqual(['shared/ledger.py'], roots,
-                             '这条判定被写到了第二处：记录目录底下的路径又要多一处对齐')
+                             'this rule is written in a second place: paths under the ledger gain '
+                             'one more place to align')
 
     def test_the_timestamp_shapes_have_one_home(self):
-        """时刻的形状只有一份正本：`shared/clock.py`（微秒与秒级各一个常量、各一个「现在」）。
+        """The moment's shape has one source: `shared/clock.py` (one constant and one "now" each
+        for microseconds and seconds).
 
-        `writer.py` 那两处是既存例外，也是这里唯一允许的第二处：它们写的是 `SPAWN.claim` /
-        `started` 那两枚纯文本记号里的一行日志（`<pid> started <时刻>`），不是任何一条记录的时刻 ——
-        形状一样，读它的人与改它的动机却是另一件事。数量钉住，是为了让「再加一处」也必须先经过
-        这条用例。
+        The two in `writer.py` are a pre-existing exception, and the only second place allowed here:
+        they write one log line inside the `SPAWN.claim` / `started` plain-text markers
+        (`<pid> started <moment>`), not the moment of any record -- the shape is the same, but who
+        reads it and why it would change are another matter. The count is pinned so that "one more
+        place" has to come through this case first.
         """
         self.assertEqual({'shared/clock.py': 2, 'conduct/pipeline/writer.py': 2},
                          _timestamp_spellings(),
-                         '记录的格式字符串长出了第二份正本')
+                         'the record format string has grown a second source')
 
     def test_one_reader_named_read_json_is_left(self):
         """Two `_read_json` with two failure conventions was the drift; the tree keeps the CLI
@@ -222,10 +232,11 @@ class TestOneSharedDoor(unittest.TestCase):
         self.assertEqual(['conduct/state/store.py'], owners)
 
     def test_the_replace_reaches_the_filesystem_from_one_place(self):
-        """`os.replace` 的调用点只有 `shared/jsonio.py` 一处。
+        """`os.replace` has one call site: `shared/jsonio.py`.
 
-        换名落盘是同一个原语：谁来写、写的是 JSON 还是文本，改的都是那一处（`replace_with_retry`）。
-        各文件自带一份的话，`replace_with_retry` 往后的每一次修改都会漏掉别人。
+        The rename into place is one primitive: whoever writes, and whether it is JSON or text,
+        changes that one place (`replace_with_retry`). With a copy per file, every later change to
+        `replace_with_retry` misses the others.
         """
         callers = []
         for path in shipped_sources():
@@ -235,15 +246,17 @@ class TestOneSharedDoor(unittest.TestCase):
                         and isinstance(node.func.value, ast.Name) and node.func.value.id == 'os'):
                     callers.append(f'{_relative(path)}:{node.lineno}')
 
-        self.assertEqual(1, len(callers), f'调用点不止一处：{callers}')
+        self.assertEqual(1, len(callers), f'more than one call site: {callers}')
         self.assertTrue(callers[0].startswith('shared/jsonio.py:'), callers)
 
     def test_git_is_run_from_one_place(self):
-        """`subprocess.run(['git', ...])` 的调用点只有 `shared/gitcmd.py` 一处。
+        """`subprocess.run(['git', ...])` has one call site: `shared/gitcmd.py`.
 
-        三个问 git 的地方（`pf doctor` 问合并驱动、`init` 问这是不是仓库、并行 fork 问分支占没占）
-        问的是同一件事，写法也是同一份：cwd、解码、要不要抛。各写一遍时，解码或超时的一次修改只会
-        落到其中一处；收成一处之后，问 git 的方式只有一个答案。
+        The three places that ask git (`pf doctor` asks about the merge driver, `init` asks whether
+        this is a repo, a parallel fork asks whether a branch is taken) ask the same question in the
+        same spelling: cwd, decoding, whether to raise. Written out three times, one change to the
+        decoding or the timeout lands in only one of them; gathered into one, asking git has a
+        single answer.
         """
         callers = []
         for path in shipped_sources():
@@ -261,11 +274,12 @@ class TestOneSharedDoor(unittest.TestCase):
 
         self.assertEqual(['shared/gitcmd.py'],
                          sorted({caller.split(':')[0] for caller in callers}),
-                         f'问 git 的写法散在不止一处：{callers}')
+                         f'the way git is asked is spread over more than one place: {callers}')
 
     def test_the_spawner_module_is_one_copy_per_process(self):
-        """`writer._spawner()`：一次派发问它三次（开那一次会话、读会话 id、读宿主），三次拿到的是
-        同一个模块对象 —— 装载器的 `register` + `reuse` 一对，和 `spawn/host.py` 走的是同一条。
+        """`writer._spawner()`: one dispatch asks it three times (start that session, read the
+        session id, read the host), and all three get the same module object -- the loader's
+        `register` + `reuse` pair, the same road `spawn/host.py` takes.
         """
         writer = load_pipeline().writer
 
@@ -358,12 +372,16 @@ class TestTheMarkerWaitsOutAReader(Base):
 
 
 class TestTheMarkerContract(Base):
-    """断链降级标记：记录形状与落点的正本在 `spawn/marker.py`。
+    """The broken-chain degradation marker: the record's shape and its landing spot have one source
+    in `spawn/marker.py`.
 
-    标记是人工发现「链断在这里」的唯一入口，所以这一组盯三件事：文件名与记录形状只在正本里拼一次
-    （两个 spawner 都不再自拼落点）、python 侧写它走的是全树那条带重试的原子写、条子那一拍与 spawner
-    那一拍交出的是同一个形状。壳侧那份实现是物理上无法共享的例外（运行点可能没有 python），它的形状
-    由 `cases_spawn_shell.py` 的等价性用例钉住。
+    The marker is the only door through which a human finds out that "the chain broke here", so this
+    group watches three things: the file name and the record shape are assembled once, in the source
+    (neither spawner assembles the landing spot any more); the python side writes it through the
+    tree's retrying atomic write; and the note's beat and the spawner's beat hand over the same
+    shape. The shell-side implementation is the exception that physically cannot be shared (the
+    runtime may have no python), and its shape is pinned by the equivalence case in
+    `cases_spawn_shell.py`.
     """
 
     def test_the_marker_is_spelled_in_exactly_one_file(self):
@@ -371,40 +389,45 @@ class TestTheMarkerContract(Base):
                          for path in set(shipped_sources()) | set(_spawn_sources())
                          if 'CONDUCT-CALLBACK-FAILED' in path.read_text(encoding='utf-8')})
         self.assertEqual(['conduct/spawn/marker.py'], owners,
-                         '标记的文件名被抄到了第二处：改一处漏一处的正是这种抄写')
+                         'the marker file name is copied into a second place: that is how changing '
+                         'one place misses the other')
 
     def test_the_spawners_never_assemble_the_marker_path(self):
-        """`.pf` / `meta` / 文件名模板一个都不该出现在 spawner 侧：落点由 argv 交进来。"""
+        """None of `.pf` / `meta` / the file-name template belongs on the spawner side: argv hands
+        the landing spot in."""
         for path in sorted(SPAWN_DIR.glob('*.ps1')):
             source = path.read_text(encoding='utf-8')
             for gone in ('.pf', 'meta', 'CONDUCT-CALLBACK-FAILED'):
-                self.assertNotIn(gone, source, f'{path.name} 又自拼起标记的落点了')
+                self.assertNotIn(gone, source, f'{path.name} assembles the marker landing spot again')
 
     def test_one_shell_serves_both_spawners_and_the_hosts_stay_explicit(self):
-        """外壳一份（`spawn-common.ps1`），宿主差异留各自的薄壳：参数面还是自己的。"""
+        """One shell (`spawn-common.ps1`); the host differences stay in their own thin shells, whose
+        argument surface is still their own."""
         shell = SPAWN_DIR / 'spawn-common.ps1'
-        self.assertTrue(shell.is_file(), '共用外壳不在')
+        self.assertTrue(shell.is_file(), 'the shared shell is not there')
         sources = {path.name: path.read_text(encoding='utf-8')
                    for path in sorted(SPAWN_DIR.glob('*.ps1'))}
         owners = sorted(name for name, source in sources.items()
                         if 'function Write-CallbackFailureMarker' in source)
-        self.assertEqual(['spawn-common.ps1'], owners, '写标记的实现不止一份')
+        self.assertEqual(['spawn-common.ps1'], owners, 'more than one implementation writes the marker')
 
         dsh, zcode = sources['dsh-spawn.ps1'], sources['zcode-spawn.ps1']
         for name, source in (('dsh-spawn.ps1', dsh), ('zcode-spawn.ps1', zcode)):
-            self.assertIn("'spawn-common.ps1'", source, f'{name} 没有 dot-source 共用外壳')
+            self.assertIn("'spawn-common.ps1'", source, f'{name} does not dot-source the shared shell')
             for shared in ('-CycleId', '-PromptFile', '-WorkspacePath', '-MarkerPath'):
-                self.assertIn(shared, source, f'{name} 少了共用参数 {shared}')
+                self.assertIn(shared, source, f'{name} is missing the shared argument {shared}')
         self.assertIn('-WebUrl', dsh)
         self.assertNotIn('-WebUrl', zcode)
         self.assertIn('-NoVerify', zcode)
         self.assertNotIn('-NoVerify', dsh)
 
     def test_the_marker_path_follows_the_ledger_name(self):
-        """`.pf` 一改名，标记跟着记录走 —— 派发侧不再有一份自己的拼法。
+        """Rename `.pf` and the marker follows the ledger -- the dispatch side has no spelling of
+        its own any more.
 
-        名字的正本在 `shared/ledger.py`，所以改名就改在那里：`marker.py` 算落点、handoff 那一拍
-        写标记，两边都按它算，谁也没有第二份可以各自漂。
+        The name's source is `shared/ledger.py`, so a rename happens there: `marker.py` computes the
+        landing spot and the handoff beat writes the marker, both off that one name, and neither has
+        a second copy free to drift.
         """
         sb = self.make()
         ledger = _shared('pf_shared_ledger', 'ledger.py')
@@ -414,30 +437,36 @@ class TestTheMarkerContract(Base):
         ledger.LEDGER_NAME = '.pf-moved'
 
         with contextlib.redirect_stderr(io.StringIO()):
-            handoff._write_marker(sb.root, 'cyc', 'advance', '搬过家')
+            handoff._write_marker(sb.root, 'cyc', 'advance', 'the ledger moved')
 
         path = marker.marker_path(sb.root, 'cyc')
         self.assertEqual('.pf-moved', path.parent.parent.name)
-        self.assertTrue(path.is_file(), '标记落在了工具不读的位置（自拼 `.pf` 的那条路）')
+        self.assertTrue(path.is_file(),
+                        'the marker landed where the tool does not read (the path that assembles '
+                        '`.pf` itself)')
 
     def test_the_two_writers_leave_one_shape(self):
-        """`handoff` 那一拍写下的标记，与正本的形状、那句人话一字不差。"""
+        """The marker the `handoff` beat writes: the same shape and the same sentence as the source,
+        word for word."""
         sb = self.make()
         marker = _marker_module()
         handoff = _fresh_module('handoff_marker_shape_case', HANDOFF_PY)
 
         with contextlib.redirect_stderr(io.StringIO()):
-            handoff._write_marker(sb.root, 'cyc', 'plan', '条子那一拍断了')
+            handoff._write_marker(sb.root, 'cyc', 'plan', 'the plan beat broke')
 
         written = json.loads(marker.marker_path(sb.root, 'cyc').read_text(encoding='utf-8'))
         self.assertEqual(sorted(marker.record('cyc', 'plan', 'x')), sorted(written))
         self.assertEqual(marker.DEFAULT_NOTE, written['note'])
-        self.assertEqual({}, written['extra'], '没有宿主事实时也给一个空槽，形状不随调用方变')
+        self.assertEqual({}, written['extra'],
+                         'with no host facts it still gets an empty slot: the shape does not follow '
+                         'the caller')
         self.assertEqual('cyc', written['cycle_id'])
         self.assertEqual('plan', written['phase'])
 
     def test_the_write_is_the_retrying_one(self):
-        """写标记走的不是裸 `os.replace`：读者此刻正开着目标文件，重试该把它救回来。"""
+        """Writing the marker does not go through a bare `os.replace`: a reader has the target file
+        open right now, and the retry has to save it."""
         sb = self.make()
         marker = _marker_module()
         path = marker.marker_path(sb.root, 'cyc')
@@ -447,9 +476,9 @@ class TestTheMarkerContract(Base):
         self.addCleanup(held.close)
         threading.Timer(0.2, held.close).start()
 
-        marker.write(path, marker.record('cyc', 'advance', '读者松手了', workspace=sb.root))
+        marker.write(path, marker.record('cyc', 'advance', 'the reader let go', workspace=sb.root))
 
-        self.assertEqual('读者松手了', json.loads(path.read_text(encoding='utf-8'))['reason'])
+        self.assertEqual('the reader let go', json.loads(path.read_text(encoding='utf-8'))['reason'])
 
 
 class TestOneWriterPerRecord(Base):
@@ -476,10 +505,12 @@ class TestOneWriterPerRecord(Base):
                              'the moment is the store format, not a literal spelled here again')
 
     def test_a_named_base_dir_serves_one_write_and_leaves_the_binding_alone(self):
-        """显式落点是这一笔的事：调用方点名的目录收下这一笔，本拷贝的绑定一个字不动。
+        """An explicit landing spot is this write's own business: the directory the caller names
+        takes this write, and this copy's binding does not move a word.
 
-        这份 store 在一个进程里是共用的：写一笔条子顺手把绑定挪到自己的项目，下一个漏传
-        `base_dir` 的调用方就静默写进上一个项目里去。
+        This store is shared within a process: move the binding to your own project on the way past
+        while writing a note, and the next caller that forgets `base_dir` silently writes into the
+        previous project.
         """
         sb = self.make()
         other = self.make()
@@ -491,12 +522,13 @@ class TestOneWriterPerRecord(Base):
                                 base_dir=other.root / '.pf' / 'signals')
 
         self.assertTrue((other.root / '.pf' / 'signals' / 'cyc' / f'{NODE}.json').is_file(),
-                        '显式落点那一笔没落在点名的目录里')
+                        'the explicit-landing-spot write did not land in the directory it named')
         self.assertFalse((sb.root / '.pf' / 'signals' / 'cyc' / f'{NODE}.json').exists(),
-                         '显式落点那一笔写进了绑定指向的项目')
-        self.assertEqual(store.LEDGER_DIR, sb.root / '.pf', '这一笔把本拷贝的绑定挪走了')
+                         'the explicit-landing-spot write went into the project the binding points at')
+        self.assertEqual(store.LEDGER_DIR, sb.root / '.pf', 'this write moved this copy\'s binding')
 
-        # 绑定还在原处：不点名落点的那一笔落在绑定指向的项目里。
+        # The binding is still where it was: the write that names no landing spot lands in the
+        # project the binding points at.
         store._write_signal('cyc', NODE, 'failed', 'A', {})
         landed = json.loads((sb.root / '.pf' / 'signals' / 'cyc' / f'{NODE}.json')
                             .read_text(encoding='utf-8'))
@@ -519,7 +551,7 @@ class TestOneWriterPerRecord(Base):
 
     def test_the_worker_path_still_lands_the_ticket(self):
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
 
         run_signal(sb.root, 'cyc', NODE, 'completed', 'done', {'deliverable': 'x'})

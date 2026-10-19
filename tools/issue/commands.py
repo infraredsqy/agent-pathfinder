@@ -12,7 +12,8 @@ import re
 import sys
 from pathlib import Path
 
-# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
+# Bootstrap: the loader is fetched by path too, so every file has to carry this paragraph itself
+# (see `shared/loader.py`).
 HERE = Path(__file__).resolve().parent
 SHARED = HERE.parent / 'shared'
 
@@ -29,8 +30,9 @@ def _loader():
     return _LOADER
 
 
-#: `storage.py`：这一对里的数据访问层，同样按路径取。名字固定、留在 `sys.modules` 里并复用 ——
-#: `configure()` 在哪个模块对象上钉的项目，就是这一趟命令读写的项目；两份模块对象等于两个项目。
+#: `storage.py`: the data access layer of this pair, fetched by path too. The name is fixed, kept in
+#: `sys.modules` and reused -- the project `configure()` pinned on that module object is the project
+#: this run of commands reads and writes; two module objects would mean two projects.
 _storage = _loader().load_by_path('pf_issue_storage', HERE / 'storage.py',
                                   register=True, reuse=True)
 SEVERITY_WEIGHTS = _storage.SEVERITY_WEIGHTS
@@ -181,7 +183,7 @@ def cmd_add_from_file(args):
     data = _read()
     now = _now()
     records = []
-    named = set()          # 这一批里已经用掉的 id：显式写下的与自动生成的都算
+    named = set()          # ids this batch has already used: written out and auto-generated alike
     for i, item in enumerate(batch):
         row = f'row {i + 1}'
 
@@ -360,13 +362,15 @@ def cmd_remove(args):
         print(f'Issue removed: {args.id}')
 
 
-# ── 池子对「哪些状态算在局里」的两句口径 ──────────────────────────────────────────
-# 两句都在这里，各自一个名字，别在别处再写一遍状态字面量：两句管的不是一件事。
-#: 还没结的条目：`weight` 与 `status` 数它。`resolving` 在里面 —— 已经有人在动它，但没结案，
-#: 这一条仍然算数。
+# ── the pool's two readings of which statuses are in play ─────────────────────
+# Both live here, each with its own name: do not spell the status literals again anywhere else --
+# the two are not about the same thing.
+#: Entries not yet settled: `weight` and `status` count these. `resolving` is in here -- someone is
+#: already working on it, but it is not closed, so it still counts.
 OWED = frozenset({'open', 'acknowledged', 'resolving'})
-#: 还挑得动的：`top`、`by_module`、`stale` 只列这些。`resolving` 不在里面 —— 那一条已经有人在
-#: 做，再挑一次就是两个人做同一件事。它仍算在 `OWED` 里，等它结案或退回 `open`。
+#: Still pickable: `top`, `by_module` and `stale` list only these. `resolving` is not in here --
+#: someone is already on it, and picking it again means two people doing the same thing. It still
+#: counts in `OWED`, until it closes or falls back to `open`.
 PICKABLE = frozenset({'open', 'acknowledged'})
 
 
@@ -421,13 +425,15 @@ def cmd_status(args):
 def cmd_weight(args):
     """The pool's weighted debt, as ONE number (default) or its breakdown (`-v`).
 
-    这是管线自己要的那一格读数：pf-conduct 在节点收尾时拿这个数跟这条线自己的
-    `issue_pool_weight_limit` 比。数由这个工具算出来 —— 池子是它的正本；会话报上来的
-    数没人复核得了。
+    This is the one slot of reading the pipeline itself wants: when pf-conduct closes a node out it
+    compares this number against this line's own `issue_pool_weight_limit`. The tool computes the
+    number -- the pool is its one source; a number a session reports cannot be checked by anyone.
 
-    只算还没结的条目（`OWED`，跟 `status` 一个口径），再排掉
-    `decision == external`：那些的决定权不在 agent 手上（改架构、动模型、改体验），
-    算进来就是一块谁也挪不动的底板，阈值永远回不到线下，维护节点会一轮一轮地插。
+    Only entries not yet settled are counted (`OWED`, the same reading as `status`), and
+    `decision == external` is then ruled out: the call on those is not the agent's to make
+    (re-architecting, moving to another model, changing the experience), and counting them in is a
+    floor nobody can shift, so the threshold never gets back under the line and the maintenance node
+    gets inserted round after round.
     """
     data = _read()
     actionable = [i for i in data['issues'].values()

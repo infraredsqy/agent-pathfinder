@@ -22,25 +22,30 @@ from .actions import (_ask, _close_commands, _dispatch_many, _maintenance_due,
 def stop_criterion(project: Path, cycle: dict, node: dict | None, dag: dict | None = None) -> tuple:
     """(must_stop, why). Invariant: instructions may only TIGHTEN the stop rule.
 
-    **这条线跑不跑下去，只看节点自己的 mode，人闸的位置三档各不同。** `auto` 没有人闸，收尾自己
-    开下一个节点；`manual` 的人闸在格子的会话里——整格就是与用户来回推进，条子上的 completed 就是
-    用户那句「标成完成，继续」，收尾这一拍不再设第二道闸；`checkpoint` 的人闸在收尾这一拍：跑完
-    一轮停下，等人说了继续才开下一个节点。
+    **Whether this line runs on is decided by the node's own mode alone, and the human gate sits in
+    a different place in each of the three tiers.** `auto` has no human gate: the close opens the
+    next node itself; `manual`'s gate is in the slot's session -- the whole slot is a back-and-forth
+    with the user, and `completed` on the note is the user's own "mark it done, carry on", so the
+    closing beat raises no second gate; `checkpoint`'s gate is on the closing beat: one round runs
+    and stops, and the next node opens only once the human has said continue.
 
-    `_close_own_node` 对会话自己的收尾调用也用这一条：`--continue` 撬不动它，`--stop` 只能收得更紧。
-    `dag` 是收尾入口读下的那一份图，交给指令那一趟的 scope 判定用（判据要看节点的状态，图不重读）。
+    `_close_own_node` uses this same rule for the session's own closing call: `--continue` cannot
+    pry it open, and `--stop` can only tighten it. `dag` is the one graph read at the close entry,
+    handed to the instruction pass's scope judgement (the criterion reads the node's status, and the
+    graph is not read again).
     """
     mode = normalize_mode((node or {}).get('mode'))
     if mode == 'checkpoint':
-        return True, '节点 mode=checkpoint：这一轮循环跑完了，等你说了继续才开下一个节点'
+        return True, ('node mode=checkpoint: this round is done, and the next node opens only once '
+                      'you say continue')
     for ins in live_instructions(project, target='boundary', cycle=cycle.get('id'),
                                  node=(node or {}).get('id'), dag=dag):
         cap = ins.get('stop_after_nodes')
         if isinstance(cap, int) and cap >= 0:
-            # "跑够 N 个就停"：这一次收尾就是第 N 个 —— 这时 N 个节点都已经交了。
+            # "stop after N": this close is the Nth -- by now all N nodes have been delivered.
             done = len(cycle.get('path') or []) + 1
             if done >= cap:
-                return True, f'指令「{ins.get("text", "")[:40]}」：跑够 {cap} 个节点就停'
+                return True, f'instruction "{ins.get("text", "")[:40]}": stop after {cap} nodes'
     return False, ''
 
 
@@ -57,15 +62,19 @@ def plan(project, cycle_id: str | None = None, decision: str | None = None,
     is an argument, not something the cycle's hand can answer. A `--continue` cannot loosen the stop
     rule; `--stop` and `--node` tighten or aim it.
 
-    `after` 缺省时（in-process 调用，CLI 之外的入口）取手里唯一那个节点：只握一个的线读不出歧义。
+    With `after` absent (an in-process call, an entry point other than the CLI) the one node in hand
+    is taken: a line holding only one has no ambiguity to read.
 
-    **两条门，各管各的**：
-      * `next --after <node>` 是会话收自己那个节点的门，**不看这条线的状态**：节点自己就说明了它
-        属于哪条线（CLI 那边由 `resolve_cycle_for_node` 定下来），而一条停下来的线如果连自己的
-        节点都收不掉，那个节点就永远钉在那儿了。线上不是 active 时，这条门只做登记 —— 见
-        `_close_own_node`：一个字的状态都不写，挑人、派发一概没有。
-      * 别的 `next` 一概不驱动一条不是 active 的线：不挑人、不派发，只把那条能把它放回服务的
-        命令报出来。收尾那条路是进 inactive 线的唯一一道门。
+    **Two gates, each minding its own business**:
+      * `next --after <node>` is the gate through which a session closes its own node, and it **does
+        not look at the line's status**: the node itself says which line it belongs to (on the CLI
+        side `resolve_cycle_for_node` settles that), and a stopped line that could not close even
+        its own node would leave that node pinned there forever. When the line is not active this
+        gate only records -- see `_close_own_node`: it writes not one word of status, picks no node
+        and dispatches nothing.
+      * No other `next` drives a line that is not active: it picks nothing, dispatches nothing, and
+        only reports the one command that puts the line back in service. The close path is the only
+        gate into an inactive line.
     """
     project = Path(project).resolve()
     state = load_state(project)
@@ -96,8 +105,9 @@ def plan(project, cycle_id: str | None = None, decision: str | None = None,
         closing = after or (holding[0] if len(holding) == 1 else None)
         if closing is None or closing not in holding:
             return {'action': 'wait', 'cycle': cycle['id'], 'commands': [],
-                    'note': f'{closing[:8] if closing else "(未点名)"} 不在 {cycle["id"]} 手里'
-                            f'（它握着 {", ".join(x[:8] for x in holding)}）—— 没有可结算的东西。'}
+                    'note': f'{closing[:8] if closing else "(unnamed)"} is not in the hand of '
+                            f'{cycle["id"]} (it is holding '
+                            f'{", ".join(x[:8] for x in holding)}) -- there is nothing to settle.'}
         sig = load_signal(project, cycle['id'], closing)
         # The worker's own closing call IS the request to close, so a ticket that already says how it
         # went is enough: `completed` and `failed`/`stopped` are both answers, and one of them is not
@@ -105,8 +115,9 @@ def plan(project, cycle_id: str | None = None, decision: str | None = None,
         if sig is None or sig.get('status') == 'pending':
             return {'action': 'wait', 'cycle': cycle['id'], 'commands': [],
                     'node_id': closing,
-                    'note': f'{closing[:8]} 还没有交条子（signals/{cycle["id"]}/{closing[:8]}….json '
-                            f'不在，或还是 pending）—— 没有可结算的东西。'}
+                    'note': f'{closing[:8]} has not handed in a note yet '
+                            f'(signals/{cycle["id"]}/{closing[:8]}….json is absent, or still '
+                            f'pending) -- there is nothing to settle.'}
         return _close_own_node(project, cycle, closing, sig, decision, node, note,
                                line_active=cycle.get('status') == 'active',
                                decision_given=decision_given)
@@ -131,10 +142,11 @@ def plan(project, cycle_id: str | None = None, decision: str | None = None,
 
 
 def _no_line(state: dict) -> dict:
-    """没有可以驱动的线时那句话：一条都没有，还是有线但都不在服务中。
+    """The sentence for when there is no line to drive: none at all, or lines but none in service.
 
-    两种情况读起来必须不一样。说「没有 cycle」而盘上明明躺着一条停住的线（可能还钉着一个没收尾
-    的节点），读的人会去开一条新的，而真正该做的是把那一条放回服务。
+    The two cases must read differently. Saying "no cycle" while a stopped line is plainly sitting on
+    disk (perhaps with an unfinished node still pinned) sends the reader off to start a new one, when
+    what should happen is putting that one back in service.
     """
     cycles = state.get('cycles', [])
     in_service = [c['id'] for c in active_cycles(state)]
@@ -175,7 +187,7 @@ def _pick_next(project: Path, cycle: dict, tags) -> dict:
     if tagged or holding:
         return _stop_action(project, cycle, blocked_reason(project, tags, tagged, holding),
                             _park_commands(cycle), dag=dag)
-    return _stop_action(project, cycle, 'DAG 里已经没有 ready 节点', _park_commands(cycle),
+    return _stop_action(project, cycle, 'the DAG has no ready node left', _park_commands(cycle),
                         dag=dag)
 
 
@@ -187,15 +199,16 @@ def _open(project: Path, cycle: dict, nodes: list) -> dict:
     return {'action': 'open_node', 'cycle': cycle['id'],
             'node_id': head['id'], 'node_title': head.get('title', ''),
             'nodes': [n['id'] for n in nodes],
-            'note': f'cycle {cycle["id"]} 握在 {titles}',
+            'note': f'cycle {cycle["id"]} holds {titles}',
             'commands': [seam.cmd('cycle', 'hold', cycle['id'], n['id']) for n in nodes]}
 
 
 def _park_commands(cycle: dict) -> list:
-    """停手就是一句话：把这条线转成 `inactive`。
+    """Stopping is one sentence: turn this line `inactive`.
 
-    没有 paused / completed 之分了：那条岔路问的是「图上还有没有活」，而图会长大、活会变多，
-    一条停下来的线该不该接着跑是人说了算的事。工具永远不写 `active`。
+    There is no paused / completed distinction any more: that fork asked whether the graph still had
+    work, and a graph grows and work multiplies, so whether a stopped line should run on is a
+    human's call. The tool never writes `active`.
     """
     return [seam.cmd('cycle', 'status', cycle['id'], 'inactive')]
 
@@ -217,19 +230,22 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
     from the ready set
     right here, so a multi-node line keeps itself running without a second driver.
 
-    `line_active=False` —— 这条线不在服务中（人把它转成了 inactive）：收尾仍然是会话的权利（否则
-    那个节点会永远钉在那儿），但只做登记。停手判据、挑下一个节点、`--node` 一概不走，`--continue`
-    在这里没有发言权，线的状态一个字都不写 —— 它保持人给它的那个状态。
+    `line_active=False` -- this line is not in service (a human turned it inactive): closing is still
+    the session's right (otherwise that node would stay pinned forever), but it records only. The
+    stop rule, the next-node pick and `--node` all stay out of it, `--continue` has no say here, and
+    not one word of the line's status is written -- it keeps the status the human gave it.
 
-    收尾这一趟**整份读图一次**（下面这个 `dag`），再按参数往下传：停手判据（节点自己的 mode，以及
-    指令那一趟的 scope 判定）、补格名单、blocked 理由、维护通道的插入判定、attention 名单读的都是
-    它 —— 停手、补格、补不上、点名越界这几条分支都只读这一次。
+    This closing pass **reads the graph once** (the `dag` below) and hands it down as an argument:
+    the stop rule (the node's own mode, plus the instruction pass's scope judgement), the fill list,
+    the blocked reason, the maintenance channel's insertion judgement and the attention list all read
+    it -- so stop, fill, cannot-fill and naming-outside-scope each read it that one time.
     """
     dag = load_dag(project)
-    named = node_arg                    # 人敲出来的那个名字，下面可能就不再往下传了
-    spoken_name = named                 # reason 里点名用它，不受下面清空影响
+    named = node_arg                    # the name a human typed; it may not travel on below
+    spoken_name = named                 # the reason names it; clearing below does not affect it
     delivered = sig.get('status') == 'completed'
-    # 节点没交付时它一定会被搁置；要不要接着走，只由这条线的 `when_shelved` 策略说了算（默认停）。
+    # A node that did not deliver is always shelved; whether to carry on is decided by this line's
+    # `when_shelved` policy alone (default: stop).
     policy_carries = cycle_policy(cycle).get('when_shelved') == 'continue'
     carry_on = delivered or policy_carries
     others = [x for x in _holding_ids(cycle) if x != node_id]
@@ -239,8 +255,10 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
     tags = cycle.get('tags') or []
     slots = max(cycle_policy(cycle)['parallel'] - len(others), 0)
     if not others and slots <= 1:
-        # 单格线（或已经满了）：没有格子可补，走单节点那条路 —— 它负责「图里还有没有活」那句
-        # 人读的话。多节点那条路只在真有动作可做时接管（补一格、或报手里还有谁）。
+        # A single-slot line (or one already full): there is no slot to fill, so take the single-node
+        # path -- it owns the human-readable sentence about whether the graph still has work. The
+        # multi-node path takes over only when there is a real move to make (fill one slot, or report
+        # who else is in hand).
         return _close_last_node(project, cycle, node_id, sig, decision, named, note,
                                 policy_carries, line_active, decision_given, dag)
 
@@ -255,9 +273,9 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
             chosen = pick_node(project, named, exclude=node_id, exclude_many=others,
                                assume_completed=assumed, tags=tags, dag=dag)
             if chosen and not node_in_tag_scope(chosen, tags):
-                spoke = (f'注意：点名的 {chosen.get("title") or chosen["id"]}'
-                         f'（{chosen["id"]}）不在本 cycle 的过滤集 {list(tags)} 里；'
-                         f'它是你亲手点的，就按点名走。')
+                spoke = (f'Note: the named {chosen.get("title") or chosen["id"]}'
+                         f' ({chosen["id"]}) is not in this cycle\'s filter set {list(tags)};'
+                         f' you named it by hand, so it is taken as named.')
         else:
             chosen = None
             ranked = ranked_ready_nodes(project, limit=slots, exclude=node_id, exclude_many=others,
@@ -276,52 +294,61 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
             decision, stop_why = 'stop', why
 
     outcome = 'completed' if delivered else (sig.get('status') or 'failed')
-    # 这次收尾要搁置的那个节点，得由这个包自己点名：DAG 的那条命令还没跑，盘上它还是 todo。
-    # （`outcome` 是条子上的判决，`shelved` 是节点状态 —— 两者各有各的收件人，别混。）
+    # The node this close shelves has to be named by this package itself: the DAG command has not
+    # run yet, so on disk it is still todo.
+    # (`outcome` is the note's verdict, `shelved` is a node status -- each has its own recipient, so
+    # do not mix them.)
     shelved = [] if delivered else [node_id]
 
     if not line_active:
-        # 一条不在服务中的线：只做登记。收掉这个节点、标了 DAG，然后停下 —— 连线的状态都不写。
-        reason = (f'cycle {cycle["id"]!r} 不是 active（{cycle.get("status")}）：这条线上的收尾只做'
-                  f'登记 —— 收掉 {node_id[:8]}、标了 DAG，没有挑下一个节点，也没有派发；'
-                  f'线的状态保持原样。')
+        # A line that is not in service: records only. Close this node, mark the DAG, then stop --
+        # not even the line's status is written.
+        reason = (f'cycle {cycle["id"]!r} is not active ({cycle.get("status")}): a close on this '
+                  f'line only records -- it closes {node_id[:8]} and marks the DAG, picks no next '
+                  f'node and dispatches nothing; the line keeps the status it was given.')
         if spoken_name:
-            reason += f' 点名的节点 {spoken_name} 没有被打开。'
-        reason += f' 要接着走：pf cycle status {cycle["id"]} active'
+            reason += f' The named node {spoken_name} was not opened.'
+        reason += f' To carry on: pf cycle status {cycle["id"]} active'
         cmds = _close_commands(project, cycle, node_id, outcome, 'stop', None, park=False)
         return _stop_action(project, cycle, reason, cmds, node_id=node_id, shelved_nodes=shelved,
                             dag=dag)
 
     if decision == 'stop' or not filled:
-        # 手里还有别的节点在飞时不停这条线：那些节点还握着，这条线就没停，接力棒在它们自己的收尾
-        # 上 —— park 掉的话，它们的收尾只做登记，腾出来的活再没人接。
+        # With other nodes still in flight this line is not stopped: those nodes are still held, so
+        # the line has not stopped, and the baton is on their own closes -- parking it would make
+        # their closes record-only, and the work they free would have nobody to take it up.
         park_line = decision == 'stop' or not others
         cmds = _close_commands(project, cycle, node_id, outcome, 'stop', None, park=park_line)
-        open_notes = (f'（手里还有 {", ".join(x[:8] for x in others)}，各自的条子到了照常收）'
+        open_notes = (f' (still holding {", ".join(x[:8] for x in others)}, their notes are '
+                      f'collected as they arrive)'
                       if decision == 'stop' and others else '')
         if not delivered and not policy_carries:
-            slipped = note or sig.get('summary') or '（未写原因）'
-            reason = f'这个节点没有交付（{outcome}）：{slipped}'
+            slipped = note or sig.get('summary') or '(no reason written)'
+            reason = f'this node did not deliver ({outcome}): {slipped}'
         elif stop_why:
-            reason = f'{stop_why}（{note}）' if note else stop_why
+            reason = f'{stop_why} ({note})' if note else stop_why
             if mode_for(node_id, dag) == 'checkpoint':
-                reason += (f'；要接着走：pf cycle status {cycle["id"]} active，'
-                           f'再 pf next --cycle {cycle["id"]} --spawn --json')
+                reason += (f'; to carry on: pf cycle status {cycle["id"]} active, '
+                           f'then pf next --cycle {cycle["id"]} --spawn --json')
         elif named:
-            reason = f'指令指定的节点 {node_arg} 不是就绪节点，停在这里'
+            reason = (f'the node {node_arg} named by the instruction is not a ready node; '
+                      f'stopping here')
             outside = _named_node_outside_scope(dag, node_arg, tags)
             if outside:
-                reason += (f'；另外它不在本 cycle 的过滤集 {list(tags)} 里'
-                           f'（它的 tags={outside}）')
+                reason += (f'; it is also not in this cycle\'s filter set {list(tags)}'
+                           f' (its tags={outside})')
         elif decision_given:
-            # 人亲手给的 --stop：这条 reason 要说是人停的，不能读成"图里没活了"。
-            reason = '收尾时人选择了停（--stop）：线交回给你' + (f'（{note}）' if note else '')
+            # A hand-given --stop: this reason has to say a human stopped it, and must not read as
+            # "the graph has no work left".
+            reason = ('the human chose to stop at the close (--stop): the line goes back to you'
+                      + (f' ({note})' if note else ''))
         elif not filled and carry_on:
             # The fill came up empty: say which of the two reasons it was.
             if others:
-                reason = (f'{node_id[:8]} 收掉了；手里还有 {", ".join(x[:8] for x in others)}，'
-                          f'它们的条子到了照常收（pf next --after <节点id> --json）'
-                          f'——这条线留在服务中，那一格收尾时自己补格、派发。')
+                reason = (f'{node_id[:8]} is closed; still holding '
+                          f'{", ".join(x[:8] for x in others)}, their notes are collected as they '
+                          f'arrive (pf next --after <node id> --json) -- this line stays in '
+                          f'service, and on its own close that slot fills and dispatches.')
             else:
                 tagged = tag_blocked_ready_nodes(project, tags, exclude=node_id,
                                                  exclude_many=others, dag=dag)
@@ -330,9 +357,9 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
                 if tagged or holding:
                     reason = blocked_reason(project, tags, tagged, holding)
                 else:
-                    reason = '图里没有就绪节点了'
+                    reason = 'the graph has no ready node left'
         else:
-            reason = f'收尾时决定停下：{note or "（未写原因）"}'
+            reason = f'stopping at the close: {note or "(no reason written)"}'
         if open_notes:
             reason += open_notes
         # `shelved` is empty for a node that closed as completed: naming it here would hand the
@@ -340,8 +367,9 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
         return _stop_action(project, cycle, reason, cmds, node_id=node_id, shelved_nodes=shelved,
                             stop_line=park_line, dag=dag)
 
-    # 整份补格名单都交出去，不是只交第一个：空位有几个（`parallel` 减手里还握着的）就补几个，
-    # 每一个都得 pin 一条 —— 只 pin 头一个，剩下的格会静静地空着。
+    # The whole fill list is handed over, not just its head: as many free slots as there are
+    # (`parallel` minus what is still held) get filled, and every one has to be pinned -- pinning
+    # only the head leaves the rest of the slots quietly empty.
     cmds = _close_commands(project, cycle, node_id, outcome, 'continue', filled)
     # The maintenance channel's one judgement, at the one moment it can be made: the settle that
     # closes a node is the only place a reading and a freshly picked successor are both in hand.
@@ -365,7 +393,7 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
             'nodes': [n['id'] for n in filled],
             'note': f'{node_id[:8]} closed; opening '
                     + ', '.join(n.get('title') or n['id'] for n in filled)
-                    + (f'；{spoke}' if spoke else ''),
+                    + (f'; {spoke}' if spoke else ''),
             'follow': {'action': 'dispatch', 'cycle': cycle['id'],
                        'node_id': filled[0]['id'], 'node_title': filled[0].get('title', '')},
             'commands': cmds}
@@ -375,16 +403,20 @@ def _close_last_node(project: Path, cycle: dict, node_id: str, sig: dict,
                      decision: str | None, named: str | None, note: str,
                      policy_carries: bool, line_active: bool,
                      decision_given: bool = False, dag: dict | None = None) -> dict:
-    """收尾一条线手里的最后一个节点 —— 与多节点那条路分岔：这里要问「图里还有没有活」。
+    """Close the last node in a line's hand -- the fork away from the multi-node path: here the
+    question is whether the graph still has work.
 
-    判定与多节点那条路一致（停手判据、blocked 理由、blocked_reason/停在最后一句），
-    `others` 为空时走这里，两种情况各读各的，互不遮掩。`dag` 是收尾入口读下的那一份图，一路传到这里。
+    The judgements match the multi-node path (the stop rule, the blocked reason,
+    `blocked_reason`/the stop on the last sentence), and an empty `others` comes here: the two cases
+    read separately and neither masks the other. `dag` is the one graph read at the close entry,
+    handed all the way down here.
     """
     dag = dag if dag is not None else load_dag(project)
     delivered = sig.get('status') == 'completed'
     tags = cycle.get('tags') or []
     carry_on = delivered or policy_carries
-    spoken_name = named                   # 人敲出来的那个名字：reason 里点名用它，不受下面清空影响
+    spoken_name = named                 # the name a human typed: the reason names it; clearing
+                                        # below does not affect it
     if not line_active:
         decision, named, carry_on = 'stop', None, False
     decision = decision or ('continue' if carry_on else 'stop')
@@ -417,26 +449,29 @@ def _close_last_node(project: Path, cycle: dict, node_id: str, sig: dict,
         if next_node is None:
             decision = 'stop'
         elif named and not node_in_tag_scope(next_node, tags):
-            spoke = (f'注意：点名的 {next_node.get("title") or next_node["id"]}'
-                     f'（{next_node["id"]}）不在本 cycle 的过滤集 {list(tags)} 里；'
-                     f'它是你亲手点的，就按点名走。')
+            spoke = (f'Note: the named {next_node.get("title") or next_node["id"]}'
+                     f' ({next_node["id"]}) is not in this cycle\'s filter set {list(tags)};'
+                     f' you named it by hand, so it is taken as named.')
 
     # What the ticket said, kept verbatim on the path; every outcome that is not `completed` is a
     # non-delivery for the DAG -- the node is shelved (its dependents stay parked) so a human decides
     # whether to revive it. `stopped` is not a lesser failure: the work is equally not there.
     outcome = 'completed' if delivered else (sig.get('status') or 'failed')
-    # 这次收尾要搁置的那个节点，得由这个包自己点名：DAG 的那条命令还没跑，盘上它还是 todo。
-    # （`outcome` 是条子上的判决，`shelved` 是节点状态 —— 两者各有各的收件人，别混。）
+    # The node this close shelves has to be named by this package itself: the DAG command has not
+    # run yet, so on disk it is still todo.
+    # (`outcome` is the note's verdict, `shelved` is a node status -- each has its own recipient, so
+    # do not mix them.)
     shelved = [] if delivered else [node_id]
 
     if not line_active:
-        # 一条不在服务中的线：只做登记。收掉这个节点、标了 DAG，然后停下 —— 连线的状态都不写。
-        reason = (f'cycle {cycle["id"]!r} 不是 active（{cycle.get("status")}）：这条线上的收尾只做'
-                  f'登记 —— 收掉 {node_id[:8]}、标了 DAG，没有挑下一个节点，也没有派发；'
-                  f'线的状态保持原样。')
+        # A line that is not in service: records only. Close this node, mark the DAG, then stop --
+        # not even the line's status is written.
+        reason = (f'cycle {cycle["id"]!r} is not active ({cycle.get("status")}): a close on this '
+                  f'line only records -- it closes {node_id[:8]} and marks the DAG, picks no next '
+                  f'node and dispatches nothing; the line keeps the status it was given.')
         if spoken_name:
-            reason += f' 点名的节点 {spoken_name} 没有被打开。'
-        reason += f' 要接着走：pf cycle status {cycle["id"]} active'
+            reason += f' The named node {spoken_name} was not opened.'
+        reason += f' To carry on: pf cycle status {cycle["id"]} active'
         cmds = _close_commands(project, cycle, node_id, outcome, 'stop', None, park=False)
         return _stop_action(project, cycle, reason, cmds, node_id=node_id, shelved_nodes=shelved,
                             dag=dag)
@@ -445,30 +480,34 @@ def _close_last_node(project: Path, cycle: dict, node_id: str, sig: dict,
                            [next_node] if next_node else None)
     if decision == 'stop' or next_node is None:
         if not delivered and not policy_carries:
-            slipped = note or sig.get('summary') or '（未写原因）'
-            reason = f'这个节点没有交付（{outcome}）：{slipped}'
+            slipped = note or sig.get('summary') or '(no reason written)'
+            reason = f'this node did not deliver ({outcome}): {slipped}'
         elif stop_why:
-            reason = f'{stop_why}（{note}）' if note else stop_why
-            # 中间那一档停下来是等人说「继续」—— 停手把线转成 inactive，所以要把放回服务与
-            # 接着走的那两条命令一起给他，否则「继续」得自己猜怎么继续。
+            reason = f'{stop_why} ({note})' if note else stop_why
+            # The middle tier stops to wait for a human's "continue" -- stopping turns the line
+            # inactive, so hand over both commands (back in service, and carry on); otherwise
+            # "continue" would have to guess how to continue.
             if mode_for(node_id, dag) == 'checkpoint':
-                reason += (f'；要接着走：pf cycle status {cycle["id"]} active，'
-                           f'再 pf next --cycle {cycle["id"]} --spawn --json')
+                reason += (f'; to carry on: pf cycle status {cycle["id"]} active, '
+                           f'then pf next --cycle {cycle["id"]} --spawn --json')
         elif named:
-            reason = f'指令指定的节点 {named} 不是就绪节点，停在这里'
+            reason = (f'the node {named} named by the instruction is not a ready node; '
+                      f'stopping here')
             outside = _named_node_outside_scope(dag, named, tags)
             if outside:
-                reason += (f'；另外它不在本 cycle 的过滤集 {list(tags)} 里'
-                           f'（它的 tags={outside}）')
+                reason += (f'; it is also not in this cycle\'s filter set {list(tags)}'
+                           f' (its tags={outside})')
         elif decision_given:
-            # 人亲手给的 --stop：这条 reason 要说是人停的，不能读成"图里没活了"。
-            reason = '收尾时人选择了停（--stop）：线交回给你' + (f'（{note}）' if note else '')
+            # A hand-given --stop: this reason has to say a human stopped it, and must not read as
+            # "the graph has no work left".
+            reason = ('the human chose to stop at the close (--stop): the line goes back to you'
+                      + (f' ({note})' if note else ''))
         elif blocked:
             reason = blocked_reason(project, tags, tagged, holding)
         elif not remaining:
-            reason = '图里没有就绪节点了'
+            reason = 'the graph has no ready node left'
         else:
-            reason = f'收尾时决定停下：{note or "（未写原因）"}'
+            reason = f'stopping at the close: {note or "(no reason written)"}'
         # `shelved` is empty for a node that closed as completed: naming it here would hand the
         # reader a revive hint for work that succeeded.
         return _stop_action(project, cycle, reason, cmds, node_id=node_id, shelved_nodes=shelved,
@@ -494,7 +533,7 @@ def _close_last_node(project: Path, cycle: dict, node_id: str, sig: dict,
     return {'action': 'open_node', 'cycle': cycle['id'], 'node_id': next_node['id'],
             'node_title': next_node.get('title', ''),
             'note': f'{node_id[:8]} closed; opening {next_node.get("title", "")}'
-                    + (f'；{spoke}' if spoke else ''),
+                    + (f'; {spoke}' if spoke else ''),
             'follow': {'action': 'dispatch', 'cycle': cycle['id'],
                        'node_id': next_node['id'], 'node_title': next_node.get('title', '')},
             'commands': cmds}
@@ -506,13 +545,15 @@ def _maintenance_hit(project: Path, cycle: dict, sig: dict | None, dag: dict):
     The whole judgement is one call into `maintenance.crossed`: the reading off this node's ticket,
     the lines this line carries in its own policies, and the tag gate. A line with no line
     configured gets `None` here -- and that is what keeps the close byte-for-byte what it was
-    before this channel existed. 交下去的 `dag` 是收尾入口读下的那一份：去重判定读图，读的是它。
+    before this channel existed. The `dag` handed down is the one read at the close entry: the
+    dedup judgement reads the graph, and that is what it reads.
     """
     return maintenance.crossed(project, cycle, sig, dag)
 
 
 def _named_node_outside_scope(dag: dict, node_id: str, tags) -> list | None:
-    """`--node <id>` 点名的那个节点，身上是否有过滤集不认的 tag？有就把它报回来。"""
+    """Does the node named by `--node <id>` carry a tag the filter set does not recognize? If so,
+    report it back."""
     if not tags:
         return None
     node = (dag.get('nodes') or {}).get(node_id)

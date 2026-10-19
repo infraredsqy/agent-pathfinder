@@ -100,7 +100,7 @@ class TestDispatchVerb(Base):
     # ── it refuses, loudly ───────────────────────────────────────────────────
     def test_a_cycle_with_no_node_in_hand_refuses(self):
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.create_cycle()                                  # created, but nothing is pinned
 
         proc = sb.dispatch(check=False)
@@ -175,10 +175,12 @@ class TestDispatchVerb(Base):
         self.assertNotEqual(0, other.returncode)               # the cwd project has no such cycle
         self.assertIn("no cycle named 'cyc'", other.stderr)
 
-    # ── 线策略点名 spawner ────────────────────────────────────────────────────
-    # `cycle policy <cycle> spawner dsh|zcode` 是落在线记录上的决定：dispatch 读它，压过这台
-    # 机器的环境变量与宿主自认，让位给单发的 `--spawner`。机器无关的断言靠「谁唯一能产出
-    # 这个名字」：环境变量给 zcode 时，argv 里的 dsh 只可能来自线策略；一条路径只可能来自旗子。
+    # ── the line policy names a spawner ──────────────────────────────────────
+    # `cycle policy <cycle> spawner dsh|zcode` is a decision recorded on the line: dispatch reads
+    # it, over this machine's environment variable and the host's own guess, yielding to a one-off
+    # `--spawner`. The machine-independent assertions lean on "who alone can produce this name":
+    # with the environment saying zcode, a `dsh` in argv can only come from the line policy, and a
+    # path can only come from the flag.
 
     def test_a_line_policy_beats_the_machine_setting(self):
         for cli in (False, True):

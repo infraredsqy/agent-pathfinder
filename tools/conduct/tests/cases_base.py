@@ -94,8 +94,8 @@ class Base(unittest.TestCase):
         The extras land after the pin, so the cycle is mid-line from the fixture's first view.
         """
         sb = self.make(cli=cli)
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         for i in range(extra_nodes):
-            sb.add_node((NODE2, NODE3)[i], f'另一条支线 {i}', mode='auto')
+            sb.add_node((NODE2, NODE3)[i], f'another line {i}', mode='auto')
         return sb

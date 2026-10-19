@@ -62,14 +62,18 @@ CONFIG_NAME = 'config.json'
 
 
 def resolve_project_root(cwd) -> Path:
-    """cwd 即根，唯一的例外：cwd 是一条 linked worktree 的检出根时，回主树。
+    """cwd is the root; the one exception: when cwd is a linked worktree's checkout root, go back to
+    the main tree (the rule lives in the ledger).
 
-    并行模式把节点的代码活放进主树的 `.pf/worktrees/<短id>`，worker 的 cwd 落在 worktree 里；
-    而 worktree 是完整检出，提交档下里面有一份 fork 时刻的 `.pf/` —— 记录命令若认它，结转就落在
-    陈旧快照上，两条线互相看不见对方的认领。worktree 根的 `.git` 是一个**文件**
-    （`gitdir: <主树>/.git/worktrees/<名字>`），主树里是目录：顺着指针走，`worktrees` 的上三级
-    就是主树根。submodule 的 `.git` 文件指向 `.git/modules/...`，不是 worktree，留在 cwd 不动。
-    主树没有记录目录时（不是管线项目）不挪，让后面的错误当场响。
+    In parallel mode a node's code work goes into the main tree's `.pf/worktrees/<short id>`, so the
+    worker's cwd lands inside the worktree; and a worktree is a full checkout, so in commit mode it
+    holds a copy of `.pf/` as of the moment of the fork -- if a recording command accepted that copy,
+    settling would land on a stale snapshot, and the two lines would not see each other's claims. A
+    worktree root's `.git` is a **file** (`gitdir: <main tree>/.git/worktrees/<name>`), while in the
+    main tree it is a directory: follow the pointer, and three levels up from `worktrees` is the main
+    tree root. A submodule's `.git` file points at `.git/modules/...`, which is not a worktree, so it
+    stays put in cwd. When the main tree has no ledger (it is not a pipeline project) nothing moves,
+    so the error that follows fires right where it is.
     """
     cwd = Path(cwd)
     dot_git = cwd / '.git'
@@ -94,63 +98,67 @@ def resolve_project_root(cwd) -> Path:
 
 
 def ledger_dir_for(project) -> Path:
-    """`<project>/.pf/`。"""
+    """`<project>/.pf/`."""
     return Path(project) / LEDGER_NAME
 
 
 def meta_dir_of(ledger_dir) -> Path:
-    """`<ledger>/meta/`：派发物（launch prompt、claim/started 记号、断链标记、会话便条与那把锁）。"""
+    """`<ledger>/meta/`: the dispatch artifacts (the launch prompt, the claim/started markers, the
+    broken-chain marker, the session notes and that one lock)."""
     return Path(ledger_dir) / 'meta'
 
 
 def nodes_dir_of(ledger_dir) -> Path:
-    """`<ledger>/nodes/`：每一格自己的目录（spec、交付物、跑出来的 `temp/`）。"""
+    """`<ledger>/nodes/`: one directory per node (its spec, its deliverables, the `temp/` it made)."""
     return Path(ledger_dir) / 'nodes'
 
 
 def config_path_of(ledger_dir) -> Path:
-    """`<ledger>/config.json`：这个项目的设置覆盖层。"""
+    """`<ledger>/config.json`: this project's settings layer."""
     return Path(ledger_dir) / CONFIG_NAME
 
 
 def meta_dir_for(project) -> Path:
-    """`<project>/.pf/meta/`。"""
+    """`<project>/.pf/meta/`."""
     return meta_dir_of(ledger_dir_for(project))
 
 
 def nodes_dir_for(project) -> Path:
-    """`<project>/.pf/nodes/`。"""
+    """`<project>/.pf/nodes/`."""
     return nodes_dir_of(ledger_dir_for(project))
 
 
 def config_path_for(project) -> Path:
-    """`<project>/.pf/config.json`。"""
+    """`<project>/.pf/config.json`."""
     return config_path_of(ledger_dir_for(project))
 
 
 def home_config_path() -> Path:
-    """这台机器那一层设置：`~/.pf/config.json`（`pf config set --global` 写的同一份）。
+    """This machine's settings layer: `~/.pf/config.json` (the same one `pf config set --global` writes).
 
-    家目录当作一个项目来算，所以这一层与项目那一层同一条拼法、同一个名字。`PF_HOME_DIR` 把
-    「家」指到别处（测试与演练的沙箱，同 `ZCODE_DATA_BASE_DIR` 的先例）：它是这一层自己的开关，
-    读在这里，读那一侧与写那一侧才不会各解各的。
+    Home is counted as a project, so this layer has the same spelling and the same name as the project
+    layer. `PF_HOME_DIR` points "home" somewhere else (a sandbox for tests and drills, the same
+    precedent as `ZCODE_DATA_BASE_DIR`): it is this layer's own switch, read here, so the reading side
+    and the writing side do not resolve that layer each their own way.
     """
     home = os.environ.get('PF_HOME_DIR') or str(Path.home())
     return config_path_for(Path(home).expanduser())
 
 
 def is_initialized(ledger_dir) -> bool:
-    """这个记录目录算不算 init 过：它在，且两枚 init 记号都在。"""
+    """Whether this ledger counts as init-ed: it is there and both init markers are there."""
     ledger = Path(ledger_dir)
     return ledger.is_dir() and all((ledger / marker).is_file() for marker in INIT_MARKERS)
 
 
 def init_message(ledger_dir, *, project=None) -> str:
-    """没 init 过时那一句：记录目录、缺的是哪两枚记号、`init` 怎么跑。
+    """The one sentence a refused write is told when nothing was init-ed: the ledger, which two markers
+    are missing, and how to run `init`.
 
-    `project` 是调用方点过名的项目根：给了就把它带进那条示例命令行（`pf init --project`），
-    因为这种调用可能不在项目里跑；没给就是「就地跑 `pf init`」。
+    `project` is the project root the caller named: when it is given it goes into that example command
+    line (`pf init --project`), because such a call may not run inside the project; when it is not, the
+    line is "run `pf init` where you are".
     """
     tail = f' --project "{project}"' if project else ''
-    return (f'{ledger_dir} 没 init 过（缺 {" 或 ".join(INIT_MARKERS)}）。先跑：\n'
+    return (f'{ledger_dir} was never init-ed (missing {" or ".join(INIT_MARKERS)}). Run this first:\n'
             f'  pf init{tail}')

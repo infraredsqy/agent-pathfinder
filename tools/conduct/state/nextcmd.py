@@ -86,14 +86,16 @@ def cmd_next(args) -> None:
               file=sys.stderr)
         sys.exit(2)
 
-    # cwd 在 linked worktree 里时回主树：并行模式下收尾那几条命令是从 worktree 的 cwd 跑的，
-    # 结转、挑人、prompt 全部落主树的记录与 scratch，worktree 只是代码检出。
+    # cwd inside a linked worktree goes back to the main tree: in parallel mode the closing calls run
+    # from the worktree's cwd, while the carry-over, the pick and the prompt all land in the main
+    # tree's records and scratch -- the worktree is only the code checkout.
     project = (Path(named_project).expanduser().resolve() if named_project
                else _resolve_project_root(Path.cwd()))
 
-    # 裸 `next` 是给「至多一条线在跑」的世界的简写。两条线并排时它不再是简写而是歧义——歧义
-    # 是调用方式的问题，不是管线的问题，所以在这里响亮拒掉并列出候选，而不是发一个 ask_user
-    # 给人猜（ask_user 只留给管线自己真的拿不了主意的事）。
+    # A bare `next` is shorthand for a world with at most one line running. With two lines side by
+    # side it is no longer shorthand but ambiguity -- and ambiguity is the caller's problem, not the
+    # pipeline's -- so it is refused loudly here with the candidates listed, rather than an ask_user
+    # sent off to guess (ask_user is kept for what the pipeline itself truly cannot decide).
     if cycle_id is None and after is None:
         running = [c['id'] for c in pipeline.load_state(project).get('cycles', [])
                    if c.get('status') == 'active']
@@ -104,8 +106,9 @@ def cmd_next(args) -> None:
             sys.exit(2)
     try:
         if after:
-            # 收尾兜底（并行模式）：这个节点还留着 FORK 记录，就要求合回已经清完
-            # （worktree 与出口分支都删了）才许结算。没有记录的节点原样通过，连 git 都不问。
+            # The closing call's backstop (parallel mode): a node that still carries a FORK record may
+            # only be settled once the merge-back is finished (worktree and exit branch both gone). A
+            # node with no record passes straight through -- git is not even asked.
             gate_close_on_fork(project, after)
             # Settle the node that just finished. Which cycle it belongs to is read off the node
             # itself -- a worker should not have to learn cycle bookkeeping -- and the name is
@@ -163,13 +166,15 @@ def cmd_next(args) -> None:
         spawned = []
         skipped = []
         try:
-            # 这条线握着的每一格走同一份派发，spawner 也只有一个答案：CLI 点名 > 线策略 >
-            # 环境变量 > 宿主自认，在循环外一次问清（`resolve_spawner` 总是给得出一条路径）。
+            # Every slot this line holds goes through one dispatch, and the spawner has one answer
+            # too: CLI naming > line policy > env var > the host's own guess, asked once outside the
+            # loop (`resolve_spawner` always yields a path).
             chosen = pipeline.resolve_spawner(project, action['cycle'], spawner)
             for item in action['nodes']:
                 if pipeline.started_marker(project, action['cycle'], item['node_id']).is_file():
-                    # 这一格的会话上一拍就开出去了（收尾重规划出来的那份名单里可能还带着它）：
-                    # 跳过 —— 同一个节点上第二个会话的代价收不回来。
+                    # This slot's session already went out a beat ago (the list the close's replan
+                    # produced may still carry it): skip it -- a second session on the same node
+                    # never pays for itself.
                     skipped.append(item['node_id'])
                     continue
                 spawned.append(pipeline.spawn_session(
@@ -183,9 +188,9 @@ def cmd_next(args) -> None:
         if skipped:
             action['spawn_skipped'] = skipped
         action['spawned'] = spawned if len(spawned) > 1 else (spawned[0] if spawned else '')
-    # 输出只有一套：`render_action` 管 JSON 与人读的那一版，也管「预览不可执行」那条规则。
-    # `--plan` 与 `--after` 一起给出时这一趟其实在结算（上面走的是 apply 那条路），所以预览只认
-    # 真的预览了的那一种。
+    # The output has one implementation: `render_action` owns the JSON and the human version, and the
+    # "a preview is not executable" rule too. Given `--plan` together with `--after` the call is in
+    # fact settling (the apply path above), so it counts as a preview only when it truly previewed.
     print(pipeline.render_action(action, as_json, preview=mode == 'plan' and not after))
 
 
@@ -240,11 +245,13 @@ def cmd_dispatch(args) -> None:
     prompts = []
     already = []
     for node_id in holding:
-        # prompt 的落点与 started 记号都由管线那一侧算（`prompts.launch_prompt_path` /
-        # `started_marker`）：这一侧只交出「哪条线、哪一格」。
+        # The prompt's landing and the started marker are both computed on the pipeline's side
+        # (`prompts.launch_prompt_path` / `started_marker`): this side hands over only "which line,
+        # which slot".
         if pipeline.started_marker(root, cycle_id, node_id).is_file():
-            # 这一格的会话已经开过了（started 记号是上一次成功派发留下的）。再交给 spawner 一次
-            # 就是在同一个节点上开第二个会话 —— 跳过它，绝不重开。
+            # This slot's session has already started (the started marker is left by the last
+            # successful dispatch). Handing it to the spawner again would boot a second session on the
+            # same node -- skip it, never reopen.
             already.append(node_id)
             continue
         prompt = pipeline.launch_prompt_path(root, cycle_id, node_id)
@@ -255,7 +262,7 @@ def cmd_dispatch(args) -> None:
             sys.exit(2)
         prompts.append((node_id, prompt))
     if not prompts:
-        named = ', '.join(x[:8] for x in already) or '（无）'
+        named = ', '.join(x[:8] for x in already) or '(none)'
         print(f'Error: every node this cycle holds already had its session started ({named}), so '
               f'there is nothing to dispatch: doing it again would boot a second session onto the '
               f'same node. To reopen one, retry it the documented way: '
@@ -267,7 +274,7 @@ def cmd_dispatch(args) -> None:
     spawned = []
     try:
         # One node, one session, one prompt file: every node the cycle holds that has a prompt.
-        # 与 `next --spawn` 同一个答案：CLI 点名 > 线策略 > 环境变量 > 宿主自认。
+        # The same answer as `next --spawn`: CLI naming > line policy > env var > the host's own guess.
         chosen = pipeline.resolve_spawner(root, cycle_id, spawner)
         for node_id, prompt in prompts:
             spawned.append(pipeline.spawn_session(root, cycle_id, str(prompt), dry_run=dry,

@@ -38,7 +38,7 @@ class WorkerSession:
 
     def outputs_for(self, action, deliverable, node):
         return {'deliverable': deliverable,
-                'acceptance': [f'{action.get("skill") or "pf-conduct"} 的核心验收点'],
+                'acceptance': [f'{action.get("skill") or "pf-conduct"} core acceptance points'],
                 'touched': [deliverable]}
 
     def work(self, action):
@@ -109,7 +109,7 @@ class Closer:
 def stop_after(nodes):
     """A closing call that keeps going until `nodes` nodes have been carried, then stops.
 
-    This is how a standing instruction like "做完这个就停" shows up: the session read it, so it
+    This is how a standing instruction like "finish this one and stop" shows up: the session read it, so it
     says stop. The tool is never asked to parse the sentence.
 
     The count includes the node being closed, because that is the count the tool itself uses: the

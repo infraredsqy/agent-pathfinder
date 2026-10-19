@@ -149,7 +149,7 @@ def cmd_session_import(project=None, dry_run: bool = False) -> None:
     """Fold the older record's session ids into notes, once per machine.
 
     Two sources, both older than the note and both left where they are: the `dsh_session` field
-    `ideas.json` carries (the session the node was added in -- 出生 session), and a
+    `ideas.json` carries (the session the node was born in), and a
     `> discussion:` header an older spec may still open with. Nothing here writes the record.
     """
     require_initialized(project)

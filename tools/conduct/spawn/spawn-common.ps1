@@ -1,39 +1,53 @@
 ﻿# ============================================================================
-# spawn-common.ps1 — 两份 spawner 共用的那层外壳（dot-source 它，不直接跑）
+# spawn-common.ps1 — the shell both spawners share (dot-source it, never run it)
 # ============================================================================
-# dsh-spawn.ps1 与 zcode-spawn.ps1 的差别只有中间那一段（走 DSH HTTP API / 往 ZCode 的 cron
-# 表排一行）；外壳里逐行同构的部分收在这一份正本：工作目录的缺省、prompt 文件校验、降级标记
-# 的写入与清除、失败时怎么说。留在各自脚本里的是宿主差异：param 块（zcode 多
-# -At/-Mode/-Model/-NoVerify）、中间那段、末行 `spawned:`。
+# dsh-spawn.ps1 and zcode-spawn.ps1 differ only in the middle section (talk to the DSH HTTP API /
+# queue a row in ZCode's cron table); the part of the shell that is line-for-line isomorphic lives in
+# this one source: the default working directory, the prompt file check, the write and the clear of
+# the degradation marker, and what to say on failure. What stays in each script is the host
+# difference: the param block (zcode adds -At/-Mode/-Model/-NoVerify), the middle section, the final
+# `spawned:` line.
 #
-# 降级标记的**形状与落点**有一处正本：同目录的 `marker.py`（python 侧与条子那一拍用它）。这一层
-# 按同一份合同**自己写**，是一条例外，理由是物理上的：spawner 跑起来的那台机器、那个时刻可能
-# 没有 python，而 PowerShell 没法 import 一个 python 模块 —— 这条写入恰恰是链断掉之后唯一留给人
-# 的入口，它不能因为解释器不在而消失。代价是形状有两份实现，所以 `conduct/tests/cases_spawn_shell.py` 的
-# `TestTheSpawnerShell` 拿一条等价性用例把两边钉住：同一组键、同一句人话、同一个时刻形状、同落点
-# （`-MarkerPath`）、二次失败不覆盖、清后不在。改形状时两处一起改，用例当场判红。
+# The degradation marker's **shape and landing place** have one source: `marker.py` next to this file
+# (the python side and the note step use it). This layer **writes its own** against the same contract,
+# and that is an exception for a physical reason: the machine and the moment the spawner runs on may
+# have no python, and PowerShell cannot import a python module -- and this write is exactly the only
+# way in left to a human after the chain breaks, so it must not disappear because the interpreter is
+# absent. The price is two implementations of the shape, so `conduct/tests/cases_spawn_shell.py`'s
+# `TestTheSpawnerShell` pins the two sides together with one equivalence case: the same key set, the
+# same sentence, the same moment shape, the same landing place (`-MarkerPath`), a second failure that
+# does not overwrite, and gone after the clear. Change the shape and change both; the case goes red on
+# the spot.
 #
-# 清标记不走这条路：删文件没有形状可言，而成功那一拍不该因为清不掉而失败。
+# Clearing the marker does not take this road: deleting a file has no shape to speak of, and the
+# success beat must not fail because the clear failed.
 #
-# `-MarkerPath` 必给：标记的落点由调用方算（`conduct_spawn.argv_for` 从 `marker.py` 取），
-# spawner 不自拼这个路径 —— 记录目录一改名，自拼的那几处会安静地写到工具不读的位置。
+# `-MarkerPath` is mandatory: the caller computes where the marker lands (`conduct_spawn.argv_for`
+# takes it from `marker.py`), and the spawner does not assemble that path itself -- rename the ledger
+# and the places that assemble it would quietly write where no tool reads.
 #
-# 这里的 `$script:` 指的是**调用方脚本的作用域**：dot-source 让两份脚本与本层共用一个 script
-# 作用域，spawner 就是这样把自己的状态交给这些函数（`Initialize-Spawner` 写、别的函数读）。
+# `$script:` here means **the calling script's scope**: dot-sourcing gives both scripts and this layer
+# one script scope, which is how a spawner hands its state to these functions (`Initialize-Spawner`
+# writes, the other functions read).
 #
-# 本文件要能被 Windows PowerShell 5.1 读进来（装机上的 spawner 与排障都可能是它），所以语法停在
-# 5.1 那一套；文件本身是 UTF-8 with BOM，无 BOM 时 5.1 按控制台代码页读，中文会变成乱码。
+# This file has to be readable by Windows PowerShell 5.1 (the spawner on an installed machine and
+# troubleshooting may both be it), so the syntax stops at the 5.1 set; the file itself stays UTF-8
+# with BOM, because 5.1 reads a BOM-less file in the console codepage
+# (`cases_suite.py`'s `TestShippedPowerShellCarriesItsBom` requires the BOM).
 # ============================================================================
 
 $script:SpawnCommonDir = $PSScriptRoot
 
-#: 标记自己写下的那句人话 —— 与 `marker.py` 的 `DEFAULT_NOTE` 一字不差，等价性用例盯着这两份。
-$script:SpawnMarkerNote = ('链条断在这里：本拍没能把下一棒开起来，管线不会再自己往前走。手动接管是 ' +
-                           '`pf next --after <node_id>`（收尾那一拍）或 `pf dispatch <cycle>`（派发那一拍）；' +
-                           '确认无碍后删掉本文件。')
+#: the sentence the marker writes itself -- character for character `marker.py`'s `DEFAULT_NOTE`; the
+#: equivalence case watches these two files.
+$script:SpawnMarkerNote = ('The chain broke here: this step could not start the next one, and the pipeline will not move on by ' +
+                           'itself. To take over by hand use `pf next --after <node_id>` (the closing step) or ' +
+                           '`pf dispatch <cycle>` (the dispatch step); once you have checked that nothing is wrong, ' +
+                           'delete this file.')
 
 function ConvertTo-SpawnExtra {
-    # `KEY=VALUE` 那一串（调用方递宿主事实的写法）解析成一份对象：dsh 递 api_base，zcode 递 db。
+    # Parse the `KEY=VALUE` list (how a caller passes host facts) into an object: dsh passes
+    # `api_base`, zcode passes `db`.
     param([string[]]$Pairs = @())
     $extra = @{}
     foreach ($pair in $Pairs) {
@@ -48,9 +62,9 @@ function ConvertTo-SpawnExtra {
 }
 
 function Move-SpawnMarkerIntoPlace {
-    # 临时文件 + 同卷改名，改名那一步有界重试：读方此刻正开着目标文件时 Windows 会拒，而这条
-    # 写入恰恰是不许丢的那条（与 `tools/shared/jsonio.py` 的 `replace_with_retry` 同一条理由、
-    # 同一份次数）。
+    # A temp file plus a same-volume rename, with a bounded retry on the rename: Windows refuses while
+    # a reader has the target file open at this moment, and this is exactly the write that must not be
+    # lost (the same reason and the same count as `tools/shared/jsonio.py`'s `replace_with_retry`).
     param(
         [Parameter(Mandatory = $true)][string]$From,
         [Parameter(Mandatory = $true)][string]$To,
@@ -81,23 +95,26 @@ function Initialize-Spawner {
     $script:SpawnPromptFile = $PromptFile
     $script:SpawnTarget = if ($WorkspacePath) { $WorkspacePath } else { (Get-Location).Path }
     if (-not $MarkerPath) {
-        throw ("no -MarkerPath: 降级标记的落点由调用方给（conduct_spawn.argv_for 从 marker.py " +
-               "取），spawner 不自拼这个路径")
+        throw ("no -MarkerPath: the caller gives where the degradation marker lands " +
+               "(conduct_spawn.argv_for takes it from marker.py); the spawner does not assemble " +
+               "that path itself")
     }
     $script:SpawnMarkerPath = $MarkerPath
     $script:SpawnExtra = @($Extra)
     $script:SpawnMarkerWritten = $false
-    # `-PythonExe` 是调用方自己的解释器（argv_for 递下来），zcode 的中段用它跑 zcode-dispatch.py。
-    # 写标记不走它：见文件头那条例外。DSH 那一半拿到这个参数也不用它。
+    # `-PythonExe` is the caller's own interpreter (argv_for passes it down); zcode's middle
+    # section uses it to run zcode-dispatch.py. Writing the marker does not go through it: see the
+    # exception in the file header. The DSH half takes this parameter and does not use it either.
     $script:SpawnPython = if ($PythonExe) { $PythonExe }
                           else { (Get-Command python -ErrorAction SilentlyContinue).Source }
 }
 
 function Assert-PromptFile {
-    # 没有 prompt 就没有会话可开：写标记、当场报错退出，绝不发任何手势。
-    # （两份脚本各自决定在哪一拍问这一句：zcode 在碰库之前，dsh 在建会话之后。）
+    # With no prompt there is no session to open: write the marker, fail on the spot, never send
+    # a gesture. (Each of the two scripts decides which beat asks this: zcode before it touches the
+    # db, dsh after it creates the session.)
     if (-not (Test-Path $script:SpawnPromptFile)) {
-        Write-CallbackFailureMarker -Phase 'read-prompt' -Reason "找不到 prompt 文件 $script:SpawnPromptFile"
+        Write-CallbackFailureMarker -Phase 'read-prompt' -Reason "prompt file not found: $script:SpawnPromptFile"
         throw "prompt file not found: $script:SpawnPromptFile (-PromptFile is required)"
     }
 }
@@ -108,15 +125,17 @@ function Write-CallbackFailureMarker {
         [Parameter(Mandatory = $true)][string]$Reason,
         [int]$Attempts = 0
     )
-    if ($script:SpawnMarkerWritten) { return }        # 一次失败只落一条：第一次的那条是根因
+    if ($script:SpawnMarkerWritten) { return }        # one failure lands one entry only: the first one is the root cause
     $script:SpawnMarkerWritten = $true
     try {
-        # `detected_at` 与 clock.py 的微秒形状逐字同形：UTC、秒到小数 6 位、字面 `Z`。
-        # 6 位是**形状**上的硬要求，微秒由这里的取整规则自己保证，不落在日期说明符那一族对末尾零的
-        # 处理上：`0.9999999` 秒那一段的 ticks 除以 10 是个 …999.9 的数，PowerShell 的 `[int]` 转换
-        # 会四舍五入到 7 位（1000000），Floor 才是截断。
-        # `:` 在 .NET 自定义格式里是随 CurrentCulture 变的时间分隔符占位符，所以日期那一半走
-        # 不变文化，不跟机器的区域设置走。
+        # `detected_at` has exactly the same shape as clock.py's microseconds: UTC, seconds out to 6
+        # decimal places, a literal `Z`. The 6 places are a **shape** requirement: the microseconds are
+        # guaranteed by the rounding rule here and do not fall into how that family of date specifiers
+        # treats trailing zeros -- the ticks of the `0.9999999` second span divided by 10 is a
+        # ...999.9 number, and PowerShell's `[int]` cast rounds it to 7 places (1000000), where Floor
+        # truncates.
+        # `:` in a .NET custom format is a time separator placeholder that follows CurrentCulture, so
+        # the date half goes through the invariant culture and does not follow the machine's locale.
         $now = [DateTime]::UtcNow
         $micros = [int][Math]::Floor(($now.Ticks % [TimeSpan]::TicksPerSecond) / 10)
         $stamp = [string]::Format([Globalization.CultureInfo]::InvariantCulture,
@@ -134,13 +153,16 @@ function Write-CallbackFailureMarker {
         $dir = Split-Path -Parent $script:SpawnMarkerPath
         if ($dir -and -not (Test-Path $dir)) { $null = New-Item -ItemType Directory -Force -Path $dir }
         if (Test-Path -LiteralPath $script:SpawnMarkerPath -PathType Container) {
-            # 落点被一个同名目录占着时，Move-Item 会把临时文件搬进那个目录里、还当成成功 ——
-            # 「标记在盘上」就成了半句谎话。这里当场认失败，交给下面那条 catch 说话。
-            throw "落点是目录：$($script:SpawnMarkerPath)"
+            # When a directory of the same name occupies the landing place, Move-Item moves the temp
+            # file into that directory and still calls it a success -- and "the marker is on disk"
+            # becomes half a lie. Fail on the spot here and let the catch below speak.
+            throw "the landing place is a directory: $($script:SpawnMarkerPath)"
         }
-        # 不带 BOM 写出：这份 JSON 是给工具读的，BOM 会让 json.load(encoding='utf-8') 炸。
-        # 临时文件只在这一拍里有意义：改名成功它就不在了，重试耗尽也得由 finally 收走 ——
-        # 标记目录里留一份 `.tmp-<pid>` 残渣，下一个人会当成半截事故来查。
+        # Written without a BOM: this JSON is for a tool to read, and a BOM makes
+        # json.load(encoding='utf-8') blow up.
+        # The temp file only means anything within this beat: a successful rename and it is gone, and
+        # a retry that runs out still has to be collected by the finally -- leave a `.tmp-<pid>` scrap
+        # in the marker directory and the next person reads it as half an accident.
         $tmp = "$($script:SpawnMarkerPath).tmp-$PID"
         try {
             [System.IO.File]::WriteAllText($tmp, ($record | ConvertTo-Json -Depth 5),
@@ -150,19 +172,23 @@ function Write-CallbackFailureMarker {
         finally {
             if (Test-Path $tmp) { Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue }
         }
-        Write-Warning "conduct 派发失败，已写下降级标记：$($script:SpawnMarkerPath)"
+        Write-Warning "conduct dispatch failed; the degradation marker was written: $($script:SpawnMarkerPath)"
     }
     catch {
-        # 写标记失败不许把派发失败变成更响的失败：警告一声，让调用方照原样退出。
-        Write-Warning "写降级标记失败（$($script:SpawnMarkerPath)）：$($_.Exception.Message)"
+        # A failed marker write must not turn a failed dispatch into a louder failure: warn once and
+        # let the caller exit as it was.
+        Write-Warning "could not write the degradation marker ($($script:SpawnMarkerPath)): $($_.Exception.Message)"
     }
 }
 
 function Clear-CallbackFailureMarker {
-    # 派发成功：清掉上一次留下的降级标记（标记存在 = 链现在是断的；链一旦续上它就没有意义了，
-    # 留着只会让下一次人工 /pf-conduct 读到一条早就修好的旧事故）。
-    # 清也先改名再删：标记从「在」到「不在」是一步同卷改名，并发读者撞不见中间态；改名失败
-    # （正被别的进程读着）就退回原地删——清不掉不许挡派发成功。
+    # Dispatch succeeded: clear the degradation marker left by an earlier beat (marker present =
+    # the chain is broken right now; once the chain is joined again it means nothing, and keeping it
+    # only makes the next manual /pf-conduct read a long-fixed old accident).
+    # The clear also renames before deleting: marker from "there" to "not there" is one same-volume
+    # rename, so a concurrent reader never catches the in-between state; if the rename fails (another
+    # process is reading it) it falls back to deleting in place -- a clear that fails must not block a
+    # successful dispatch.
     if (-not (Test-Path $script:SpawnMarkerPath)) { return }
     $stale = "$($script:SpawnMarkerPath).clearing-$PID"
     Move-Item -Path $script:SpawnMarkerPath -Destination $stale -Force -ErrorAction SilentlyContinue

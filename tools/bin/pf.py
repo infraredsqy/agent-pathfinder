@@ -33,7 +33,8 @@ LEDGER_MERGE = CONDUCT / 'ledger-merge.py'
 #: why the doctor has to check it by name.
 SESSION_NOTE = TOOLS / 'shared' / 'session-note.py'
 
-# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
+# Bootstrap: the loader is fetched by path too, so every file has to carry this paragraph itself
+# (see `shared/loader.py`).
 SHARED = TOOLS / 'shared'
 
 _LOADER = None
@@ -50,7 +51,8 @@ def _loader():
 
 
 def _ledger():
-    """`tools/shared/ledger.py`: `.pf/` 的落点与 init 闸门 —— `pf` 只读它，不借任何工具的包。"""
+    """`tools/shared/ledger.py`: where `.pf/` lands and the init gate -- `pf` only reads it, it borrows
+    no tool's package."""
     return _loader().load_shared('ledger')
 
 #: This tree's own version. Release tags are `v<version>`, and every build handed to someone
@@ -66,7 +68,8 @@ def _verb_version(rest: list[str]) -> int:
 
 def _verb_migrate(rest: list[str]) -> int:
     """`pf migrate`: the door stays shut until this system itself needs migrating."""
-    print('migrate：这个口子现在关着 —— 没有要迁移的东西；等这套体系自己要迁移时再开。')
+    print('migrate: this door is shut for now -- there is nothing to migrate; it reopens when this '
+          'system itself needs migrating.')
     return 0
 
 
@@ -184,7 +187,7 @@ def _ledger_name() -> str:
 
 
 def _git(project: Path, *args: str) -> subprocess.CompletedProcess:
-    """`tools/shared/gitcmd.py`: 这棵树问 git 的唯一种写法（cwd、解码、不抛都在那里）。"""
+    """`tools/shared/gitcmd.py`: the tree's one way of asking git (cwd, decoding, no-raise all live there)."""
     return _loader().load_shared('gitcmd').git(project, *args)
 
 
@@ -199,62 +202,65 @@ def _registered_driver(root: Path) -> str:
 def cmd_doctor(fix: bool = False) -> int:
     """Read the health of the checkout and the project; with --fix, run the setup act once."""
     problems = 0
-    print(f'pf 命令：{HERE / "pf.py"}')
-    print(f'工具树：{TOOLS}')
+    print(f'pf command: {HERE / "pf.py"}')
+    print(f'tool tree: {TOOLS}')
     for path in TOOL_FILES:
         if not path.is_file():
-            print(f'  ✗ 缺 {path}')
+            print(f'  ✗ missing {path}')
             problems += 1
     if sys.version_info < (3, 10):
-        print(f'  ✗ Python {sys.version.split()[0]} 太旧（这套工具要 3.10+）')
+        print(f'  ✗ Python {sys.version.split()[0]} is too old (this tool tree needs 3.10+)')
         problems += 1
 
     root = _project_root(Path.cwd())
     ledger = _ledger().ledger_dir_for(str(root))
-    print(f'项目根：{root}')
+    print(f'project root: {root}')
     if not ledger.is_dir():
-        print(f'  · 这里还没有 {_ledger_name()}/（新项目跑 `pf init`）')
+        print(f'  · there is no {_ledger_name()}/ here yet (a new project runs `pf init`)')
         return 1 if problems else 0
 
     gaps = []
     markers = _ledger().INIT_MARKERS
     missing = [m for m in markers if not (ledger / m).is_file()]
     if missing:
-        gaps.append(f'{_ledger_name()}/ 缺 {" 和 ".join(missing)}')
+        gaps.append(f'{_ledger_name()}/ is missing {" and ".join(missing)}')
     if not (ledger / 'AGENTS.md').is_file():
-        gaps.append(f'{_ledger_name()}/AGENTS.md 不在')
+        gaps.append(f'{_ledger_name()}/AGENTS.md is not there')
 
     git_here = (root / '.git').exists()
     driver = _registered_driver(root) if git_here else ''
     if git_here:
         if not driver:
-            gaps.append('合并驱动没登记')
+            gaps.append('the merge driver is not registered')
         elif not driver.startswith('pf '):
-            gaps.append('合并驱动登记的是绝对形式（搬动 checkout 之后要重登记）')
+            gaps.append('the merge driver is registered in its absolute form '
+                        '(it needs re-registering after the checkout moves)')
 
     for gap in gaps:
         print(f'  · {gap}')
     if not gaps:
-        print('  · 记录目录、使用约定、合并驱动都在位')
+        print('  · the ledger, the usage note and the merge driver are all in place')
     elif fix:
-        print('  → 跑一次 `init` 补齐（它认得已经在的记录，重复跑没有副作用）')
+        print('  → run `init` once to fill them in (it recognizes what is already there, and '
+              're-running has no side effect)')
         code = _run(str(STATE_MANAGE), 'init', '--project', str(root),
                     '--commit' if _is_tracked(root) else '--local')
         if code != 0:
             problems += 1
         else:
             for gap in gaps:
-                print(f'  ✓ {gap} —— 已补齐')
+                print(f'  ✓ {gap} -- filled in')
     else:
-        print('  （`pf doctor --fix` 可以补齐）')
+        print('  (`pf doctor --fix` can fill them in)')
 
     done = not problems and (not gaps or fix)
-    print('全部体检项通过。' if done else f'{problems + len(gaps)} 项待办。')
+    print('every health check passed.' if done else f'{problems + len(gaps)} item(s) left to do.')
     return 0 if done else 1
 
 
 def main(argv: list[str]) -> int:
-    # doctor 的读数是给人看的中文：按 UTF-8 出去，别吃控制台代码页（这台机器 GBK）那一套。
+    # doctor's readings go out as UTF-8: otherwise the console code page (GBK on this machine)
+    # writes the bytes wrong, and a caller decoding them as UTF-8 blows up.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, 'reconfigure'):
             stream.reconfigure(encoding='utf-8', errors='replace')
@@ -270,7 +276,7 @@ def main(argv: list[str]) -> int:
         if name == verb:
             return _run(str(target), *((verb, *rest) if keep_name else rest))
 
-    print(f'pf: 不认识 `{verb}`。\n', file=sys.stderr)
+    print(f'pf: does not recognize `{verb}`.\n', file=sys.stderr)
     print(usage(), file=sys.stderr)
     return 2
 

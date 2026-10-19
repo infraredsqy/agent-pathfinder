@@ -49,11 +49,13 @@ def _host():
 def resolve_spawner(project, cycle_id: str | None, cli_value: str | None = None) -> Path:
     """Which spawner opens this dispatch's session: the most specific answer wins.
 
-    `--spawner`（调用方这一次的点名叫什么就是什么）> 这条线自己的 `spawner` 策略（
-    `pf cycle policy <cycle> spawner dsh|zcode`，随线记录走）> `DSH_CONDUCT_SPAWNER`（这台机器）
-    > 宿主自认 > `dsh`。线没配策略、调用没带旗子，落回 `SPAWNER_SCRIPT` —— 没配的线行为不变。
-    `SPAWNER_SCRIPT` 而不是现算宿主：它是入口那一道可替换的缝（`seam.bind` 的约定），替换它的
-    调用方在线策略缺席时仍被尊重。
+    `--spawner` (whatever the caller names this once) > this line's own `spawner` policy
+    (`pf cycle policy <cycle> spawner dsh|zcode`, which rides along with the line's record) >
+    `DSH_CONDUCT_SPAWNER` (this machine) > the host's own answer > `dsh`. A line with no policy and a
+    call with no flag fall back to `SPAWNER_SCRIPT` -- an unconfigured line behaves unchanged.
+    `SPAWNER_SCRIPT` rather than working out the host now: it is the replaceable seam at the entry
+    (the `seam.bind` convention), so a caller that replaces it is still honoured when a line policy
+    is absent.
     """
     host = _host()
     if cli_value:
@@ -73,8 +75,9 @@ def _snapshot(project: Path, cycle_id: str) -> tuple:
 
     The cycle's hand (which nodes, collectively), where it points, and its status -- in a
     one-node-per-slot pipeline those are the only things a command may move. One shape for both
-    answers: 这条线不在盘上时三个位置照样在，只是每个位置都答「没有」（`None`）—— 调用方按位置读到的
-    始终是同一件事，不会读到另一个形状里含义错开的那一格。
+    answers: when the line is not on disk the three positions are still there, each answering
+    "nothing" (`None`) -- a caller reading by position always reads the same thing, and never the
+    cell of another shape whose meaning has shifted.
     """
     state = load_state(project)
     cycle = find_cycle(state, cycle_id)
@@ -148,9 +151,11 @@ def _claim_spawn(project: Path, cycle_id: str, node_id: str) -> tuple[bool, Path
                 claim.unlink()
             except OSError:
                 return False, claim
-            # 复查与重建是同一步：下一圈直接用 O_CREAT|O_EXCL 再建，路径确实消失了才会成功；
-            # 若已被另一名接管者抢先重建，open 当场 FileExistsError，那一圈会重读新 claim 的
-            # pid 与 mtime、从头顶重走整段判定。三轮打满就带拒绝返回。
+            # The re-check and the rebuild are one step: the next round creates again with
+            # O_CREAT|O_EXCL, which only succeeds once the path is really gone; if another taker
+            # rebuilt it first, open raises FileExistsError on the spot, and that round re-reads the
+            # new claim's pid and mtime and walks the whole judgement again from the top. Three
+            # rounds and it returns with the refusal.
     return False, claim
 
 
@@ -240,9 +245,10 @@ def clean_launch_dir(project: Path, cycle_id: str, node_id: str) -> None:
     """Mark one node's launch dir as taken: its session is running.
 
     Called ONLY after a successful spawn. The prompt goes (the session has it), the claim goes (that
-    dispatch is over), and a `started` stamp stays behind —— 一条线握着几格时，收尾会把「手里的
-    每一格」重规划成同一份派发，而这枚记号就是「这一格的会话已经开过了」那件事的落点：没有它，
-    同一个节点会被再交给 spawner 一次，同一个节点上开出两个会话。
+    dispatch is over), and a `started` stamp stays behind -- when a line holds several slots, the
+    close re-plans "every slot in hand" into the same dispatch, and this stamp is the landing point
+    for "this slot's session has already been opened": without it, the same node would be handed to
+    the spawner again and two sessions would boot onto one node.
 
     A failed spawn is the other case: the prompt file is what a human retries by hand, so it has to
     survive -- which is why this runs only on the success path. The directory itself stays as the
@@ -268,8 +274,8 @@ def _prune_launch_dirs(project: Path, cycle_id: str) -> None:
     """Drop the launch dirs of the nodes this cycle no longer holds.
 
     A node whose session is running needs its footprint kept (that is where the stamp lives), so the
-    directory outlives the spawn and is reaped here instead. 一个节点离开手里就在收尾那一拍，而收尾
-    后面紧跟的就是派发：扫一遍的时机正好。
+    directory outlives the spawn and is reaped here instead. A node leaves the hand on the close
+    beat, and the dispatch follows right after it: the moment to sweep is exactly here.
     """
     import shutil
     try:
@@ -342,7 +348,8 @@ def apply(project, cycle_id: str | None = None, decision: str | None = None,
     if prompts:
         # Every dispatch carries one prompt per node in hand; writing them is not conditional on
         # there being commands to run (a multi-node dispatch has none -- the pins already ran).
-        # 已经在跑的那一格跳过：prompt 是「等着开」的记号，补回来就等于说它还没开。
+        # Skip the slot that is already running: the prompt is the "waiting to be opened" stamp, and
+        # putting it back says it has not opened yet.
         for item in prompts:
             if not item.get('prompt_text'):
                 continue
@@ -416,9 +423,11 @@ def apply(project, cycle_id: str | None = None, decision: str | None = None,
         follow['applied'] = True
         follow['opened_node'] = action.get('node_id')
         follow['did'] = action.get('did', []) + follow.get('did', [])
-        # 开节点时捎带的那句话跟着一起走：调用方拿到的是重规划出来的那一条 dispatch，开节点动作
-        # 本身到不了他手上，落在那儿的话就没人读得到（例如「点名要跑的节点不在过滤集里」）。
-        # 维护节点那条路更甚：它插进来的理由只写在这个动作的 note 上，丢在这里就没人读得到了。
+        # The sentence the open carried rides along: what the caller gets is the re-planned dispatch,
+        # and the open_node action itself never reaches him, so anything left there would be read by
+        # nobody (for one, "the node named to run is not in the filter set").
+        # The maintenance node's road is even more so: the reason it was inserted is written only on
+        # this action's note, and dropping it here would leave it unread.
         spoken = (action.get('follow') or {}).get('note') or action.get('note')
         if spoken:
             follow['note'] = spoken

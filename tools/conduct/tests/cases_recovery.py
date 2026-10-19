@@ -32,10 +32,10 @@ class TestRetry(Base):
         """A `wait` that cannot say how to unwind itself is a dead end, so the note carries both
         commands of the documented retry."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         sb.next()                                   # nothing reported yet: a node in flight
-        sb.write_signal('cyc', NODE, 'pending', '重试已备好')
+        sb.write_signal('cyc', NODE, 'pending', 'retry is ready')
 
         action = sb.next()
 
@@ -47,12 +47,12 @@ class TestRetry(Base):
         """The whole retry, driven as processes: the stale ticket is gone, so the next reader
         answers `dispatch` for that same node instead of calling it finished."""
         sb = self.make(cli=True)
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         sb.next()
-        sb.write_signal('cyc', NODE, 'failed', '第一次没做出来')
+        sb.write_signal('cyc', NODE, 'failed', 'the first run produced nothing')
 
-        sb._tool('cycle', 'retry', 'cyc', NODE, '--summary', '重试', cli=True)
+        sb._tool('cycle', 'retry', 'cyc', NODE, '--summary', 'retry', cli=True)
         self.assertEqual(sb.read_signal('cyc', NODE)['status'], 'pending')
 
         sb.signal_path('cyc', NODE).unlink()        # the retry's own state, cleared for good
@@ -64,19 +64,21 @@ class TestRetry(Base):
         self.assertEqual(sb.path(), [], 'the retry must not rewrite the accounting')
 
     def test_dropping_the_ticket_is_what_lets_the_retry_be_dispatched(self):
-        """重试的最后一步：把那张条子拿掉。
+        """The retry's last step: take that note out.
 
-        `running` 也是红灯 —— 只把它重写一遍、不拿掉，`next` 永远答 `wait`（wait 的 note 里列的
-        就是那三条，`--drop` 在头一条上）。拿掉之后同一个节点重新读作「还没报」，重试才起得来。
+        `running` is a red light too -- rewriting it without taking it out leaves `next` answering
+        `wait` forever (the wait note lists exactly those three commands, and `--drop` is on the
+        first of them). Once it is out, the same node reads as "nothing reported yet" again, and
+        only then does the retry get up.
         """
         sb = self.make(cli=True)
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         sb.next()
-        sb.write_signal('cyc', NODE, 'pending', '上一次没跑完')
+        sb.write_signal('cyc', NODE, 'pending', 'the previous run did not finish')
 
         sb._tool('cycle', 'retry', 'cyc', NODE, '--drop', cli=True)
-        self.assertIsNone(sb.read_signal('cyc', NODE), '--drop 之后盘上不该还有条子')
+        self.assertIsNone(sb.read_signal('cyc', NODE), 'no note may be left on disk after --drop')
 
         sb._tool('cycle', 'hold', 'cyc', NODE, cli=True)
         action = sb.plan()
@@ -88,40 +90,44 @@ class TestRetry(Base):
         """Retrying later never rewrites what happened: the step keeps the result the ticket
         reported, and the DAG status is put back only by the tool that owns it."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         sb.next()
-        sb.write_signal('cyc', NODE, 'failed', '没做出来')
+        sb.write_signal('cyc', NODE, 'failed', 'produced nothing')
         sb.close_round(NODE)
 
         self.assertEqual(sb.path()[0]['result'], 'failed')
         self.assertEqual(sb.dag_status(NODE), 'shelved')
 
     def test_the_redone_node_hands_off_again_and_the_path_keeps_both_verdicts(self):
-        """§8 的重做链走到底：重做的会话再次交条子不再被拒。
+        """§8's redo chain walked to the end: the redone session's second note is not refused
+        again.
 
-        failed 的判决留在 path 上作历史，重做的 completed 追加为第二步——行走的重访是合法的。
-        重做交付发生在线停着的时候：只做登记（收格、标 DAG），线的状态不写。
+        The `failed` verdict stays on the path as history, and the redo's `completed` is appended
+        as a second step -- a walk revisiting a node is legal. The redo's delivery happens while
+        the line is stopped: it only records (closes the slot, marks the DAG) and writes no line
+        status.
         """
         sb = self.make(cli=True)
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         sb.next()
-        sb.handoff('cyc', NODE, 'failed', summary='第一次没做出来')
+        sb.handoff('cyc', NODE, 'failed', summary='the first run produced nothing')
         sb.next_cli('--after', NODE)
         self.assertEqual(sb.path()[0]['result'], 'failed')
 
-        sb.add_node(NODE, '界面设计', status='todo', mode='auto')   # revive：放回 todo
+        sb.add_node(NODE, 'UI design', status='todo', mode='auto')   # revive: put it back to todo
         sb._tool('cycle', 'retry', 'cyc', NODE, '--drop', cli=True)
         sb._tool('cycle', 'hold', 'cyc', NODE, cli=True)
 
-        sb.handoff('cyc', NODE, 'completed', summary='重做成了')
+        sb.handoff('cyc', NODE, 'completed', summary='the redo delivered')
         sb.next_cli('--after', NODE)
 
         self.assertEqual([s['result'] for s in sb.path()], ['failed', 'completed'])
         self.assertEqual(sb.dag_status(NODE), 'completed')
         self.assertEqual(sb.cycle()['status'], 'inactive',
-                         '停着的线上重做交付只做登记；线的状态保持人给它的那个')
+                         'a redo delivery on a stopped line only records; the line keeps the '
+                         'status it was given')
 
 
 class TestHandoff(Base):
@@ -134,7 +140,7 @@ class TestHandoff(Base):
 
     def started(self):
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         return sb, sb.next()
 
@@ -145,7 +151,7 @@ class TestHandoff(Base):
     def test_it_writes_the_ticket_and_says_how_to_close_the_node(self):
         sb, first = self.started()
 
-        proc = sb.handoff('cyc', NODE, 'completed', 'pf-conduct 做完了', self.outputs())
+        proc = sb.handoff('cyc', NODE, 'completed', 'pf-conduct finished', self.outputs())
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn('the node is not closed yet', proc.stdout)
@@ -169,11 +175,11 @@ class TestHandoff(Base):
         node was attempted, and the closing call is what reads it."""
         sb, first = self.started()
 
-        proc = sb.handoff('cyc', NODE, 'failed', '我什么都没做出来',
+        proc = sb.handoff('cyc', NODE, 'failed', 'I produced nothing',
                           {'deliverable': '', 'acceptance': []})
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(sb.read_signal('cyc', NODE)['summary'], '我什么都没做出来')
+        self.assertEqual(sb.read_signal('cyc', NODE)['summary'], 'I produced nothing')
         self.assertEqual(sb.current_node(), NODE)
         self.assertEqual(sb.close_round(NODE)['action'], 'stop_pipeline')
         self.assertEqual(sb.dag_status(NODE), 'shelved')
@@ -192,10 +198,10 @@ class TestHandoff(Base):
         """Until the node is closed, reporting again is the worker correcting itself -- and the
         ticket it leaves is the one the closing call reads."""
         sb, first = self.started()
-        sb.handoff('cyc', NODE, 'completed', '第一次', self.outputs())
-        sb.handoff('cyc', NODE, 'completed', '第二次', self.outputs())
+        sb.handoff('cyc', NODE, 'completed', 'first time', self.outputs())
+        sb.handoff('cyc', NODE, 'completed', 'second time', self.outputs())
 
-        self.assertEqual(sb.read_signal('cyc', NODE)['summary'], '第二次')
+        self.assertEqual(sb.read_signal('cyc', NODE)['summary'], 'second time')
         self.assertEqual(sb.path(), [])
 
     def test_a_ticket_with_no_session_spawned_leaves_no_marker(self):
@@ -206,46 +212,53 @@ class TestHandoff(Base):
         self.assertFalse((sb.root / '.pf' / 'meta' / 'CONDUCT-CALLBACK-FAILED-cyc.json').exists())
 
     def test_the_ticket_write_is_the_only_thing_that_lands(self):
-        """交条子这一拍只落那一张条子：手里另一格不因为这一趟而被补上 prompt。
+        """Handing in a note lands that one note and nothing else: the other slot in hand does not
+        get a prompt filled in because of this run.
 
-        另一格此刻既没有条子、也没有 `started` 记号 —— 正是「补写下一份 prompt」会挑中的那个
-        状态。交条子的命令读一遍下一步就交回去，落 prompt 是收尾那一拍的事。
+        That other slot has neither a note nor a `started` stamp right now -- exactly the state
+        that "write the next prompt in" would pick. The handoff command reads the next step once
+        and hands it back; landing a prompt is the close's job.
         """
         sb = self.make()
-        sb.add_node(NODE, '甲', mode='auto')
-        sb.add_node(NODE2, '乙', mode='auto')
+        sb.add_node(NODE, 'A', mode='auto')
+        sb.add_node(NODE2, 'B', mode='auto')
         sb.start_cycle(tags=['coding'])
         sb._tool('cycle', 'hold', 'cyc', NODE2, cli=True)
-        self.assertEqual(sorted(sb.holding_ids()), sorted([NODE, NODE2]), '两格没都在手里')
+        self.assertEqual(sorted(sb.holding_ids()), sorted([NODE, NODE2]),
+                         'both slots are not in hand')
 
         proc = sb.handoff('cyc', NODE, 'completed', 'done', self.outputs())
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         launch = sb.root / '.pf' / 'meta' / 'launch'
         written = sorted(p.parts[-2] for p in launch.rglob('prompt.txt')) if launch.exists() else []
-        self.assertEqual(written, [], '交条子这一拍写出了下一份 prompt')
-        self.assertIsNone(sb.read_signal('cyc', NODE2), '另一格凭空多了一张条子')
-        self.assertEqual(sb.path(), [], '这一拍动了线的路径')
-        self.assertEqual(sb.holding_ids(), [NODE, NODE2], '这一拍动了手里那两格')
+        self.assertEqual(written, [], 'handing in a note wrote the next prompt')
+        self.assertIsNone(sb.read_signal('cyc', NODE2), 'the other slot grew a note out of nowhere')
+        self.assertEqual(sb.path(), [], "this run touched the line's path")
+        self.assertEqual(sb.holding_ids(), [NODE, NODE2],
+                         'this run touched the two slots in hand')
 
     def test_it_reads_the_next_step_instead_of_driving_it(self):
-        """交条子读下一步走的是只读的 `plan`；写方那条 `record` 在这条命令的路外。
+        """Handing in a note reads the next step through the read-only `plan`; the writer's
+        `record` is outside this command's path.
 
-        `record` 是 conductor 的机械例行：它 apply、它替手里的格补 prompt。交条子的会话读一遍
-        下一步就交回去 —— 收格、挑下一格、落下一份 prompt 都是收尾那一拍的事。它自己落笔的那一处
-        是降级标记（`marker.record`）：条子写不下去时留给人工接手的记号。
+        `record` is the conductor's mechanical routine: it applies, and it fills prompts in for
+        the slots in hand. The handoff session reads the next step once and hands it back --
+        closing a slot, picking the next one and landing the next prompt are the close's job. The
+        one place it writes itself is the degradation marker (`marker.record`): the stamp left for
+        a human to take over when the note cannot be written.
         """
 
         def receiver(node):
-            """被调用那一头是怎么写的（`marker.record` 里的 `marker`）。"""
+            """How the receiving end is written (`marker` inside `marker.record`)."""
             return getattr(node.value, 'id', getattr(node.value, 'attr', ''))
 
         calls = {f'{receiver(node.func)}.{node.func.attr}'
                  for node in ast.walk(ast.parse(HANDOFF_PY.read_text(encoding='utf-8')))
                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
         self.assertEqual(sorted(call for call in calls if call.endswith('.record')), ['marker.record'],
-                         'handoff.py 调上了写方那条 record：交条子会落笔')
-        self.assertIn('pipeline.plan', calls, 'handoff.py 没读下一步')
+                         'handoff.py calls the writer\'s record: handing in a note would write itself')
+        self.assertIn('pipeline.plan', calls, 'handoff.py did not read the next step')
 
 
 class TestSignalGuards(Base):
@@ -253,7 +266,7 @@ class TestSignalGuards(Base):
 
     def test_the_payload_carries_the_cycle_and_the_node(self):
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
 
         run_signal(sb.root, 'cyc', NODE, 'completed', 'done', {'deliverable': 'x'})
@@ -267,12 +280,12 @@ class TestSignalGuards(Base):
 
     def test_a_running_ticket_is_a_wait_and_never_a_green_light(self):
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         sb.next()
         # `signal.py` writes only completed / failed / stopped; a `running` ticket is what
         # `cycle retry` leaves behind while a retry is being prepped.
-        sb.write_signal('cyc', NODE, 'pending', '还在跑')
+        sb.write_signal('cyc', NODE, 'pending', 'still running')
 
         action = sb.next()
 
@@ -284,7 +297,7 @@ class TestSignalGuards(Base):
         """A broken file on disk is a broken chain: the tool stops instead of guessing, and it
         writes nothing while doing so."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         sb.next()
         sb.write_raw_signal('cyc', NODE, payload='{ this is not json')
@@ -296,7 +309,7 @@ class TestSignalGuards(Base):
 
     def test_an_absent_ticket_means_the_node_is_still_being_dispatched(self):
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         sb.next()
         self.assertIsNone(sb.read_signal('cyc', NODE))
@@ -304,17 +317,19 @@ class TestSignalGuards(Base):
 
 
 class TestCleanTemp(Base):
-    """`clean-temp`：扫每一格自己的 `temp/`，被某条线握着的那一格跳过。
+    """`clean-temp`: sweeps each slot's own `temp/`, skipping the slot a line is holding.
 
-    「谁被握着」是从这个项目的 `state.json` 读出来的事实，走的是读记录的那道门：读不懂就停下，
-    一个 temp 都不动。把它读成「没有一个节点被握着」，`--yes` 就会照着这句话把正在用的 temp 删掉。
+    "Who is held" is a fact read out of this project's `state.json`, through the gate that reads
+    the records: if it cannot be read, the command stops and touches no temp at all. Reading it as
+    "no node is held" would let `--yes` delete a temp that is in use, on the strength of that
+    reading.
     """
 
     def test_a_held_nodes_temp_survives_the_sweep_unless_forced(self):
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
-        sb.add_temp(NODE)                       # 正在干活的那一格
+        sb.add_temp(NODE)                       # the slot that is working right now
 
         proc = sb.clean_temp(yes=True)
         self.assertEqual(0, proc.returncode, proc.stderr)
@@ -325,38 +340,42 @@ class TestCleanTemp(Base):
 
     def test_an_unreadable_state_is_not_read_as_nobody_holds_anything(self):
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         sb.add_temp(NODE)
         (sb.root / '.pf' / 'state.json').write_text('{ not json', encoding='utf-8')
 
         proc = sb.clean_temp(yes=True, check=False)
 
-        self.assertNotEqual(0, proc.returncode, '读不懂 state，这一趟不许当它没说过话')
+        self.assertNotEqual(0, proc.returncode,
+                            'an unreadable state must not be taken as saying nothing')
         self.assertIn('state.json', proc.stderr)
-        self.assertTrue(sb.temp_dir(NODE).is_dir(), 'state.json 读不懂时一个 temp 都不许动')
+        self.assertTrue(sb.temp_dir(NODE).is_dir(),
+                        'with state.json unreadable, no temp may be touched')
 
     def test_the_listing_run_names_what_it_would_sweep_and_removes_nothing(self):
-        """不给 `--yes`：把可清的念一遍就收，盘上一个字节都不动 —— 包括真会被清掉的那一格。"""
+        """Without `--yes`: it lists what could be swept and stops, not moving a byte on disk --
+        including the slot that really would be swept."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.add_node(NODE2, '另一格', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
+        sb.add_node(NODE2, 'another slot', mode='auto')
         sb.start_cycle()
-        sb.add_temp(NODE, 'held.txt')                  # 被握着：只念，不扫
-        sb.add_temp(NODE2, 'free.txt')                 # 没被握着：这一趟也不扫
+        sb.add_temp(NODE, 'held.txt')                  # held: named only, not swept
+        sb.add_temp(NODE2, 'free.txt')                 # not held: this run does not sweep it either
         before = sb.tree_hashes()
 
         proc = sb.clean_temp()
 
         self.assertEqual(0, proc.returncode, proc.stderr)
-        self.assertIn(NODE2[:8], proc.stdout, '可清的那一格该被念到')
-        self.assertIn(NODE[:8], proc.stdout, '跳过的那一格也该被念到')
-        self.assertEqual(before, sb.tree_hashes(), '没有 --yes 的一趟动过盘')
+        self.assertIn(NODE2[:8], proc.stdout, 'the sweepable slot must be named')
+        self.assertIn(NODE[:8], proc.stdout, 'the skipped slot must be named too')
+        self.assertEqual(before, sb.tree_hashes(), 'a run without --yes moved something on disk')
 
     def test_a_named_node_is_swept_and_nothing_outside_its_temp_moves(self):
-        """`--node` 只扫点名的那一格：spec、state.json、ideas.json 与别的节点的 temp 一字不动。"""
+        """`--node` sweeps only the named slot: the spec, state.json, ideas.json and other nodes'
+        temps do not move a character."""
         sb = self.make()
-        for uid, title in ((NODE, '写代码'), (NODE2, '写文案'), (NODE3, '第三格')):
+        for uid, title in ((NODE, 'Write code'), (NODE2, 'Write copy'), (NODE3, 'third slot')):
             sb.add_node(uid, title, mode='auto')
         sb.start_cycle()
         held = sb.current_node()
@@ -370,10 +389,10 @@ class TestCleanTemp(Base):
         proc = sb.clean_temp(node=target, yes=True)
 
         self.assertEqual(0, proc.returncode, proc.stderr)
-        self.assertFalse(sb.temp_dir(target).exists(), '点名的那一格该被扫掉')
-        self.assertTrue(sb.temp_dir(held).is_dir(), '被握着的另一格不该动')
-        self.assertTrue(sb.temp_dir(untouched).is_dir(), '没点名的那一格不该动')
+        self.assertFalse(sb.temp_dir(target).exists(), 'the named slot must be swept')
+        self.assertTrue(sb.temp_dir(held).is_dir(), 'the other, held slot must not move')
+        self.assertTrue(sb.temp_dir(untouched).is_dir(), 'the unnamed slot must not move')
         self.assertEqual(ledger, {path: Path(path).read_bytes() for path in ledger},
-                         'temp 之外的记录被动了')
+                         'records outside temp were touched')
 
 

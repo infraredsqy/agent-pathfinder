@@ -1,13 +1,16 @@
-"""一条线的 `parallel` 策略：开局同时握几格、收尾怎么把腾出来的格子补上。
+"""A line's `parallel` policy: how many slots it holds at the start, and how a close refills the
+slots it freed.
 
-上限写在线自己身上（`policies.parallel`），开局那一次挑人与以后每一次收尾补格取的是同一个数：
-一格里派发的是「现在握着的所有节点」，补格只补空位（`parallel` 减还握着的），图里给不出就不补。
+The cap lives on the line itself (`policies.parallel`), and the start's pick and every later
+close's refill read the same number: one slot dispatches "every node in hand right now", and a
+refill fills only the free slots (`parallel` minus what is still held); if the graph cannot supply
+them, nothing is filled.
 
-两条线之间的那些机械闸（写盘互斥锁、worktree 回主树、跨 cycle 的 pin 守卫、SPAWN.claim）
-在 `cases_parallel.py`。
+The mechanical gates between two lines (the on-disk mutex, the worktree return to the main tree,
+the cross-cycle pin guard, SPAWN.claim) are in `cases_parallel.py`.
 
-    python conduct/tests/cases_parallel_slots.py       # 这个文件单独跑
-    python conduct/tests/test_conduct_pipeline.py      # 跟全套件一起
+    python conduct/tests/cases_parallel_slots.py       # run this file alone
+    python conduct/tests/test_conduct_pipeline.py      # with the whole suite
 """
 from __future__ import annotations
 
@@ -23,38 +26,43 @@ __all__ = ['TestParallelSlots']
 
 
 class TestParallelSlots(Base):
-    """一条线的 `parallel` 策略：它同时握几个节点，收尾腾出来的格子当场补上。"""
+    """A line's `parallel` policy: how many nodes it holds at once, and the slots a close frees are
+    refilled on the spot."""
 
     def two_ready(self, parallel=None):
-        """两个互不依赖的就绪节点：`parallel` 决定开局时同时握几个。"""
+        """Two ready nodes with no dependency between them: `parallel` decides how many are held
+        at the start."""
         sb = self.make()
-        sb.add_node(NODE, '甲', mode='auto')
-        sb.add_node(NODE2, '乙', mode='auto')
+        sb.add_node(NODE, 'A', mode='auto')
+        sb.add_node(NODE2, 'B', mode='auto')
         sb.start_cycle(tags=['coding'])
         if parallel is not None:
             sb.set_policy('cyc', 'parallel', parallel)
         return sb
 
     def test_the_default_is_one_slot(self):
-        """没配 `parallel` 就是 1：抽签按旧样子一次一格，多出来的格子不自己开。"""
+        """With no `parallel` configured it is 1: the draw runs one slot at a time as before, and
+        extra slots do not open on their own."""
         sb = self.two_ready()
         cycle = sb.cycle()
         self.assertEqual(cycle.get('policies', {}).get('parallel', 1), 1)
         self.assertEqual(len(sb.holding_ids()), 1, 'the default must pin exactly one node')
 
     def test_the_start_pins_the_slots_the_line_states(self):
-        """开局就说清这条线握几格：`cycle start --parallel 2` 当场握上两格，一次派发两份 prompt。
+        """The start says how many slots the line holds: `cycle start --parallel 2` pins two slots
+        on the spot and dispatches two prompts at once.
 
-        同一个数落在 `policies.parallel` 上（`cycle policy` 写的是那一格），所以开局这一次挑到
-        几格、以后每一次收尾补几格取的是同一个数。
+        The same number lands on `policies.parallel` (`cycle policy` writes that one), so the
+        start's pick and every later close's refill read the same number.
         """
         sb = self.make()
-        sb.add_node(NODE, '甲', mode='auto')
-        sb.add_node(NODE2, '乙', mode='auto')
+        sb.add_node(NODE, 'A', mode='auto')
+        sb.add_node(NODE2, 'B', mode='auto')
         sb.start_cycle(tags=['coding'], parallel=2)
 
         self.assertEqual(sb.cycle()['policies']['parallel'], 2)
-        self.assertEqual(sorted(sb.holding_ids()), sorted([NODE, NODE2]), '开局该握上两格')
+        self.assertEqual(sorted(sb.holding_ids()), sorted([NODE, NODE2]),
+                         'the start must pin both slots')
 
         action = sb.next()
 
@@ -64,23 +72,26 @@ class TestParallelSlots(Base):
             self.assertTrue(Path(item['prompt']).is_file(), item['prompt'])
 
     def test_the_start_refuses_a_parallel_that_is_not_a_positive_integer(self):
-        """开局给的那个数按 `cycle policy` 的同一个口径判：0 当场被拒，`off` 落回缺省。"""
+        """The number given at the start is judged by the same rule as `cycle policy`: 0 is
+        refused on the spot, and `off` falls back to the default."""
         sb = self.make()
-        sb.add_node(NODE, '甲', mode='auto')
-        sb.add_node(NODE2, '乙', mode='auto')
+        sb.add_node(NODE, 'A', mode='auto')
+        sb.add_node(NODE2, 'B', mode='auto')
 
         refused = sb.start_cycle(tags=['coding'], parallel=0, check=False)
         self.assertNotEqual(refused.returncode, 0)
         self.assertIn('parallel', refused.stderr)
         self.assertEqual([], [c['id'] for c in (sb.state() or {'cycles': []})['cycles']],
-                         '被拒的开局不该留下一条线')
+                         'a refused start must not leave a line behind')
 
         sb.start_cycle(tags=['coding'], parallel='off')
-        self.assertEqual(len(sb.holding_ids()), 1, '`off` 落回缺省：一次一格')
+        self.assertEqual(len(sb.holding_ids()), 1,
+                         '`off` falls back to the default: one slot at a time')
         self.assertNotIn('parallel', sb.cycle().get('policies') or {})
 
     def test_parallel_two_pins_two_and_dispatches_one_action_for_both(self):
-        """`parallel=2`：开局把两个就绪节点都握上，一次派发同时开出两份 prompt。"""
+        """`parallel=2`: the start pins both ready nodes, and one dispatch opens both prompts at
+        once."""
         sb = self.two_ready(parallel=2)
         # the policy lands after the start: pin the second slot explicitly
         sb.set_current_node(NODE2)
@@ -93,11 +104,12 @@ class TestParallelSlots(Base):
         self.assertEqual(sorted(sb.holding_ids()), sorted([NODE, NODE2]))
 
     def test_a_close_fills_the_slot_it_freed(self):
-        """手里两格、关掉一格：填充把下一格就绪的补上 —— 线自己接着跑，不留空位。"""
+        """Two slots in hand, one closed: the fill takes up the next ready one -- the line carries
+        on by itself, with no empty slot left."""
         sb = self.make()
-        sb.add_node(NODE, '甲', mode='auto')
-        sb.add_node(NODE2, '乙', mode='auto')
-        sb.add_node(NODE3, '丙', mode='auto')
+        sb.add_node(NODE, 'A', mode='auto')
+        sb.add_node(NODE2, 'B', mode='auto')
+        sb.add_node(NODE3, 'C', mode='auto')
         sb.start_cycle(tags=['coding'])
         sb.set_policy('cyc', 'parallel', 2)
         sb.set_current_node(NODE2)
@@ -106,8 +118,9 @@ class TestParallelSlots(Base):
 
         first = sb.close_round(NODE)
 
-        # 关掉一格腾出空位，而图里还有就绪的活：同一次收尾把它补上并派发 —— 手里重新是满的，
-        # 派发那一格带的是「现在握着的所有节点」（刚补上的那个在 `nodes` 里）。
+        # Closing one slot frees a place and the graph still has ready work: the same close fills
+        # it and dispatches -- the hand is full again, and the dispatch carries "every node in
+        # hand right now" (the freshly filled one is in `nodes`).
         self.assertEqual(first['action'], 'dispatch')
         self.assertEqual(first['nodes'][0]['node_id'], NODE2,
                          'the dispatch names every node in hand, not only the fresh one')
@@ -115,15 +128,17 @@ class TestParallelSlots(Base):
                          'the slot the close freed must be refilled')
 
     def test_a_close_fills_every_free_slot(self):
-        """手里一格、关掉它时图里有两个就绪：三个空位该补两个 —— 两个都得落盘。
+        """One slot in hand; closing it leaves two ready in the graph: of the three free slots two
+        must be filled -- and both must land on disk.
 
-        空位是 `parallel` 减手里还握着的；名单取到几个就 pin 几个。只 pin 名单头一个的话，
-        第二个格会静静地空着：动作里的 `nodes` 报了它，手里的手却没有它。
+        The free count is `parallel` minus what is still held; as many are pinned as the list
+        yields. Pinning only the head of that list would leave the second slot quietly empty: the
+        action's `nodes` would name it while the hand would not hold it.
         """
         sb = self.make()
-        for uid, name in ((NODE, '甲'), (NODE2, '乙'), (NODE3, '丙')):
+        for uid, name in ((NODE, 'A'), (NODE2, 'B'), (NODE3, 'C')):
             sb.add_node(uid, name, mode='auto')
-        sb.start_cycle(tags=['coding'])           # 开局按缺省 parallel=1 只钉一个
+        sb.start_cycle(tags=['coding'])           # the start pins one only, on the default parallel=1
         sb.set_policy('cyc', 'parallel', 3)
         closing = sb.current_node()
         rest = sorted({NODE, NODE2, NODE3} - {closing})
@@ -139,21 +154,23 @@ class TestParallelSlots(Base):
             self.assertTrue(Path(item['prompt']).is_file(), item['prompt'])
 
     def test_a_close_fills_the_free_slots_and_no_more(self):
-        """手里满三格、关掉一格：只补腾出来的那一格，线不会越过 `parallel`。
+        """Three slots in hand, one closed: only the freed slot is filled, and the line never goes
+        past `parallel`.
 
-        补格不是无脑补三个 —— 空位跟手里还在跑的格数挂钩（`parallel` 减还握着的），
-        图里给得出几个就补几个，给不出就不补。
+        Filling is not blindly three: the free count is tied to how many slots are still running
+        (`parallel` minus what is still held), so as many are filled as the graph can supply, and
+        none when it cannot.
         """
         sb = self.make()
         four = (NODE, NODE2, NODE3, 'dddddddd-4444-4444-8444-dddddddddddd')
         for i, uid in enumerate(four):
-            sb.add_node(uid, f'节点 {i}', mode='auto')
+            sb.add_node(uid, f'Node {i}', mode='auto')
         sb.start_cycle(tags=['coding'])
         sb.set_policy('cyc', 'parallel', 3)
         closing = sb.current_node()
         rest = [u for u in four if u != closing]
         sb.set_current_node(rest[0])
-        sb.set_current_node(rest[1])              # 手里三格（满）
+        sb.set_current_node(rest[1])              # three slots in hand (full)
         sb.write_signal('cyc', closing, 'completed', 'done')
 
         action = sb.close_round(closing)
@@ -164,15 +181,18 @@ class TestParallelSlots(Base):
         self.assertEqual(sorted(n['node_id'] for n in action['nodes']), sorted(rest))
 
     def test_a_close_with_nothing_to_fill_keeps_the_line_in_service(self):
-        """手里两格、图里没有能补的：收掉这一格，线留在服务中 —— 那一格的收尾自己接着跑。
+        """Two slots in hand, nothing in the graph to fill with: that slot is closed and the line
+        stays in service -- the slot's own close carries on.
 
-        补不上有两种：图里真没活了（线停手等人），和线里还有别的节点在飞（这条线没停，接力棒在
-        那些节点自己的收尾上）。后者也 park 的话，它们的收尾只做登记，腾出来的活再没人接。
+        Failing to fill has two shapes: the graph really has no work left (the line stops and
+        waits for a human), and other nodes of this line are still in flight (the line has not
+        stopped; the baton is on those nodes' own closes). If the latter parked too, their closes
+        would only record, and nobody would pick up the work they freed.
         """
         sb = self.make()
-        sb.add_node(NODE, '甲', mode='auto')
-        sb.add_node(NODE2, '乙', mode='auto')
-        sb.add_node(NODE3, '丙', mode='auto', deps=[NODE2])
+        sb.add_node(NODE, 'A', mode='auto')
+        sb.add_node(NODE2, 'B', mode='auto')
+        sb.add_node(NODE3, 'C', mode='auto', deps=[NODE2])
         sb.start_cycle(tags=['coding'])
         sb.set_policy('cyc', 'parallel', 2)
         sb.set_current_node(NODE)
@@ -182,28 +202,31 @@ class TestParallelSlots(Base):
         first = sb.close_round(NODE)
 
         self.assertEqual(first['action'], 'stop_pipeline')
-        self.assertEqual(sb.cycle()['status'], 'active', '手里还有别的节点在飞，这一格不停这条线')
+        self.assertEqual(sb.cycle()['status'], 'active',
+                         'other nodes are still in flight, so this slot does not stop the line')
         self.assertEqual(sb.holding_ids(), [NODE2])
-        self.assertIn(NODE2[:8], first['reason'], 'reason 点名手里还有谁')
+        self.assertIn(NODE2[:8], first['reason'], 'the reason names who is still held')
 
         sb.write_signal('cyc', NODE2, 'completed', 'done')
         second = sb.close_round(NODE2)
 
         self.assertEqual(second['action'], 'dispatch')
-        self.assertEqual(sb.holding_ids(), [NODE3], '那一格的收尾把丙补上并派发')
+        self.assertEqual(sb.holding_ids(), [NODE3], 'that close fills in C and dispatches')
 
     def stub(self, sb):
         """The stand-in spawner these cases aim the real spawn call at (never a host one)."""
         return sb.fake_spawner('ok-spawner.ps1')
 
     def test_a_started_node_is_never_handed_to_the_spawner_twice(self):
-        """已经开出去的那一格不再交给 spawner：收尾重规划出来的整份名单里带着它，跳过它。
+        """A slot already opened is never handed to the spawner again: the close re-plans a full
+        list, this one is in it, and it is skipped.
 
-        `started` 是成功派发留下的记号（prompt 被会话拿走、claim 撤掉、目录留着当落点）。没有
-        它，一次补格就会把在跑的兄弟节点再开一个会话 —— 同一个节点、同一个工作树，收不回来。
+        `started` is the stamp a successful dispatch leaves (the session takes the prompt, the
+        claim is withdrawn, the directory stays as the landing spot). Without it, one refill would
+        open a second session onto a running sibling -- same node, same worktree, not reclaimable.
         """
         sb = self.make()
-        for uid, name in ((NODE, '甲'), (NODE2, '乙'), (NODE3, '丙')):
+        for uid, name in ((NODE, 'A'), (NODE2, 'B'), (NODE3, 'C')):
             sb.add_node(uid, name, mode='auto')
         sb.start_cycle(tags=['coding'])
         sb.set_policy('cyc', 'parallel', 2)
@@ -215,25 +238,30 @@ class TestParallelSlots(Base):
         _opened, opened = sb.spawn_next('--cycle', 'cyc', spawner=self.stub(sb), dry_run=False)
         self.assertEqual(opened.returncode, 0, opened.stderr)
         for node in (NODE, NODE2):
-            self.assertTrue((launch / node / 'started').is_file(), f'{node[:8]}: 记号没落下')
-            self.assertFalse((launch / node / 'prompt.txt').exists(), f'{node[:8]}: prompt 该被拿走')
+            self.assertTrue((launch / node / 'started').is_file(),
+                            f'{node[:8]}: the stamp did not land')
+            self.assertFalse((launch / node / 'prompt.txt').exists(),
+                             f'{node[:8]}: the prompt must have been taken')
 
         sb.write_signal('cyc', NODE, 'completed', 'done')
         action = sb.close_round(NODE)
 
         self.assertEqual(action['action'], 'dispatch')
         self.assertEqual([n['node_id'] for n in action['nodes']], [NODE3],
-                         '派发名单里只有在等开工的那一格')
+                         'the dispatch list holds only the slot waiting to start')
         self.assertFalse((launch / NODE2 / 'prompt.txt').exists(),
-                         '在跑的乙，prompt 不该被补回来 —— 补回来就等于说它还没开')
+                         'for B, which is running, the prompt must not be filled back in -- '
+                         'filling it back in would say it had not started')
 
         action, _ = sb.spawn_next('--cycle', 'cyc', spawner=self.stub(sb), dry_run=False)
-        self.assertEqual([n['node_id'] for n in action['nodes']], [NODE3], '在跑的乙不进名单')
+        self.assertEqual([n['node_id'] for n in action['nodes']], [NODE3],
+                         'a running B does not enter the list')
 
     def test_with_every_session_in_hand_running_the_answer_is_a_wait(self):
-        """手里每一格都开出去了：`plan` 答 `wait`，派发则响亮拒掉（并把重开那一格的路念出来）。"""
+        """Every slot in hand has been opened: `plan` answers `wait`, and a dispatch refuses
+        loudly (naming the way to reopen that slot)."""
         sb = self.make()
-        sb.add_node(NODE, '甲', mode='auto')
+        sb.add_node(NODE, 'A', mode='auto')
         sb.start_cycle(tags=['coding'])
         sb.next()
         self.assertEqual(
@@ -241,16 +269,18 @@ class TestParallelSlots(Base):
 
         action = sb.plan()
 
-        self.assertEqual(action['action'], 'wait', '会话都在跑，没有可派的动作')
-        self.assertIn('条子', action['note'])
+        self.assertEqual(action['action'], 'wait',
+                         'every session is running, so there is no action to dispatch')
+        self.assertIn('wait for their notes', action['note'])
 
         proc = sb.dispatch(spawner=self.stub(sb), dry_run=False, check=False)
 
         self.assertNotEqual(proc.returncode, 0)
-        self.assertIn('cycle retry', proc.stderr, '拒绝里要给重开那一格的路')
+        self.assertIn('cycle retry', proc.stderr, 'the refusal must name the way to reopen that slot')
 
     def test_the_limit_is_the_line_own_policy(self):
-        """上限写在线自己身上：`cycle policy cyc parallel 2` 生效，0 与负数被拒。"""
+        """The cap lives on the line itself: `cycle policy cyc parallel 2` takes effect, and 0 and
+        negatives are refused."""
         sb = self.two_ready()
         sb.set_policy('cyc', 'parallel', 2)
         self.assertEqual(sb.cycle()['policies']['parallel'], 2)
@@ -258,7 +288,8 @@ class TestParallelSlots(Base):
         self.assertNotEqual(refused.returncode, 0)
 
     def test_the_dispatch_sweep_opens_one_session_per_node_it_holds(self):
-        """`dispatch <cycle>` 是一条扫射：手里每个节点各开一个会话，各自吃自己的 prompt。"""
+        """`dispatch <cycle>` is a sweep: every node in hand opens a session, each taking its own
+        prompt."""
         sb = self.two_ready(parallel=2)
         sb.set_current_node(NODE2)
         sb.next()

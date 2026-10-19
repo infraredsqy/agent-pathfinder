@@ -1,12 +1,14 @@
-"""写进池子的时刻长什么样：`discovered` / `updated_at` 都走这一棵树的那一个形状。
+"""What the moment written into the pool looks like: `discovered` / `updated_at` both carry this
+tree's one shape.
 
-形状的正本在 `tools/shared/clock.py`；下面那条正则把微秒写死，所以正本一旦退回秒级，
-记录会跟着少掉小数位，这里的断言就红 —— 用例守的是「记录里的时间戳有多细」这件事。
+The shape's source is `tools/shared/clock.py`; the regex below hard-codes microseconds, so if the
+source ever drops back to seconds the record loses its decimals along with it and the assertion here
+goes red -- this case guards how fine the timestamps in the record are.
 
-跑法（两种都行）：
+How to run (either works):
 
     python issue\tests\test_timestamps.py
-    python -m unittest discover -s issue/tests -t .      （cwd 在 tools/）
+    python -m unittest discover -s issue/tests -t .      (cwd in tools/)
 """
 
 from __future__ import annotations
@@ -23,8 +25,9 @@ from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parent.parent.parent
 TOOL = TOOLS / 'issue' / 'issue_manager.py'
-#: UTC、微秒、字面 `Z`。这里写死，不读 `clock.ISO_FMT`：读它的话，正本退回秒级时断言会跟着
-#: 一起退回，那正是这条用例要拦住的漂移。
+#: UTC, microseconds, a literal `Z`. Hard-coded here, not read from `clock.ISO_FMT`: reading it
+#: would let the assertion fall back with it once the source drops to seconds -- exactly the drift
+#: this case exists to stop.
 SHAPE = r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z'
 
 
@@ -39,7 +42,8 @@ clock = load_clock()
 
 
 class TimestampCase(unittest.TestCase):
-    """一个 init 过的空项目：条目走真命令进池，记录从盘上读回来。"""
+    """An init-ed empty project: entries enter the pool through real commands, and records are read
+    back from disk."""
 
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix='issue-clock-'))
@@ -61,15 +65,15 @@ class TimestampCase(unittest.TestCase):
         return pool['issues'][issue_id]
 
     def check(self, value: str, label: str):
-        self.assertRegex(value, SHAPE, f'{label} 的时间戳形状不对：{value!r}')
+        self.assertRegex(value, SHAPE, f"{label}'s timestamp shape is wrong: {value!r}")
         self.assertIsNotNone(datetime.strptime(value, clock.ISO_FMT),
-                             f'正本 {clock.ISO_FMT!r} 认不出 {value!r}')
+                             f'source {clock.ISO_FMT!r} does not recognize {value!r}')
 
 
 class TestTheRecordTimestamp(TimestampCase):
 
     def test_a_new_issue_carries_the_tree_timestamp_shape(self):
-        self.run_tool('add', '--id', 'one', '--title', '一格')
+        self.run_tool('add', '--id', 'one', '--title', 'one slot')
 
         row = self.row('one')
 
@@ -78,7 +82,7 @@ class TestTheRecordTimestamp(TimestampCase):
                 self.check(row[key], key)
 
     def test_a_later_write_keeps_the_same_shape(self):
-        self.run_tool('add', '--id', 'one', '--title', '一格')
+        self.run_tool('add', '--id', 'one', '--title', 'one slot')
 
         self.run_tool('resolve', 'one', '--reason', 'done')
 

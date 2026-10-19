@@ -1,10 +1,11 @@
-"""`weight`: 池子有多重，一个数，给管线读。
+"""`weight`: how heavy the pool is, one number, for the pipeline to read.
 
-pf-conduct 在节点收尾时拿它跟这条线自己的 `issue_pool_weight_limit` 比。两件事定这个数：
-actionable 的条目才算（跟 `status` 一个口径），`decision: external` 的那些留着不算 ——
-它们的决定权在人手上，算进来就是一块谁也挪不动的底板，阈值再也回不到线下。
+pf-conduct compares it with the line's own `issue_pool_weight_limit` when a node closes out. Two
+things fix the number: only actionable entries count (the same reading as `status`), and
+`decision: external` ones stay out -- the call is the human's, so counting them would be a floor
+nobody can move and the threshold could never come back under the line.
 
-跑法（两种都行）：
+How to run (either works):
 
     python -m pytest tools/issue/tests/test_weight.py
     python tools/issue/tests/test_weight.py
@@ -24,20 +25,22 @@ TOOL = Path(__file__).resolve().parent.parent / 'issue_manager.py'
 
 
 def run(project: Path, *argv: str):
-    """一条真命令：argv 进去，退出码与两路输出出来。"""
+    """One real command: argv in, exit code and both output streams out."""
     proc = subprocess.run([sys.executable, str(TOOL), *argv], cwd=str(project),
                           capture_output=True, text=True, encoding='utf-8', errors='replace')
     return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
 
 
 class PoolCase(unittest.TestCase):
-    """一个空项目：记录目录先摆成 init 过的样子，条目走 cmd 的入池口。"""
+    """An empty project: the ledger is laid out init-ed first, and entries go in through the cmd
+    pool door."""
 
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix='issue-weight-'))
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
-        # 两枚标记文件就是「这个记录目录 init 过」的凭据：写命令见不到它们会停手，
-        # 请你去跑 state-manage.py init。这个 fixture 只要一个空池子，所以就地摆好。
+        # The two marker files are the proof that "this ledger has been init-ed": a write command
+        # stops without them and asks you to run state-manage.py init. This fixture only wants an
+        # empty pool, so they are laid out here.
         ledger = self.root / '.pf'
         ledger.mkdir(parents=True, exist_ok=True)
         (ledger / '.gitignore').write_text('meta/\nworktrees/\ntemp/\n', encoding='utf-8')
@@ -83,7 +86,8 @@ class TestWeight(PoolCase):
         self.assertEqual(self.weight(), '0')
 
     def test_a_deferred_entry_is_still_owed(self):
-        """`acknowledge` 把条目记成「看见了、押后」——池子还欠着它，权重照算。"""
+        """`acknowledge` records the entry as "seen, deferred" -- the pool still owes it, so it
+        weighs."""
         self.add(self.issue('later', 'P2'))
         code, out, err = run(self.root, 'acknowledge', 'later')
         self.assertEqual(code, 0, err or out)

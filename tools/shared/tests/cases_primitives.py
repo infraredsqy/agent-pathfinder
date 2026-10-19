@@ -1,4 +1,5 @@
-"""`tools/shared/` 的两件原语：一条 JSON 记录的字节与读法，以及记录里的时刻形状。"""
+"""The two primitives under `tools/shared/`: the bytes and the reading of one JSON record, and the
+shape of a moment inside a record."""
 
 from __future__ import annotations
 
@@ -14,24 +15,27 @@ __all__ = ['TestTheClockShapes', 'TestTheReaderAndWriter']
 
 
 class TestTheReaderAndWriter(SharedCase):
-    """`tools/shared/jsonio.py`：读的三个结果，和一次写落下的那些字节。"""
+    """`tools/shared/jsonio.py`: the read's three outcomes, and the bytes one write lands."""
 
     def test_a_record_that_is_not_there_reads_as_none(self):
-        """缺文件时给 `None`：调用方拿它当自己的缺省，读坏了才另说。
+        """A missing file gives `None`: the caller takes it as its own default, and only a corrupt
+        read is a separate story.
 
-        挡的是把「还没写过」当成「读坏了」：那会让第一次运行的工具在一条正常的空记录上判红，
-        而真正的坏记录反而淹在这条假故障里。
+        What this holds off: treating "not written yet" as "corrupt". That would make a tool on its
+        first run go red over a perfectly normal absent record, while the genuinely corrupt ones
+        drown in that false alarm.
         """
         jsonio = _shared('pf_shared_jsonio', 'jsonio.py')
 
         self.assertIsNone(jsonio.read_json_strict(self.root / 'nothing.json', 'nothing.json'))
 
     def test_the_two_read_failures_each_keep_their_own_wording(self):
-        """非 UTF-8 与坏 JSON 各给正本那句话（`JsonReadError`，认 `not valid UTF-8` 与 `parse
-        failure`）。
+        """Not-UTF-8 and bad JSON each give the source's own sentence (`JsonReadError`, recognizing
+        `not valid UTF-8` and `parse failure`).
 
-        挡的是把两种失败合成一句：合成之后，读到一份编码不对的记录与读到一份语法坏掉的记录长得
-        一模一样，人再也分不出该去改文件还是改工具。
+        What this holds off: folding the two failures into one sentence. Once folded, reading a
+        record with the wrong encoding and reading one with broken syntax look exactly alike, and a
+        human can no longer tell whether to fix the file or fix the tool.
         """
         jsonio = _shared('pf_shared_jsonio', 'jsonio.py')
         not_utf8_path = self.root / 'bytes.json'
@@ -48,34 +52,39 @@ class TestTheReaderAndWriter(SharedCase):
         self.assertIn('text.json parse failure', str(not_json.exception))
 
     def test_one_records_bytes_are_the_bytes_that_land_on_disk(self):
-        """`json_bytes` 的形状与 `atomic_write_json` 落盘的字节逐字相同：缩进两格、中文原样、
-        `sort_keys` 开关、平台行分隔、末尾没有换行。
+        """`json_bytes`'s shape is byte for byte what `atomic_write_json` lands: indent two spaces,
+        non-ASCII text passed through as it is, the `sort_keys` switch, the platform line separator,
+        no trailing newline.
 
-        挡的是合并驱动那条依赖：它拿这几个字节判断「这一笔写会不会改动文件」，算出来的多一个字节
-        或少一个字节，每次合并就都像改过，于是每个节点收口都要多写一次文件；中文被转义则让记录
-        不再是人能直接读的那一份。
+        What this holds off: the merge driver's one dependency. It reads these bytes to decide
+        whether a write would change the file, so one byte too many or too few makes every merge
+        look like a change and every node's close out writes the file once more; escaping the
+        non-ASCII text would stop the record being the copy a human can read directly.
         """
         jsonio = _shared('pf_shared_jsonio', 'jsonio.py')
-        record = {'标题': '计费页', 'z': 1, 'a': [1, 2]}
+        record = {'title': 'Café billing page', 'z': 1, 'a': [1, 2]}
         separator = os.linesep.encode('utf-8')
 
         payload = jsonio.json_bytes(record, sort_keys=True)
 
         self.assertEqual(record, json.loads(payload.decode('utf-8')))
-        self.assertIn('计费页'.encode('utf-8'), payload, '中文被转义了')
-        self.assertTrue(payload.split(separator)[1].startswith(b'  "'), '缩进不是两格')
-        self.assertNotIn(b'\n', payload.replace(separator, b''), '换行不是平台那一种')
-        self.assertFalse(payload.endswith(b'\n'), '记录末尾多了一个换行')
-        self.assertLess(payload.index(b'"a"'), payload.index(b'"z"'), 'sort_keys 没有生效')
+        self.assertIn('Café'.encode('utf-8'), payload, 'the non-ASCII text was escaped')
+        self.assertTrue(payload.split(separator)[1].startswith(b'  "'),
+                        'the indent is not two spaces')
+        self.assertNotIn(b'\n', payload.replace(separator, b''),
+                         'the newline is not the platform one')
+        self.assertFalse(payload.endswith(b'\n'), 'the record has one newline too many at the end')
+        self.assertLess(payload.index(b'"a"'), payload.index(b'"z"'),
+                        'sort_keys did not take effect')
 
         target = self.root / 'deep' / 'record.json'
         jsonio.atomic_write_json(target, record, sort_keys=True)
         self.assertEqual(payload, target.read_bytes(),
-                         '排过序那一支：落盘的字节与 json_bytes 算出来的不是同一份')
+                         'sorted branch: the bytes on disk are not the ones json_bytes computed')
 
         jsonio.atomic_write_json(target, record)
         self.assertEqual(jsonio.json_bytes(record), target.read_bytes(),
-                         '不排序那一支：落盘的字节与 json_bytes 算出来的不是同一份')
+                         'unsorted branch: the bytes on disk are not the ones json_bytes computed')
 
     def test_a_write_a_reader_never_lets_go_fails_bounded_and_leaves_no_temp(self):
         sb = self.make()
@@ -98,14 +107,17 @@ class TestTheReaderAndWriter(SharedCase):
 
 
 class TestTheClockShapes(SharedCase):
-    """`tools/shared/clock.py`：两种时刻形状，各自能被自己的读者解析回来。"""
+    """`tools/shared/clock.py`: the two moment shapes, each parsed back by its own reader."""
 
     def test_each_now_parses_back_with_its_own_format(self):
-        """两种「现在」各能被自己的 `ISO_FMT` / `ISO_FMT_SECONDS` 用 `strptime` 解析回来，且两种
-        形状互不相同（微秒那条带小数、秒级那条没有）。
+        """Each "now" parses back with its own `ISO_FMT` / `ISO_FMT_SECONDS` through `strptime`, and
+        the two shapes differ from each other (the microsecond one carries a fraction, the seconds
+        one does not).
 
-        挡的是形状与读者分开改：把秒级那条也带上微秒（或把微秒那条退回秒级），写的时候一切正常，
-        而盘上已有的值从此解析不了 —— 漂移只在读的那一头、隔一段时间才现形。
+        What this holds off: the shape and the reader being changed apart. Give the seconds one a
+        fraction too (or push the microsecond one back to seconds) and writing looks perfectly
+        normal, while values already on disk stop parsing -- the drift shows only on the reading
+        side, and only some time later.
         """
         clock = _shared('pf_shared_clock', 'clock.py')
 
@@ -114,16 +126,20 @@ class TestTheClockShapes(SharedCase):
 
         self.assertIsNotNone(datetime.strptime(micro, clock.ISO_FMT))
         self.assertIsNotNone(datetime.strptime(seconds, clock.ISO_FMT_SECONDS))
-        self.assertIn('.', micro, '微秒那条形状里没有小数')
-        self.assertNotIn('.', seconds, '秒级那条形状里带了小数')
-        with self.assertRaises(ValueError, msg='秒级那条被微秒读者收下了：两种形状混成了一种'):
+        self.assertIn('.', micro, 'the microsecond shape carries no fraction')
+        self.assertNotIn('.', seconds, 'the seconds shape carries a fraction')
+        with self.assertRaises(ValueError,
+                               msg='the seconds shape was taken by the microsecond reader: '
+                                   'the two shapes have blended into one'):
             datetime.strptime(seconds, clock.ISO_FMT)
 
     def test_the_moment_is_utc_in_both_shapes(self):
-        """两种「现在」都落在 UTC 上，且就在调用前后那一小段里。
+        """Both "now"s land on UTC, and inside the short stretch around the call.
 
-        挡的是退回本机时间：记录里两枚时刻一旦一枚按本机时区写、一枚按 UTC 写，比大小、算间隔都
-        还跑得通，只是差了几个小时 —— 并行认领的先后顺序会静默地反掉。
+        What this holds off: falling back to local time. Once one of a record's two moments is
+        written in the local zone and the other in UTC, comparing them and taking the interval still
+        run, only hours off -- the order in which parallel claims were made silently comes out
+        reversed.
         """
         clock = _shared('pf_shared_clock', 'clock.py')
 
@@ -133,8 +149,9 @@ class TestTheClockShapes(SharedCase):
                 before = datetime.now(timezone.utc)
                 parsed = datetime.strptime(read(), shape).replace(tzinfo=timezone.utc)
                 after = datetime.now(timezone.utc)
-                # 秒级那条把小数截掉，窗口的下沿按整秒算。
+                # The seconds shape drops the fraction, so the window's floor is the whole second.
                 floor = before.replace(microsecond=0)
 
-                self.assertLessEqual(floor, parsed, '这个时刻落在调用之前？')
-                self.assertLessEqual(parsed, after, '这个时刻不在 UTC 上：它落在调用窗口之外')
+                self.assertLessEqual(floor, parsed, 'does this moment fall before the call?')
+                self.assertLessEqual(
+                    parsed, after, 'this moment is not on UTC: it falls outside the call window')

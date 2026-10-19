@@ -1,12 +1,14 @@
-"""`search`：一个正则撒到池子上，命中的分三档回、字段里命中的那一段截出来看。
+"""`search`: one regex cast over the pool; hits come back in three tiers, with the matched stretch
+of the field cut out to look at.
 
-三档的次序是这份输出的正本：id/title 最相关（整条描述一并回）、description/suggestion 次之
-（回 ±20 字符的窗口，同一个字段里命中两次就整段回）、files/functions/module 再次之（报命中的
-字段与那个值）。一条条目只进一档。
+The tier order is this output's one source: id/title first (the whole description comes with it),
+then description/suggestion (a window of ±20 characters, and two hits in one field return the whole
+text), then files/functions/module (the field that matched and its value). One entry enters one
+tier only.
 
-跑法（两种都行）：
+How to run (either works):
 
-    python -m unittest discover -s issue/tests -t .      （cwd 在 tools/）
+    python -m unittest discover -s issue/tests -t .      (cwd in tools/)
     python issue/tests/test_search.py
 """
 
@@ -24,12 +26,13 @@ TOOL = Path(__file__).resolve().parent.parent / 'issue_manager.py'
 
 
 class PoolCase(unittest.TestCase):
-    """一个 temp 假项目：记录目录摆成 init 过的样子，命令起真进程。"""
+    """A temp fake project: the ledger looks init-ed, and the command runs a real process."""
 
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix='issue-search-'))
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
-        # 两枚标记文件就是「这个记录目录 init 过」的凭据：写命令见不到它们会停手。
+        # The two marker files are the proof that "this ledger has been init-ed": a write command
+        # stops without them.
         ledger = self.root / '.pf'
         ledger.mkdir(parents=True, exist_ok=True)
         (ledger / '.gitignore').write_text('meta/\nworktrees/\ntemp/\n', encoding='utf-8')
@@ -57,7 +60,8 @@ class PoolCase(unittest.TestCase):
 class TestSearchTiers(PoolCase):
 
     def test_the_three_tiers_come_back_in_this_order(self):
-        """一条条目只进一档：id/title、description/suggestion、files/functions/module。"""
+        """One entry enters one tier only: id/title first, description/suggestion second,
+        files/functions/module last."""
         self.add('needle-id', title='plain', description='nothing')
         self.add('title-hit', title='a needle in the title', description='nothing')
         self.add('desc-hit', title='plain', description='nothing needle here')
@@ -77,7 +81,7 @@ class TestSearchTiers(PoolCase):
         self.assertNotIn('snippet', hit)
 
     def test_a_description_hit_shows_a_window_of_twenty_characters_on_each_side(self):
-        """窗口是命中处起算的 ±20 个字符，两头的 `...` 是截断的记号。"""
+        """The window is ±20 characters from the hit, and the `...` at either end marks the cut."""
         description = 'x' * 30 + 'needle' + 'y' * 30
         self.add('desc-hit', title='plain', description=description)
 

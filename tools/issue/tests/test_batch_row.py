@@ -1,18 +1,23 @@
-"""批量文件里一行值的语义：四个门控键给 `null` 就整批停手，五个内容键给 `null` 取缺省。
+"""The meaning of one row's values in a batch file: `null` on one of the four gate keys stops the
+whole batch, `null` on one of the five content keys takes the default.
 
-一行里给 `null` 与「没写这个键」不是一回事，按这个键管什么分两种收场：
+`null` in a row and "this key is not written" are not the same thing, and the outcome splits by what
+the key governs:
 
-    severity / decision / files / functions    管这一条能不能进池子 —— `null` 是写坏了：整批
-                                              退出 1、点名那一行，池子一字不落
-    title / module / source / description      内容键 —— `null` 与没写同义，取缺省
-    / suggestion
-    reason / plan_path                         缺省本来就是 `null`，两种写法落成同一个值
+    severity / decision / files / functions    governs whether this row may enter the pool -- `null`
+                                               is a write error: the batch exits 1, names that row,
+                                               and not one entry lands
+    title / module / source / description      content keys -- `null` means the same as not writing
+    / suggestion                               the key, so the default is taken
+    reason / plan_path                         the default is `null` already; both spellings settle
+                                               to one value
 
-命令行那条门不分岔：`argparse` 没给的旗标就是「没给」，取值与这里「键缺失」那一列相同。
+The command-line door does not split: a flag `argparse` did not get is "not given", and its value
+equals the "key absent" column here.
 
-跑法（两种都行）：
+How to run (either works):
 
-    python -m unittest discover -s issue/tests -t .      （cwd 在 tools/）
+    python -m unittest discover -s issue/tests -t .      (cwd in tools/)
     python issue/tests/test_batch_row.py
 """
 
@@ -28,19 +33,20 @@ from pathlib import Path
 
 TOOL = Path(__file__).resolve().parent.parent / 'issue_manager.py'
 
-#: 一个「什么都没写」的条目落下来的样子，时间戳两键除外。
+#: How an entry with nothing written at all lands, the two timestamp keys aside.
 DEFAULTS = {'severity': 'P3', 'decision': 'unknown', 'files': [], 'functions': [],
             'title': 'x', 'module': '', 'source': 'scan', 'description': '', 'suggestion': '',
             'reason': None, 'plan_path': None}
 
 
 class BatchCase(unittest.TestCase):
-    """一个 temp 假项目：记录目录摆成 init 过的样子，批量入池起真进程。"""
+    """A temp fake project: the ledger looks init-ed, and batch pool entry runs a real process."""
 
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix='issue-row-'))
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
-        # 两枚标记文件就是「这个记录目录 init 过」的凭据：写命令见不到它们会停手。
+        # The two marker files are the proof that "this ledger has been init-ed": a write command
+        # stops without them.
         ledger = self.root / '.pf'
         ledger.mkdir(parents=True, exist_ok=True)
         (ledger / '.gitignore').write_text('meta/\nworktrees/\ntemp/\n', encoding='utf-8')
@@ -66,7 +72,7 @@ class BatchCase(unittest.TestCase):
 
 
 class TestAGateKeyGivenNull(BatchCase):
-    """`null` 是写坏了：整批停手，不拿缺省糊过去，也不落下任何一条。"""
+    """`null` is a write error: the batch stops, no default papers over it, and no entry lands."""
 
     def stops_the_batch(self, key):
         code, out, err = self.add_batch([{'id': 'good', 'title': 'good'},
@@ -90,7 +96,7 @@ class TestAGateKeyGivenNull(BatchCase):
 
 
 class TestAContentKeyGivenNull(BatchCase):
-    """内容键给 `null` 与没写这个键同义。"""
+    """`null` on a content key means the same as not writing that key."""
 
     def takes_the_default(self, key):
         code, out, err = self.add_batch([{'id': 'x', key: None}])
@@ -122,7 +128,8 @@ class TestNoKeyAtAll(BatchCase):
         self.assertEqual(DEFAULTS, self.picked(self.pool()['x']))
 
     def test_the_command_line_door_takes_those_same_defaults(self):
-        """命令行那条门的取值与「键缺失」那一列相同 —— 只有 title 取的是各自的 id。"""
+        """The command-line door's values equal the "key absent" column -- title alone takes its
+        own id."""
         code, out, err = self.cli('add', '--id', 'x')
         self.assertEqual(code, 0, err or out)
 

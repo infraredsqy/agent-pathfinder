@@ -5,25 +5,30 @@ The verbs, their flags and their values are this file's parser: `dag-manage.py -
 `dag-manage.py help` print them.
 
 Tags:
-    节点可以带 tag，也可以不带，也可以带多个。tag 说的是一件事属于哪一类活
-    （`writing` 文案 / `coding` 代码 / `art` 图像），conductor 用它把一条 cycle 的选材
-    范围圈出来。带 tag 的节点只对得上号的过滤集可见；**没有 tag 的节点留在所有范围里**
-    —— 漏挡只多跑一个节点，误挡会让活永远没人做。
+    A node may carry tags, carry none, or carry several. A tag says which kind of work a thing is
+    (`writing` copy / `coding` code / `art` image), and the conductor uses it to draw the range a
+    cycle picks from. A tagged node is visible only to a filter set that names the same word; **a
+    node with no tag stays inside every range** -- blocking too little only runs one extra node,
+    while blocking too much leaves work nobody ever does.
 
-        add --tags art            打 tag（多个用逗号：--tags art,writing）
-        update <uuid> --tags ...  改 tag；--clear-tags 摘掉全部（= 不受过滤）
-        list --tags coding,writing  按一个过滤集看：它会挑到哪些节点
+        add --tags art            apply tags (several, comma-separated: --tags art,writing)
+        update <uuid> --tags ...  change the tags; --clear-tags takes them all off (= out of every
+                                  filter)
+        list --tags coding,writing  read it through one filter set: which nodes it would pick
 
-    词表外的 tag 警告一行，照收——词表摆在人面前给人看，engine 照单全收。
+    A tag outside the vocabulary warns on one line and is taken as given -- the vocabulary is laid
+    out in front of a human to read, and the engine takes the list as it comes.
 
 Weight:
-    节点的一个 weight 管的是「这一棒谁干」，与 mode（管循环跑不跑、收尾停不停）正交：
-    `light` 的节点由 conductor 自己实现、只把复审派出去；`standard` 走标准流程（派 Execute）。
+    A node's weight governs "who does this leg", orthogonal to mode (which governs whether the loop
+    runs and whether the close stops): a `light` node is implemented by the conductor itself, which
+    only dispatches the review out; `standard` takes the standard path (dispatch Execute).
 
-        add --weight light                        轻到不值得派执行者
-        update <uuid> --weight light|standard     改；写回 standard 等于把这个键摘掉
+        add --weight light                        too light to be worth dispatching an executor
+        update <uuid> --weight light|standard     change it; writing standard back drops the key
 
-    **不写这个键就是 standard**：老图、老机器都不必迁移，只有真打过 light 的节点才落这个键。
+    **Not writing this key means standard**: old graphs and old machines need no migration, and only
+    a node that really was given light lands the key.
 """
 
 import argparse
@@ -41,7 +46,8 @@ from pathlib import Path
 #  Paths & Constants
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
+# Bootstrap: the loader is fetched by path too, so every file has to carry this paragraph itself
+# (see `shared/loader.py`).
 HERE = Path(__file__).resolve().parent
 SHARED = HERE.parent / 'shared'
 
@@ -59,7 +65,8 @@ def _loader():
 
 
 def _ledger():
-    """`tools/shared/ledger.py`: `.pf/` 的落点、worktree 回主树那条判定、init 闸门 —— 正本一处。"""
+    """`tools/shared/ledger.py`: where `.pf/` lands, the worktree-to-main-tree rule, the init gate
+    -- one source."""
     return _loader().load_shared('ledger')
 
 # One directory per project: `.pf/` holds the graph, each node's own text (`spec.md`, reports), and
@@ -75,12 +82,13 @@ def _ledger():
 
 
 def _resolve_project_root(cwd: Path) -> Path:
-    """cwd 即根，唯一例外：cwd 是一条 linked worktree 的检出根时回主树（判定在 ledger 正本里）。"""
+    """cwd is the root; the one exception: when cwd is a linked worktree's checkout root, go back to
+    the main tree (the rule lives in the ledger)."""
     return _ledger().resolve_project_root(cwd)
 
 
-#: 这个模块此刻指着哪一个项目：`configure()` 一次定下，CLI 在 `main()` 里按 cwd 解析一次。
-#: 导入这份文件时不绑项目 —— 模块指向哪，由调用方说一句。
+#: Which project this module points at right now: `configure()` fixes it once, and the CLI resolves
+#: it from cwd once in `main()`. Importing this file binds no project -- the caller says which one.
 LEDGER_DIR = None
 DATA_DIR = None
 NODES_DIR = None
@@ -88,9 +96,10 @@ IDEAS_JSON = None
 
 
 def configure(project_root) -> None:
-    """把记录目录钉在一个项目上：`<root>/.pf/`，它下面的 `nodes/` 与 `ideas.json`。
+    """Pin the ledger to one project: `<root>/.pf/`, with its `nodes/` and `ideas.json` under it.
 
-    这是路径进这个模块的那道门：CLI 在 `main()` 里用 cwd 调一次，进程内的调用方自己点名。
+    This is the door paths enter this module through: the CLI calls it once from cwd inside `main()`,
+    and in-process callers name the project themselves.
     """
     global LEDGER_DIR, DATA_DIR, NODES_DIR, IDEAS_JSON
     LEDGER_DIR = _ledger().ledger_dir_for(project_root)
@@ -100,26 +109,31 @@ def configure(project_root) -> None:
 
 
 def _project_root() -> Path:
-    """记录目录的上一层：`<root>/.pf` 的那个 `<root>`，便条的落点按它算。"""
+    """One level above the ledger: the `<root>` of `<root>/.pf`; a note's landing place is computed
+    from it."""
     return LEDGER_DIR.parent
 
 
 def _require_configured() -> None:
-    """还没点过名就说清楚：读哪个项目的记录，得先由调用方说一句。"""
+    """Say it plainly when nothing was named: which project's records to read is the caller's word."""
     if IDEAS_JSON is None:
-        print('Error: 这个模块还没指向任何项目；先调 configure(项目根)。', file=sys.stderr)
+        print('Error: this module points at no project yet; call configure(project root) first.',
+              file=sys.stderr)
         sys.exit(1)
 
 
-#: 节点 spec 的落点：`pipeline/nodes.py` 一处算它，这个工具照着取。
+#: Where the Node spec lands: `pipeline/nodes.py` computes it in one place, and this tool takes it
+#: from there.
 CONDUCT_IMPL = HERE.parent / 'conduct' / 'pipeline'
 
 
 def _spec_path(uid: str) -> str:
-    """`<root>/.pf/nodes/<uid>/spec.md`，落点由 `nodes.node_spec_path` 给出。
+    """`<root>/.pf/nodes/<uid>/spec.md`, whose landing place is given by `nodes.node_spec_path`.
 
-    这条路径的算法只有一处：`add` 报的、`open` 印的、管线往那儿写 spec 的，都是这同一个值。
-    那个包按路径取，名字专用（`pf_dag_pipeline`），同一个进程里谁另载一份都互不打扰。
+    This path is computed in one place only: what `add` reports, what `open` prints, and where the
+    pipeline writes the spec are all this same value. That package is loaded by path under a name of
+    its own (`pf_dag_pipeline`), so another copy loaded in the same process does not disturb this
+    one.
     """
     pkg_dir = CONDUCT_IMPL
     pkg = _loader().load_by_path('pf_dag_pipeline', pkg_dir / '__init__.py',
@@ -137,8 +151,9 @@ def _session_note():
 
 
 # ── the session note: best effort, both ways ──────────────────────────────────
-# 便条是管道物：写不成、删不成，都只警告一行，图上那一笔已经落下的改动不因此回退。节点是正事，
-# 便条照着手边的会话重新补得回来。
+# The note is plumbing: failing to write it or to remove it warns on one line, and the change
+# already landed on the graph is not rolled back for it. The node is the real thing, and the note
+# can be rebuilt by hand from the session at hand.
 
 def _note_session(node_id: str, session: str) -> None:
     """Note the session this node was born in -- best effort, and never in the way.
@@ -165,27 +180,35 @@ def _forget_session(node_id: str) -> None:
     except (OSError, ValueError) as e:
         print(f'Warning: the session note for {node_id} was not removed: {e}', file=sys.stderr)
 
-#: 节点状态只有三个词，写出去的就是这三个：`todo` 在局中未交付、`shelved` 出局等人、
-#: `completed` 已交付。读到一个词表外的词就照原样读它，绝不替它猜一个词。
-#: 「正在被某条 cycle 跑」不进状态（那样的节点还是 `todo`），它记在 state.json 的持有关系里。
+#: A node's status has only three words, and these three are what goes out: `todo` in play and not
+#: delivered, `shelved` out of play waiting for a human, `completed` delivered. A word outside the
+#: vocabulary is read exactly as it stands; this never guesses a word for it.
+#: "Being run by a cycle" is not a status (such a node is still `todo`) -- it lives in state.json's
+#: holding relation.
 VALID_STATUSES = {'todo', 'shelved', 'completed'}
 # A blocked node is never recommended and never "ready": `shelved` is out of play until a human
 # puts it back in (the round ran and the verdict was no, or it was shelved on purpose).
 # It comes back with `status <uuid> todo`.
 BLOCKED_STATUSES = {'shelved'}
-#: 节点执行模式三档，从「人参与得多」到「人参与得少」：
-#:   manual      —— 没有 execute→review→fix 循环，是一个讨论格：机主提、AI 提、被驳、再提。
-#:   checkpoint  —— 循环照跑，收尾停下等机主说一句「继续」，才开下一个节点。
-#:   auto        —— 循环照跑，收尾自己开下一个节点（没有人闸；卡死、需求冲突才报机主）。
+#: Three tiers of node execution mode, from "the human is in it a lot" to "the human is barely in
+#: it":
+#:   manual      -- no execute→review→fix loop; it is a discussion slot: the owner proposes, the AI
+#:                   proposes, it is rejected, propose again.
+#:   checkpoint  -- the loop runs as usual, but the close stops and waits for the owner to say
+#:                   "continue" before the next node opens.
+#:   auto        -- the loop runs as usual, and the close opens the next node itself (no human gate;
+#:                   only a stuck run or a conflicting requirement is reported to the owner).
 VALID_MODES = {'manual', 'checkpoint', 'auto'}
 DEFAULT_MODE = 'auto'
-#: 节点重量，两档，与 mode 正交：mode 管停不停，它管谁干。**键不落就是 standard**，
-#: 所以只有 light 落键。
+#: Node weight, two tiers, orthogonal to mode: mode governs whether it stops, this governs who does
+#: it. **Not writing the key means standard**, so only light ever lands the key.
 VALID_WEIGHTS = ('light', 'standard')
 DEFAULT_WEIGHT = 'standard'
 # ── tags ─────────────────────────────────────────────────────────────────────
-# 三个词，固定。它是一份给人看的约定，engine 只拿它拼那句警告：词表外的 tag 警告一行就收下，
-# 真的冒出第四类工作时写进去就能用。过滤一律按字面比，不查词表。
+# Three words, fixed. It is a convention laid out for a human to read; the engine only uses it to
+# build that warning: a tag outside the vocabulary warns on one line and is taken as given, and when
+# a fourth kind of work really shows up, writing it in is enough. Filtering always compares literally
+# and never consults the vocabulary.
 VALID_TAGS = ('writing', 'coding', 'art')
 
 
@@ -224,20 +247,24 @@ def _read() -> dict:
 
 
 def ideas_bytes(data: dict) -> bytes:
-    """`ideas.json` 落盘时的那串字节：格式由这个工具给出，别处照它取。
+    """The bytes `ideas.json` lands as: this tool gives the format, and elsewhere takes it from here.
 
-    写下来的是 `tools/shared/jsonio.py`（缩进 2、中文原样、没有尾换行），`sort_keys=True` 是本文件
-    自己的习惯，让重写过的图每次读起来一样。合并驱动拿这串字节与盘上那份比对，判据因此只有一处：
-    两边各写一遍格式的话，差一个字节就是每一次合并都看起来像有改动。
+    What writes them is `tools/shared/jsonio.py` (indent 2, non-ASCII passed through as it is, no
+    trailing newline); `sort_keys=True` is this file's own habit, so a rewritten graph reads the same
+    way every time. The merge driver compares these bytes with the copy on disk, so there is one
+    criterion only: if both sides wrote the format out themselves, one byte of difference makes every
+    merge look like a change.
     """
     return _loader().load_shared('jsonio').json_bytes(data, sort_keys=True)
 
 
 def write_ideas_bytes(path, payload: bytes) -> None:
-    """把这串字节落到这个路径：`ideas_bytes` 的判据与这里的落盘出自同一棵树。
+    """Land these bytes at this path: `ideas_bytes`'s criterion and this write come from one tree.
 
-    合并驱动经这两道门问同一个写方（本树的 `tools/shared/jsonio.py`），所以它不会拿一棵树的格式
-    判完、再用另一棵树的写法落盘。谁持锁、写完之后怎么收场是调用方的事，这里只有这次落盘。
+    The merge driver asks the same writer through both doors (this tree's `tools/shared/jsonio.py`),
+    so it never judges with one tree's format and then lands bytes in another tree's spelling. Who
+    holds the lock and what happens after the write is the caller's business; all that happens here
+    is this one write.
     """
     _loader().load_shared('jsonio').atomic_write_bytes(path, payload)
 
@@ -262,10 +289,11 @@ def _write(data: dict) -> None:
 
 
 def _require_initialized() -> None:
-    """没有 init 过的 `.pf/` 什么都不许写：锁的 `mkdir` 是唯一会把它造出来的东西。
+    """A `.pf/` that was never init-ed may have nothing written to it: the lock's `mkdir` is the one
+    thing that would create it.
 
-    读的是 `LEDGER_DIR`，也就是 `configure()` 点过的那个记录目录；判据与那句话在
-    `tools/shared/ledger.py`。
+    It reads `LEDGER_DIR`, the ledger `configure()` named; the criterion and that sentence live in
+    `tools/shared/ledger.py`.
     """
     if _ledger().is_initialized(LEDGER_DIR):
         return
@@ -291,11 +319,12 @@ def _ledger_lock(timeout: float | None = None):
 
 
 def _resolve_uuid(uid: str, data: dict) -> str:
-    """`uid`（全 id，或它的前缀）→ 记录里那个全 id；对不上就停在这里。
+    """`uid` (a full id, or a prefix of one) → the full id in the record; a miss stops right here.
 
-    前缀只在唯一对得上时算数：多义的前缀一次拒掉，请调用方把 id 写全 —— 让工具替你猜一格，
-    猜错了就是改坏另一格记录。每条命令都拿这个返回值当 `data['nodes']` 的键，同一个前缀于是
-    在所有动词上走到同一个裁决。
+    A prefix counts only when it matches uniquely: an ambiguous prefix is refused at once, and the
+    caller is asked to write the id out in full -- letting the tool guess one slot for you; a wrong
+    guess corrupts another slot's record. Every command uses this return value as the key into
+    `data['nodes']`, so one prefix reaches the same verdict on every verb.
     """
     if uid in data['nodes']:
         return uid
@@ -312,10 +341,11 @@ def _resolve_uuid(uid: str, data: dict) -> str:
 
 
 def _parse_tags(raw: str) -> list:
-    """`--tags art,writing` → `['art', 'writing']`：去空白、去重，保序。
+    """`--tags art,writing` → `['art', 'writing']`: strip whitespace, drop duplicates, keep the order.
 
-    按字面收：写它只能和写了同一个词的过滤集对上。
-    词表外的 tag 警告一行就收下 —— 真冒出第四类工作，写进去就能用。
+    Taken literally: a tag written here can only match a filter set that wrote the same word.
+    A tag outside the vocabulary warns on one line and is taken as given -- when a fourth kind of
+    work really shows up, writing it in is enough.
     """
     out = []
     for item in (raw or '').split(','):
@@ -324,33 +354,37 @@ def _parse_tags(raw: str) -> list:
             out.append(tag)
     unknown = [t for t in out if t not in VALID_TAGS]
     if unknown:
-        print(f'Warning: tag {", ".join(unknown)} 不在词表 {"/".join(VALID_TAGS)} 里；照收，'
-              f'但它只能和写了同一个词的过滤集对上。', file=sys.stderr)
+        print(f'Warning: tag {", ".join(unknown)} is not in the vocabulary {"/".join(VALID_TAGS)}; '
+              f'taken as given, but it can only match a node that wrote the same word.',
+              file=sys.stderr)
     return out
 
 
 def _node_weight(node: dict) -> str:
-    """一个节点的 weight；没写、或写了个不认识的词，都按 standard。
+    """One node's weight; a missing key, or a word this does not recognize, both read as standard.
 
-    保守方向是**多派一个人干活**：读不准就照标准流程走，别让一个节点因为记录里一个错字而由
-    conductor 亲自上阵。
+    The conservative direction is **to put one more person on the work**: when the reading is not
+    certain, follow the standard path rather than letting a node fall to the conductor itself over
+    one mistyped word in the record.
     """
     return 'light' if node.get('weight') == 'light' else DEFAULT_WEIGHT
 
 
 def _node_tags(node: dict) -> list:
-    """一个节点身上的 tag；没打过就是空表（= 不受任何过滤集约束）。"""
+    """The tags on one node; never tagged means an empty list (= bound by no filter set)."""
     tags = node.get('tags') or []
     return [t for t in tags if isinstance(t, str) and t.strip()]
 
 
 def _in_tag_scope(node: dict, wanted) -> bool:
-    """这个节点在一个过滤集里吗？至少一个 tag 相交就算命中；一个 tag 都没有的节点处处可见。
+    """Is this node inside one filter set? At least one tag in common is a hit; a node with no tag at
+    all is visible everywhere.
 
-    保守方向是**宁可漏挡**：多跑一个节点只费一轮，误挡会让一条线的活永远没人做。
+    The conservative direction is **to block too little rather than too much**: one extra node costs
+    one round, while blocking the wrong node leaves a line's work nobody ever does.
     """
     if not wanted:
-        return True                     # 没有过滤集 = 整张图都是范围（今天的行为）
+        return True                     # no filter set = the whole graph is in range (today's rule)
     tags = _node_tags(node)
     if not tags:
         return True
@@ -364,7 +398,8 @@ def _in_tag_scope(node: dict, wanted) -> bool:
 def _graph():
     """`tools/dag/graph.py`: this tool's graph algorithms, loaded by path like every neighbour.
 
-    纯函数、不碰 IO，所以那一份能整份 import 起来单独测（`tests/test_graph.py`）。
+    Pure functions, no IO, so that file can be imported whole and tested on its own
+    (`tests/test_graph.py`).
     """
     return _loader().load_by_path('pf_dag_graph', HERE / 'graph.py', register=True, reuse=True)
 
@@ -424,18 +459,24 @@ def cmd_add(args):
             'created_at': now,
             'updated_at': now,
         }
-        # tag 只在真打过时才落这个键：没打过 tag 的节点在图上就是今天这份形状，一个字节都不多。
+        # The tags key lands only when tags were really given: an untagged node has today's exact
+        # shape on the graph, not one byte more.
         tags = _parse_tags(args.tags) if args.tags else []
         if tags:
             data['nodes'][uid]['tags'] = tags
-        # weight 同理，只在非默认时落键：standard 的节点在图上就是今天这份形状，一个字节都不多。
+        # weight likewise lands only when it is not the default: a standard node has today's exact
+        # shape on the graph, not one byte more.
         if args.weight == 'light':
             data['nodes'][uid]['weight'] = 'light'
-        # 出生 session 不落在记录里：`ideas.json` 是共享的，而 session 只在本机有意义 —— 另一个机器上
-        # 它是一个必然打不开的死值，还分不出「那是别台机器」和「这场被删了」。所以它落在
-        # `.pf/meta/sessions/<uuid>.json`（`meta/` 由 `.pf/.gitignore` 挡在版本库外），见
-        # `tools/shared/session-note.py`。仍然由工具读环境变量，不由调用方抄一遍 —— 抄的那份总会漏。
-        # 写在 `_write(data)` 之后：依赖校验失败会 `_rollback_add`，那一格没落图就不该留便条。
+        # The session a node was born in does not land in the record: `ideas.json` is shared, and a
+        # session only means anything on this machine -- elsewhere it is a dead value that can never
+        # be opened, and it does not even tell "that was another machine" from "this run was
+        # deleted". So it lands in `.pf/meta/sessions/<uuid>.json` (`meta/` is kept out of the
+        # version repository by `.pf/.gitignore`), see `tools/shared/session-note.py`. The tool still
+        # reads the environment variable; the caller does not copy it over -- the copy always misses
+        # one.
+        # Written after `_write(data)`: a failed dependency check calls `_rollback_add`, and a slot
+        # that never landed on the graph should leave no note behind.
         session = os.environ.get('DSH_SESSION_ID')
 
         node_dir = NODES_DIR / uid
@@ -453,7 +494,8 @@ def cmd_add(args):
                 _try_add_dep(data, uid, dep)
 
         _write(data)
-        # 便条写在这里：依赖校验失败会 `_rollback_add`，那一格没落图就不该留便条。
+        # The note is written here: a failed dependency check calls `_rollback_add`, and a slot that
+        # never landed on the graph should leave no note behind.
         if session:
             _note_session(uid, session)
     print(f'Node created: {uid}')
@@ -500,7 +542,8 @@ def cmd_rm(args):
         node_dir = NODES_DIR / uid
         if node_dir.exists():
             shutil.rmtree(node_dir)
-        # 便条跟着节点走：节点从图上没了，它的那场对话也就不再是"这一格的"对话。
+        # The note goes with the node: once the node is off the graph, that discussion is no longer
+        # "this slot's" discussion.
         _forget_session(uid)
 
         print(f'Removed {uid}')
@@ -511,8 +554,8 @@ def cmd_update(args):
         data = _read()
         node = data['nodes'][_resolve_uuid(args.uuid, data)]
         if args.tags is not None and args.clear_tags:
-            print('Error: --tags 和 --clear-tags 一次只给一个（前者换一组，后者摘干净）',
-                  file=sys.stderr)
+            print('Error: give --tags and --clear-tags one at a time (the first swaps a set in, '
+                  'the second takes them all off)', file=sys.stderr)
             sys.exit(1)
         changed = False
         if args.title is not None:
@@ -525,7 +568,8 @@ def cmd_update(args):
             node['mode'] = args.mode
             changed = True
         if args.weight is not None:
-            # 写回 standard 就是把这个键摘掉：记录里只有 light 落键（见 DEFAULT_WEIGHT 那一段）。
+            # Writing standard back drops the key: only light ever lands it in the record (see the
+            # DEFAULT_WEIGHT block).
             if args.weight == 'light':
                 node['weight'] = 'light'
             else:
@@ -537,9 +581,11 @@ def cmd_update(args):
                 node['tags'] = tags
                 changed = True
             else:
-                print('Warning: --tags 是空的；要摘掉全部 tag 请用 --clear-tags', file=sys.stderr)
+                print('Warning: --tags is empty; to take every tag off use --clear-tags',
+                      file=sys.stderr)
         if args.clear_tags:
-            # 摘干净 = 这个节点回到「处处可见」：没有 tag 的节点在任何过滤集里都留在选材范围。
+            # Taken clean = this node is back to "visible everywhere": a node with no tag stays in
+            # the picking range of every filter set.
             node.pop('tags', None)
             changed = True
         if changed:
@@ -561,12 +607,14 @@ def cmd_depend(args):
 
 
 def _dependency_to_remove(dep: str, deps: list, data: dict) -> str | None:
-    """要摘的那条边的全 id；`None` = 这条边本来就不在，没什么可摘的。
+    """The full id of the edge to take off; `None` = this edge was never there, nothing to take off.
 
-    裁决与节点那一侧同一个规矩（唯一对得上就用它，多义列出候选并停手，对不上就说对不上），
-    只是先在这条边的清单里找：图上已经被人删掉的节点，它留下的那条边还写在记录里，而那正是
-    合并驱动的修复提示叫人来摘的东西。三条路都不通的就报错 —— 静默不摘边是这条命令从前最坏
-    的样子：调用方以为边没了，记录里还留着。
+    The verdict follows the same rule as the node side (a unique match is used, an ambiguous one
+    lists the candidates and stops, a miss says it is a miss), only it looks in this edge's list
+    first: a node someone already deleted from the graph leaves its edge written in the record, and
+    that is exactly what the merge driver's repair hint calls a human in to take off. If none of the
+    three roads works it is an error -- silently taking no edge off is the worst this command ever
+    looked: the caller thinks the edge is gone while the record still carries it.
     """
     if dep in deps:
         return dep
@@ -577,8 +625,9 @@ def _dependency_to_remove(dep: str, deps: list, data: dict) -> str | None:
         sys.exit(1)
     if len(named) == 1:
         return named[0]
-    # 清单里没有这个 id：它认得出来是图上哪一格（那一格上就没有这条边）时才算没东西可摘；
-    # 认不出来 —— 打错了，或既不在图上也不在这条边的清单里 —— 由 `_resolve_uuid` 出声停手。
+    # This id is not in the list: there is nothing to take off only when it is recognized as a slot
+    # in the graph (and that slot simply has no such edge); an unrecognized one -- a typo, or neither
+    # on the graph nor in this edge's list -- is stopped loudly by `_resolve_uuid`.
     _resolve_uuid(dep, data)
     return None
 
@@ -615,9 +664,11 @@ def cmd_status(args):
             sys.exit(1)
         node['status'] = status
         node['updated_at'] = _now()
-        # 完结时刻是节点自己的事实，不藏在某条 cycle 的 path 里：按它排得出「最近做完的」。
-        # updated_at 当不得这个用——标题、描述、模式的改动都会顶它。
-        # 离开 completed 时摘掉：一个不在 completed 的节点不该带着完结时刻。
+        # The completion moment is the node's own fact and does not hide inside some cycle's path:
+        # it is what orders "finished most recently". updated_at cannot serve here -- a title,
+        # description or mode change bumps it.
+        # It is taken off when the node leaves completed: a node that is not completed should not
+        # carry a completion moment.
         if status == 'completed':
             node['completed_at'] = node['updated_at']
         else:
@@ -680,16 +731,19 @@ def cmd_list(args):
             'title': node.get('title', ''),
             'status': status,
             'mode': node.get('mode', DEFAULT_MODE),
-            # `ready` 就是 _node_ready 那一条：自己是 todo、依赖都 done。这个字段和 `--ready`
-            # 过滤器说的必须是同一件事，否则过滤器一句话就被绕过。
+            # `ready` is exactly _node_ready's rule: it is todo itself and every dependency is done.
+            # This field and the `--ready` filter have to say the same thing, or the filter is
+            # bypassed in one word.
             'ready': graph._node_ready(node, data['nodes']),
         }
-        # tag 回显：读这份清单的人要一眼看出这个节点归哪一类活、为什么它进/不进某个过滤集。
-        # 没打过 tag 的节点不落这个键 —— 整张图都没 tag 时，输出与今天逐字节相同。
+        # Tag echo: whoever reads this list has to see at a glance which kind of work the node is
+        # and why it enters or stays out of a filter set.
+        # A node never tagged does not land this key -- when the whole graph has no tag, the output
+        # is byte-for-byte today's.
         tags = _node_tags(node)
         if tags:
             entry['tags'] = tags
-        # weight 回显同 tags：没有 light 节点的图，输出与今天逐字节相同。
+        # weight is echoed like tags: a graph with no light node prints byte-for-byte today's output.
         if _node_weight(node) == 'light':
             entry['weight'] = 'light'
 
@@ -705,14 +759,16 @@ def cmd_list(args):
         result.append(entry)
 
     if args.ready:
-        # 只有 todo 节点在 ready 里（`e['ready']` 已经说了这句）：shelved 在等人、completed 已交，
-        # 依赖没满足的还在等 —— 无依赖的根节点也不是自动 ready。
+        # Only todo nodes are in ready (`e['ready']` has already said so): shelved is waiting for a
+        # human, completed has been delivered, and one whose dependencies are unmet is still waiting
+        # -- a root node with no dependencies is not automatically ready either.
         result = [e for e in result if e['ready']]
 
     if args.tags:
-        # 「这个过滤集会挑到哪些节点」：命中 = 至少一个 tag 相交，或者一个 tag 都没有
-        # （没有 tag 的节点留在所有范围里）。这一步只删行 —— urgency/importance 仍在整张
-        # 非完成子图上算，下面的排序一个字没动。
+        # "Which nodes would this filter set pick": a hit = at least one tag in common, or no tag at
+        # all (a node with no tag stays in every range). This step only drops rows --
+        # urgency/importance are still computed over the whole non-completed subgraph, and the
+        # ordering below is untouched.
         wanted = _parse_tags(args.tags)
         if wanted:
             result = [e for e in result if _in_tag_scope(e, wanted)]
@@ -767,9 +823,10 @@ def cmd_info(args):
         'description': node.get('description', ''),
         'depends_on': deps_list,
         'depended_by': dep_by_list,
-        # 和 list 说的必须是同一件事（见 _node_ready）：自己是 todo、依赖都 done。
+        # It has to say the same thing as list (see _node_ready): it is todo itself and every
+        # dependency is done.
         'ready': graph._node_ready(node, all_nodes),
-        # shelved 的节点不排优先级（它不在可跑的集合里），所以两项分数都归零。
+        # A shelved node is not ranked (it is not in the runnable set), so both scores read zero.
         'urgency_level': 0 if blocked else urgency_scores.get(uid, 0),
         'importance_score': 0 if blocked else imp_scores.get(uid, 0),
     }
@@ -781,8 +838,9 @@ def cmd_info(args):
         result['created_at'] = node.get('created_at', '')
         result['updated_at'] = node.get('updated_at', '')
 
-    # 会话便条（讨论场 / 执行场）有才回显。`list` 给的是骨架，`info` 是这一格的详情——
-    # 调用方不许读 ideas.json 原文，所以这两个键不出现在这里，就等于没记。
+    # Session notes (the discussion run / the execution run) are echoed only when they exist. `list`
+    # gives the skeleton, `info` is this slot's detail -- callers may not read ideas.json raw, so a
+    # key that does not appear here was never written.
     note = _session_note().read(_project_root(), uid)
     if note['discussion'] or note['run']:
         result['sessions'] = {role: note[role] for role in ('discussion', 'run')}
@@ -907,7 +965,7 @@ def cmd_search(args):
             'id': uid,
             'title': title,
             'status': status,
-            # 和 `list`/`info` 说的同一件事（见 _node_ready）。
+            # The same thing `list`/`info` say (see _node_ready).
             'ready': graph._node_ready(node, data['nodes']),
         }
 
@@ -1092,7 +1150,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # search
     p = subs.add_parser('search', help='Search nodes by title/description using regex')
-    p.add_argument('query', help="Regex pattern (case-insensitive). Always quote: search 'IYL|加载'")
+    p.add_argument('query',
+                   help="Regex pattern (case-insensitive). Always quote: search 'IYL|loading'")
     p.add_argument('--limit', '-n', type=int, default=5,
                    help='Max results (0 = unlimited)')
     p.add_argument('--active-only', action='store_true',
@@ -1115,19 +1174,22 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main():
-    # 中文节点标题走 JSON 输出，而这份脚本的 stdout 编码跟的是控制台代码页（这台机器默认 GBK）。
-    # 调用方（conduct_pipeline.py）按 UTF-8 解码，GBK 字节流会让它的读线程直接抛
-    # UnicodeDecodeError、stdout 变成 None —— 管线的第一个轮边界就崩在那里。
-    # 每个入口自己做同样的 reconfigure（stderr 同理：报错也是中文）。
+    # Node titles go out as JSON, and this script's stdout encoding follows the console code page
+    # (GBK by default on this machine). The caller (conduct_pipeline.py) decodes as UTF-8, and a GBK
+    # byte stream makes its reader thread throw UnicodeDecodeError and stdout become None -- the
+    # pipeline's first round boundary dies right there. Every entry point does the same reconfigure
+    # itself (stderr too: the error text carries non-ASCII as well).
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, 'reconfigure'):
             stream.reconfigure(encoding='utf-8', errors='replace')
-    # 项目在这里认一次：记录目录由 `configure()` 钉住，这一趟命令都按它读写。
+    # The project is recognized here once: `configure()` pins the ledger, and this run of the
+    # command reads and writes by it.
     configure(_resolve_project_root(Path.cwd()))
     parser = _build_parser()
     args = parser.parse_args()
     if args.command == 'help':
-        # `help` 与 `--help` 印同一份正文：动词、旗标和取值就是这个 parser 里的那些。
+        # `help` and `--help` print the same body: the verbs, flags and values are the ones in this
+        # parser.
         parser.print_help()
         return
     args.func(args)

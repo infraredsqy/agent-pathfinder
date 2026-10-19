@@ -144,7 +144,8 @@ class LedgerCase(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory(prefix='ledger-merge-test-')
         self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name)
-        # init 的两枚文件：驱动写回时也要拿项目那把锁，而锁只肯落在 init 过的 `.pf/` 里。
+        # init's two marker files: the write-back takes the project's lock too, and the lock only
+        # lands in an init-ed `.pf/`.
         init_markers(self.root)
 
     # ── the fixture ──────────────────────────────────────────────────────────
@@ -253,7 +254,7 @@ class TestIdeasMerge(LedgerCase):
 
         proc, ours_path = self.merge(base, mins, theirs)
 
-        self.assertRefused(proc, ours_path, '删与改撞了', ours_data=mins)
+        self.assertRefused(proc, ours_path, 'delete vs edit collided', ours_data=mins)
 
     def test_a_node_both_sides_deleted_is_gone(self):
         base = ideas(aaaa=node('one'), bbbb=node('two'))
@@ -292,7 +293,7 @@ class TestIdeasMerge(LedgerCase):
 
         proc, ours_path = self.merge(base, mins, theirs)
 
-        self.assertRefused(proc, ours_path, '依赖被合并删掉了', ours_data=mins)
+        self.assertRefused(proc, ours_path, 'a dependency was deleted by the merge', ours_data=mins)
         self.assertIn('undepend', proc.stderr)              # the line says how to get out
 
     def test_an_edge_that_was_already_dangling_is_not_the_merges_business(self):
@@ -331,8 +332,8 @@ class TestIdeasMerge(LedgerCase):
 
         proc, ours_path = self.merge(base, mins, ideas(aaaa=node('one', deps=[EDGE_X, EDGE_Y])))
 
-        self.assertRefused(proc, ours_path, '字段 dependencies', ours_data=mins)
-        self.assertIn('删', proc.stderr)              # the line names what each side did
+        self.assertRefused(proc, ours_path, 'field dependencies', ours_data=mins)
+        self.assertIn('removed', proc.stderr)              # the line names what each side did
 
     def test_edges_without_a_base_are_a_conflict(self):
         """An add/add gives no ancestor: an added edge cannot be told from a removed one."""
@@ -368,7 +369,7 @@ class TestIdeasMerge(LedgerCase):
         base = ideas(aaaa=node('one'))
         mins = ideas(aaaa=node('one', note='ours'))
         proc, ours_path = self.merge(base, mins, ideas(aaaa=node('one', note='theirs')))
-        self.assertRefused(proc, ours_path, '字段 note', ours_data=mins)
+        self.assertRefused(proc, ours_path, 'field note', ours_data=mins)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -417,10 +418,12 @@ class TestStateMerge(LedgerCase):
         self.assertRefused(proc, ours_path, 'path', ours_data=ours)
 
     def test_one_node_with_the_same_result_twice_is_no_quarrel(self):
-        """同一个节点两侧各记了一次同样的结果，收工时刻差了几秒：并集里留先来的那一条就够。
+        """Both sides recorded the same result for one node, a few seconds apart at the closing
+        moment: keeping the earlier entry in the union is enough.
 
-        规则判的是两侧同一个节点的 `result`；判整个条目的话，两台机器把同一个节点记成完成、各自
-        记下自己的收工时刻，就会变成一次要人裁决的 pull —— 规则自己在给人找活。
+        The rule judges the `result` of the same node on the two sides; judging the whole entry
+        would turn two machines recording one node as completed, each with its own closing moment,
+        into a pull that needs a human to adjudicate -- the rule finding work for people itself.
         """
         shared = step(NODE1, '2026-10-01T00:00:00Z', '2026-10-01T01:00:00Z')
         ours = cycle([shared, step(NODE2, '2026-10-01T01:00:00Z', '2026-10-01T02:00:00Z')])
@@ -501,7 +504,7 @@ class TestInstructionsMerge(LedgerCase):
         base = instruction()
         ours = instruction(text='ours text')
         proc, ours_path = self.merge(base, ours, instruction(text='theirs text'))
-        self.assertRefused(proc, ours_path, '字段 text', ours_data=ours)
+        self.assertRefused(proc, ours_path, 'field text', ours_data=ours)
 
     def test_the_resolution_moves_as_one_act(self):
         base = instruction()
@@ -531,13 +534,13 @@ class TestInstructionsMerge(LedgerCase):
 
         proc, ours_path = self.merge(base, ours, instruction(resolved_by='owner'))
 
-        self.assertRefused(proc, ours_path, '字段 resolved_by', ours_data=ours)
+        self.assertRefused(proc, ours_path, 'field resolved_by', ours_data=ours)
 
     def test_the_same_id_added_by_both_sides_is_a_conflict(self):
         base = {'instructions': []}
         ours = instruction(text='ours new')
         proc, ours_path = self.merge(base, ours, instruction(text='theirs new'))
-        self.assertRefused(proc, ours_path, '新增', ours_data=ours)
+        self.assertRefused(proc, ours_path, 'both sides added', ours_data=ours)
 
     def test_an_entry_only_one_side_has_is_taken(self):
         base = {'instructions': []}
@@ -584,7 +587,7 @@ class TestInstructionsMerge(LedgerCase):
         rival = instruction(applied=log + [{'at': '2026-10-03T00:00:00Z'}], applied_rounds=log)
         proc, ours_path = self.merge(base, both, rival)
 
-        self.assertRefused(proc, ours_path, '字段 applied', ours_data=both)
+        self.assertRefused(proc, ours_path, 'field applied', ours_data=both)
 
     def test_a_removed_entry_stays_removed_when_the_other_side_left_it_alone(self):
         """A removal on one machine must not be undone by a pull on the other -- the same rule the
@@ -611,7 +614,7 @@ class TestInstructionsMerge(LedgerCase):
 
         proc, ours_path = self.merge(base, ours, theirs)
 
-        self.assertRefused(proc, ours_path, '删与改撞了', ours_data=ours)
+        self.assertRefused(proc, ours_path, 'delete vs edit collided', ours_data=ours)
 
     def test_removals_on_both_sides_are_unioned(self):
         """Each machine took a different entry off: both removals stand, and both traces survive --
@@ -671,7 +674,7 @@ class TestInstructionsMerge(LedgerCase):
 
         proc, ours_path = self.merge(base, ours, theirs)
 
-        self.assertRefused(proc, ours_path, '两次机主动作撞了', ours_data=ours)
+        self.assertRefused(proc, ours_path, 'two owner acts collided', ours_data=ours)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -762,10 +765,10 @@ class TestDriverContract(LedgerCase):
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn('dry-run', proc.stdout)
-        self.assertIn('只有 ours 有', proc.stdout)          # the union decision
-        self.assertIn('只有 theirs 有', proc.stdout)
-        self.assertIn('按偏序取高', proc.stdout)            # the status rung
-        self.assertIn('无冲突，本应写入', proc.stdout)
+        self.assertIn('only ours has it', proc.stdout)          # the union decision
+        self.assertIn('only theirs has it', proc.stdout)
+        self.assertIn('status takes the higher rung', proc.stdout)            # the status rung
+        self.assertIn('no conflicts; would have written ', proc.stdout)
         self.assertEqual(before, ours_path.read_bytes(), '--dry-run wrote to <ours>')
 
     def test_dry_run_still_reports_a_conflict(self):
@@ -805,7 +808,8 @@ class TestDriverContract(LedgerCase):
                                  target.read_text(encoding='utf-8'))
 
     def test_a_file_that_is_not_json_is_refused_with_exit_2(self):
-        """读不动的一侧：rc=2、那枚文件原样，驱动与读者各说一句，两句都点名是哪个文件。"""
+        """A side that cannot be read: rc=2, that file untouched, the driver and the reader each say
+        a line, and both lines name which file it is."""
         self.write_side('base', ideas(aaaa=node('one')))
         broken = self.side_path('ours')
         broken.parent.mkdir(parents=True, exist_ok=True)
@@ -817,7 +821,7 @@ class TestDriverContract(LedgerCase):
 
         self.assertEqual(2, proc.returncode, proc.stderr)
         self.assertIn('parse failure', proc.stderr)          # the shared reader's words
-        self.assertIn('不是合法 JSON', proc.stderr)           # and the driver's own line
+        self.assertIn('is not valid JSON; nothing is written', proc.stderr)  # and the driver's own line
         self.assertIn(broken.name, proc.stderr)
         self.assertEqual(before, broken.read_bytes(), 'a refused read still touched the file')
 
@@ -840,10 +844,12 @@ class TestDriverContract(LedgerCase):
         self.assertIsNone(MERGE._kind_from_shape({'hello': 'world'}))
 
     def test_help_prints_the_driver_spelling_of_the_git_arguments(self):
-        """`--help` 是 git 那条命令的说明书：`%O`/`%A`/`%B`/`%P` 原样印出来，命令自己 rc=0。
+        """`--help` is the manual for the git command line: `%O`/`%A`/`%B`/`%P` are printed as
+        written, and the command itself returns rc=0.
 
-        argparse 会把每条 `help=` 当格式串（`%` 要写成 `%%`），一个漏掉的双写就让 `--help` 抛
-        `ValueError`：git 配置里认不出驱动的人正是靠这一段。
+        argparse treats every `help=` as a format string (`%` must be written `%%`), and one missed
+        doubling makes `--help` raise `ValueError`: the passage a person who cannot recognize the
+        driver in the git config leans on is exactly this one.
         """
         proc = run_argv([MERGE_PY, '--help'], cwd=self.root, check=False)
 
@@ -946,7 +952,8 @@ class TestTheDoorsGiveTheWritersBytes(unittest.TestCase):
                                    register=True, reuse=True)
 
     def test_the_store_door_gives_the_bytes_its_writer_lands(self):
-        """`record_bytes` 与 `_atomic_write` 就同一份数据各说一次，两次必须一模一样。"""
+        """`record_bytes` and `_atomic_write` each state the same data once, and the two must be
+        identical."""
         data = cycle([step(NODE1, '2026-10-01T00:00:00Z', '2026-10-01T01:00:00Z')])
         landed = self.root / 'reference' / 'state.json'
 
@@ -955,7 +962,8 @@ class TestTheDoorsGiveTheWritersBytes(unittest.TestCase):
         self.assertEqual(landed.read_bytes(), STORE.record_bytes(data))
 
     def test_the_graph_door_gives_the_bytes_its_writer_lands(self):
-        """`ideas_bytes` 与 `_write` 同上；`_write` 的落点由这次调用点名（三个绑定挪到 temp 里）。"""
+        """`ideas_bytes` and `_write`, the same; where `_write` lands is named by this call (the
+        three bindings are moved into temp)."""
         data = ideas(aaaa=node('one'), bbbb=node('two'))
         landed = self.root / 'reference' / '.pf' / 'ideas.json'
         dag = self._graph()
@@ -1038,7 +1046,8 @@ class TestAMissingToolIsAUsageError(LedgerCase):
         self.assertUsageError(proc, base)
 
     def test_the_same_merge_lands_when_the_tool_is_there(self):
-        """对照：变量留在缺省（工具在出厂位置）时，同一份夹具照合、照写。"""
+        """The control: with the variable left at its default (the tool in its factory location),
+        the same fixture merges and lands as before."""
         base = ideas(aaaa=node('one'))
         theirs = ideas(aaaa=node('one'), cccc=node('three'))
 

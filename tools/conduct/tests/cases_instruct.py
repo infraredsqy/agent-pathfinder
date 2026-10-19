@@ -27,39 +27,39 @@ class TestInstructionScope(Base):
 
     def with_cycle(self, count=1):
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         if count > 1:
-            sb.add_node(NODE2, '另一条支线', mode='auto')
+            sb.add_node(NODE2, 'another line', mode='auto')
         return sb
 
     def test_a_global_entry_is_readable_anywhere(self):
         sb = self.with_cycle()
-        sb.instruct('全局的约束')
+        sb.instruct('a global constraint')
 
         visible = sb.instruct_visible_cli()
-        self.assertEqual([i['text'] for i in visible], ['全局的约束'])
+        self.assertEqual([i['text'] for i in visible], ['a global constraint'])
 
     def test_a_cycle_entry_is_readable_while_its_cycle_is_active(self):
         sb = self.with_cycle()
-        sb.instruct('这条线里的约束', scope='cycle')
+        sb.instruct('a constraint for this line', scope='cycle')
 
         entry = sb.instruct_list()[0]
         self.assertEqual(entry['scope'], 'cycle')
         self.assertEqual(entry['cycle'], 'cyc')
-        self.assertEqual([i['text'] for i in sb.instruct_visible_cli()], ['这条线里的约束'])
+        self.assertEqual([i['text'] for i in sb.instruct_visible_cli()], ['a constraint for this line'])
 
         sb._tool('cycle', 'status', 'cyc', 'inactive')
         self.assertEqual(sb.instruct_visible_cli(), [])
 
     def test_a_node_entry_is_readable_while_its_node_is_unfinished(self):
         sb = self.with_cycle()
-        sb.instruct('做这个节点时的约束', scope='node')
+        sb.instruct('a constraint for this node', scope='node')
 
         entry = sb.instruct_list()[0]
         self.assertEqual(entry['scope'], 'node')
         self.assertEqual(entry['node'], NODE)
-        self.assertEqual([i['text'] for i in sb.instruct_visible_cli()], ['做这个节点时的约束'])
+        self.assertEqual([i['text'] for i in sb.instruct_visible_cli()], ['a constraint for this node'])
 
         sb.write_signal('cyc', NODE, 'completed', 'done')
         sb.close_round(NODE)
@@ -67,13 +67,15 @@ class TestInstructionScope(Base):
                          'a node entry outlived the node it was recorded in')
 
     def test_a_finished_nodes_entry_leaves_the_view_once_the_line_lets_go(self):
-        """这个节点做完、线把它放下之后，位置钉不下来（没有 active 线握着它）：判定退回按条目
-        绑定的那个节点的现状读 —— `completed`，于是不念。
+        """Once this node is done and the line lets go of it, the position cannot be pinned (no
+        active line holds it): the verdict falls back to reading the state of the node the entry is
+        bound to -- `completed`, so it is not read out.
 
-        点名这个节点读到的是同一个答案：没有一条 active 线握着它，位置同样钉不下来。
+        Naming this node reads the same answer: no active line holds it, so the position cannot be
+        pinned either.
         """
         sb = self.with_cycle()
-        sb.instruct('做这个节点时的约束', scope='node')
+        sb.instruct('a constraint for this node', scope='node')
         sb.write_signal('cyc', NODE, 'completed', 'done')
         sb.close_round(NODE)
 
@@ -81,40 +83,43 @@ class TestInstructionScope(Base):
         self.assertEqual(sb.instruct_visible_cli(node=NODE), [])
 
     def test_a_named_node_is_not_swapped_for_the_one_in_hand(self):
-        """`--node X` 说出的位置就是 X：线上正握着别的节点也不换。
+        """The position `--node X` names IS X: it is not swapped even when the line is holding
+        another node.
 
-        手握着的那一格说的是**线**在哪儿，`--node` 说的是**读者**在哪一格 —— 换掉它，等于让
-        读者站在线上的别处读约束。
+        The slot in hand says where the **line** is; `--node` says which slot the **reader** is in
+        -- swapping it would put the reader elsewhere on the line, reading the constraints there.
         """
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.add_node(NODE2, '另一条支线', mode='auto')
-        sb.start_cycle()                       # 线握着 NODE
-        sb.instruct('只属于 NODE 的', scope='node', node=NODE)
-        sb.instruct('只属于 NODE2 的', scope='node', node=NODE2)
+        sb.add_node(NODE, 'UI design', mode='auto')
+        sb.add_node(NODE2, 'another line', mode='auto')
+        sb.start_cycle()                       # the line holds NODE
+        sb.instruct('only NODE has this constraint', scope='node', node=NODE)
+        sb.instruct('only NODE2 has this constraint', scope='node', node=NODE2)
 
-        # 没点名：读手里那一格。
-        self.assertEqual([i['text'] for i in sb.instruct_visible_cli()], ['只属于 NODE 的'])
-        # 点名 NODE2：原样生效，不换成手里的 NODE。
+        # nothing named: read the slot in hand.
+        self.assertEqual([i['text'] for i in sb.instruct_visible_cli()], ['only NODE has this constraint'])
+        # NODE2 is named: it takes effect as written, not swapped for the NODE in hand.
         self.assertEqual([i['text'] for i in sb.instruct_visible_cli(node=NODE2)],
-                         ['只属于 NODE2 的'])
+                         ['only NODE2 has this constraint'])
 
     def test_a_node_entry_is_not_read_at_another_nodes_close(self):
-        """收尾与读侧站的是同一个位置 —— 这是位置制唯一的判据。
+        """The close-out and the reading side stand in the same position -- that is the one
+        judgement the position scheme carries.
 
-        一条绑在 NODE2 上的收尾指令（含「跑够 N 个就停」）收 NODE 时不能念：站在 NODE 的会话
-        看不见它，收 NODE 的那一拍也就不该被它叫停。收尾自己按「绑定节点做没做完」判一次，就是
-        同一个位置读出两个答案。
+        A boundary instruction bound to NODE2 (including "stop after N runs") must not be read out
+        when NODE closes: a session standing on NODE cannot see it, so the beat that closes NODE
+        must not be stopped by it either. Were the close-out to judge for itself by "is the bound
+        node done", the same position would read two answers.
         """
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.add_node(NODE2, '另一条支线', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
+        sb.add_node(NODE2, 'another line', mode='auto')
         sb.start_cycle()
-        sb.instruct('只属于另一个节点的', scope='node', target='boundary', node=NODE2,
+        sb.instruct('only the other node has this constraint', scope='node', target='boundary', node=NODE2,
                     stop_after_nodes=1)
 
         self.assertEqual(sb.instruct_visible_cli(node=NODE), [])
-        self.assertEqual([i['text'] for i in sb.instruct_list()], ['只属于另一个节点的'])
+        self.assertEqual([i['text'] for i in sb.instruct_list()], ['only the other node has this constraint'])
 
         sb.write_signal('cyc', NODE, 'completed', 'done')
         action = sb.close_round(NODE, decision='continue')
@@ -125,46 +130,49 @@ class TestInstructionScope(Base):
         self.assertEqual(action['node_id'], NODE2)
 
     def test_the_place_is_the_node_in_hand_even_within_one_line(self):
-        """一条线同时握着两个节点时（`parallel`），条目跟着手上那个节点走，不跟着线走。"""
+        """When one line holds two nodes at once (`parallel`), an entry follows the node in hand,
+        not the line."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.add_node(NODE2, '另一条支线', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
+        sb.add_node(NODE2, 'another line', mode='auto')
         sb.start_cycle()
         sb.set_policy('cyc', 'parallel', 2)
         sb.set_current_node(NODE2)
-        sb.instruct('只属于另一个节点的', scope='node', node=NODE2)
+        sb.instruct('only the other node has this constraint', scope='node', node=NODE2)
 
         self.assertEqual(sb.instruct_visible_cli(node=NODE), [])
         self.assertEqual([i['text'] for i in sb.instruct_visible_cli(node=NODE2)],
-                         ['只属于另一个节点的'])
+                         ['only the other node has this constraint'])
 
     def test_two_lines_side_by_side_read_the_wide_way_when_nothing_names_your_place(self):
-        """位置钉不下来的时候往「吵」的一边倒。
+        """When the position cannot be pinned, lean to the noisy side.
 
-        两条 active cycle 并排、又没说手上是哪个节点：指针指不出哪条线在问，于是 `cycle` 作用域的
-        条目照念 —— 漏挡一条真约束比多念一条不相干的贵得多。说了手上是哪个节点，就按那条线读。
+        With two active cycles side by side and nothing saying which node is in hand, the pointer
+        cannot tell which line is asking, so `cycle`-scoped entries are read out as they stand --
+        missing a real constraint costs far more than reading one unrelated entry too many. Say
+        which node is in hand, and the read follows that line.
         """
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.add_node(NODE2, '另一条支线', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
+        sb.add_node(NODE2, 'another line', mode='auto')
         sb.start_cycle('one')
         sb.start_cycle('two', force=True)
-        sb.instruct('one 的约束', scope='cycle', cycle='one')
+        sb.instruct('constraint of one', scope='cycle', cycle='one')
 
-        self.assertEqual([i['text'] for i in sb.instruct_visible_cli()], ['one 的约束'])
-        self.assertEqual([i['text'] for i in sb.instruct_visible_cli(node=NODE)], ['one 的约束'])
+        self.assertEqual([i['text'] for i in sb.instruct_visible_cli()], ['constraint of one'])
+        self.assertEqual([i['text'] for i in sb.instruct_visible_cli(node=NODE)], ['constraint of one'])
         self.assertEqual(sb.instruct_visible_cli(node=NODE2), [])
 
     def test_a_node_entry_does_not_leak_to_the_node_that_comes_after(self):
         """The next node of the same line is a different place: the entry recorded in the previous
         node is not read there."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.add_node(NODE2, '接下来', mode='auto', deps=[NODE])
+        sb.add_node(NODE, 'UI design', mode='auto')
+        sb.add_node(NODE2, 'what comes next', mode='auto', deps=[NODE])
         sb.start_cycle()
-        sb.instruct('只属于第一个节点的', scope='node')
+        sb.instruct('only the first node has this constraint', scope='node')
 
-        self.assertEqual([i['text'] for i in sb.instruct_visible_cli()], ['只属于第一个节点的'])
+        self.assertEqual([i['text'] for i in sb.instruct_visible_cli()], ['only the first node has this constraint'])
 
         sb.write_signal('cyc', NODE, 'completed', 'done')
         sb.close_round(NODE)
@@ -176,12 +184,13 @@ class TestInstructionScope(Base):
     def test_the_default_view_is_computed_from_where_the_pipeline_stands(self):
         """All three scopes at once, and the answer is the union of what is live from here."""
         sb = self.with_cycle()
-        sb.instruct('全局的')
-        sb.instruct('这条线的', scope='cycle')
-        sb.instruct('这个节点的', scope='node')
+        sb.instruct('the global constraint')
+        sb.instruct('the constraint for this line', scope='cycle')
+        sb.instruct('the constraint for this node', scope='node')
 
         self.assertEqual({i['text'] for i in sb.instruct_visible_cli()},
-                         {'全局的', '这条线的', '这个节点的'})
+                         {'the global constraint', 'the constraint for this line',
+                          'the constraint for this node'})
 
     def test_an_entry_with_nothing_to_bind_to_is_refused(self):
         """An unbound cycle/node entry would be read as visible everywhere, forever -- the one
@@ -198,11 +207,11 @@ class TestInstructionScope(Base):
         """Two lines side by side: the state cannot say which one is asking, so the caller names
         the line. The entry is then read from there and from nowhere else."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.add_node(NODE2, '另一条支线', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
+        sb.add_node(NODE2, 'another line', mode='auto')
         sb.start_cycle('one')
         sb.start_cycle('two', force=True)
-        sb.instruct('只属于 two 的', scope='cycle', cycle='two')
+        sb.instruct('only two has this constraint', scope='cycle', cycle='two')
 
         entry = sb.instruct_list()[0]
         self.assertEqual(entry['cycle'], 'two')
@@ -211,31 +220,31 @@ class TestInstructionScope(Base):
         self.assertEqual(sb.instruct_visible_cli(node=NODE), [])
         # `two` is pinned on NODE2 (the second pick), so reading from there lands on `two`.
         self.assertEqual([i['text'] for i in sb.instruct_visible_cli(node=NODE2)],
-                         ['只属于 two 的'])
+                         ['only two has this constraint'])
 
     def test_a_cycle_entry_reaches_its_own_line_only(self):
         """A cycle entry goes to the line it was recorded in. A reader on the other line sees the
         globals and its own cycle's entries, and this one is neither."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.add_node(NODE2, '另一条支线', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
+        sb.add_node(NODE2, 'another line', mode='auto')
         sb.start_cycle('one')
         sb.start_cycle('two', force=True)
-        sb.instruct('one 的约束', scope='cycle', cycle='one')
-        sb.instruct('谁都要看的')
+        sb.instruct('constraint of one', scope='cycle', cycle='one')
+        sb.instruct('a constraint everyone reads')
 
         seen_by_two = {i['text'] for i in sb.instruct_visible_cli(node=NODE2)}
-        self.assertEqual(seen_by_two, {'谁都要看的'})
+        self.assertEqual(seen_by_two, {'a constraint everyone reads'})
 
     def test_the_account_view_shows_the_rows_and_the_default_view_folds_them(self):
         sb = self.with_cycle()
-        sb.instruct('全局的约束')
+        sb.instruct('a global constraint')
         rows = sb.instruct_list_cli()
         folded = sb.instruct_visible_cli()
 
-        self.assertEqual(rows[0]['text'], '全局的约束')
+        self.assertEqual(rows[0]['text'], 'a global constraint')
         self.assertIn('id', rows[0])
-        self.assertEqual(folded[0]['text'], '全局的约束')
+        self.assertEqual(folded[0]['text'], 'a global constraint')
         self.assertIn('scope', folded[0])
 
 class TestInstructionTargets(Base):
@@ -243,16 +252,16 @@ class TestInstructionTargets(Base):
 
     def test_the_two_targets_reach_their_two_readers(self):
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
-        sb.instruct('每条都要看的', target='stage')
-        sb.instruct('收尾时才读的', target='boundary')
+        sb.instruct('a constraint every stage reads', target='stage')
+        sb.instruct('a constraint read only at the close', target='boundary')
 
         targets = {i['text']: i['target'] for i in sb.instruct_list()}
-        self.assertEqual(targets, {'每条都要看的': 'stage', '收尾时才读的': 'boundary'})
+        self.assertEqual(targets, {'a constraint every stage reads': 'stage', 'a constraint read only at the close': 'boundary'})
         # Both are part of the same read: the target says WHO cares, not whether it is live.
         self.assertEqual({i['text'] for i in sb.instruct_visible_cli()},
-                         {'每条都要看的', '收尾时才读的'})
+                         {'a constraint every stage reads', 'a constraint read only at the close'})
 
     def test_a_target_outside_the_two_is_refused(self):
         sb = self.make()
@@ -265,9 +274,9 @@ class TestInstructionTargets(Base):
 class TestInstructionAuthority(Base):
     """Who may retire an entry, and what a retired one leaves behind."""
 
-    def seeded(self, scope='global', text='全局的约束'):
+    def seeded(self, scope='global', text='a global constraint'):
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         sb.instruct(text, scope=scope)
         return sb, sb.instruct_list()[0]['id']
@@ -279,7 +288,7 @@ class TestInstructionAuthority(Base):
         self.assertEqual(sb.instruct_visible_cli(), [])
         rows = sb.instruct_list_cli()
         self.assertEqual(rows[0]['state'], 'withdrawn')
-        self.assertEqual(rows[0]['text'], '全局的约束')
+        self.assertEqual(rows[0]['text'], 'a global constraint')
 
     def test_the_archive_is_the_state_and_the_moment_and_no_hand(self):
         """Only the owner archives an entry, so the record names no hand for it: the archive writes
@@ -300,14 +309,14 @@ class TestInstructionAuthority(Base):
         Withdrawing is the owner's move; a scoped entry goes out of sight on its own once its line
         is gone, so the archive keeps the sentence and no verdict about the work is written.
         """
-        sb, ins_id = self.seeded(scope='cycle', text='这条线里的约束')
-        sb.instruct('新的约束', scope='cycle', cycle='cyc')
+        sb, ins_id = self.seeded(scope='cycle', text='a constraint for this line')
+        sb.instruct('a new constraint', scope='cycle', cycle='cyc')
         sb.instruct_resolve(ins_id, 'withdrawn')
 
         rows = {r['id']: r for r in sb.instruct_list_cli()}
         self.assertEqual(rows[ins_id]['state'], 'withdrawn')
-        self.assertEqual(rows[ins_id]['text'], '这条线里的约束')
-        self.assertEqual([i['text'] for i in sb.instruct_visible_cli()], ['新的约束'])
+        self.assertEqual(rows[ins_id]['text'], 'a constraint for this line')
+        self.assertEqual([i['text'] for i in sb.instruct_visible_cli()], ['a new constraint'])
 
     def test_the_account_has_only_one_move_left(self):
         """Two states, one of them written by the owner: anything else `resolve` is asked for is
@@ -322,24 +331,24 @@ class TestInstructionAuthority(Base):
 
     def test_a_resolved_instruction_leaves_the_next_read(self):
         sb, ins_id = self.seeded()
-        sb.instruct('留下的')
+        sb.instruct('the constraint that stays')
         sb.instruct_resolve(ins_id, 'withdrawn')
 
-        self.assertEqual([i['text'] for i in sb.instruct_visible_cli()], ['留下的'])
+        self.assertEqual([i['text'] for i in sb.instruct_visible_cli()], ['the constraint that stays'])
 
     def test_a_prompt_carries_no_instruction_text(self):
         """The channel is `instruction list`, run by the session itself; a box assembled into the
         prompt would only ever be a staler copy of that answer, and a place where a constraint can
         look present while nobody reads it."""
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
-        sb.instruct('一条绝不能进 prompt 的约束')
+        sb.instruct('a constraint that must never reach the prompt')
 
         action = sb.plan()
 
-        self.assertNotIn('一条绝不能进 prompt 的约束', action['prompt_text'])
-        self.assertNotIn('约束', action['prompt_text'])
+        self.assertNotIn('a constraint that must never reach the prompt', action['prompt_text'])
+        self.assertNotIn('constraint', action['prompt_text'])
 
     def test_the_closing_call_leaves_the_account_alone(self):
         sb, ins_id = self.seeded()
@@ -359,7 +368,7 @@ class TestInstructionAuthority(Base):
         proc = run_state_manage(other.root, 'instruction', 'list', '--project', str(sb.root))
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn('全局的约束', proc.stdout)
+        self.assertIn('a global constraint', proc.stdout)
         self.assertTrue((sb.root / '.pf' / 'instructions.json').exists())
 
 
@@ -368,10 +377,10 @@ class TestInstructionRemoval(Base):
 
     def seeded(self, count=2):
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         for i in range(count):
-            sb.instruct(f'第 {i + 1} 条约束')
+            sb.instruct(f'constraint {i + 1}')
         return sb, [e['id'] for e in sb.instruct_list()]
 
     def account_bytes(self, sb) -> str:
@@ -388,8 +397,8 @@ class TestInstructionRemoval(Base):
         self.assertEqual([e['id'] for e in sb.instruct_visible_cli()], [ids[1]])    # the default view
         human_all = sb._tool('instruction', 'list', '--all', cli=True).stdout
         self.assertNotIn(ids[0], human_all)
-        self.assertNotIn('第 1 条约束', human_all)
-        self.assertNotIn('第 1 条约束', self.account_bytes(sb))
+        self.assertNotIn('constraint 1', human_all)
+        self.assertNotIn('constraint 1', self.account_bytes(sb))
 
     def test_what_stays_is_the_id_and_the_moment_and_no_state_word(self):
         """A removal is not a third state: the trace is bookkeeping, and the account's own
@@ -408,7 +417,7 @@ class TestInstructionRemoval(Base):
         sb, ids = self.seeded()
         sb.instruct_rm(ids[1])
 
-        sb.instruct('接着记的')
+        sb.instruct('the next constraint recorded')
 
         self.assertEqual([e['id'] for e in sb.instruct_list()], [ids[0], 'i-0003'])
 
@@ -421,7 +430,7 @@ class TestInstructionRemoval(Base):
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn(ids[0], proc.stdout)
-        self.assertIn('第 1 条约束', proc.stdout)
+        self.assertIn('constraint 1', proc.stdout)
 
     def test_an_archived_entry_can_still_be_taken_off(self):
         """The two owner moves are independent: an archive that turned out to be the wrong call is
@@ -432,7 +441,7 @@ class TestInstructionRemoval(Base):
         sb.instruct_rm(ids[0], cli=True)
 
         self.assertEqual([e['id'] for e in sb.instruct_list()], [ids[1]])
-        self.assertNotIn('第 1 条约束', self.account_bytes(sb))
+        self.assertNotIn('constraint 1', self.account_bytes(sb))
 
     def test_an_id_the_account_never_had_is_refused(self):
         sb, ids = self.seeded()
@@ -462,13 +471,13 @@ class TestInstructionRemoval(Base):
 class TestInstructionRevival(Base):
     """Putting an archived entry back in force: the state moves, the record's shape does not."""
 
-    def archived(self, text='全局的约束'):
+    def archived(self, text='a global constraint'):
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         sb.instruct(text)
         ins_id = sb.instruct_list()[0]['id']
-        sb.instruct_resolve(ins_id, 'withdrawn', note='当时先收起来')
+        sb.instruct_resolve(ins_id, 'withdrawn', note='shelved it back then')
         return sb, ins_id
 
     def test_reviving_puts_an_archived_entry_back_in_force(self):
@@ -482,7 +491,7 @@ class TestInstructionRevival(Base):
         self.assertIsNone(entry['resolved_at'])
         self.assertNotIn('resolved_by', entry)
         self.assertEqual([ins_id], [i['id'] for i in sb.instruct_visible_cli()])
-        self.assertIn('全局的约束', sb._tool('instruction', 'list', cli=True).stdout)
+        self.assertIn('a global constraint', sb._tool('instruction', 'list', cli=True).stdout)
 
     def test_an_entry_that_is_already_live_is_refused(self):
         sb, ins_id = self.archived()
@@ -515,5 +524,5 @@ class TestInstructionRevival(Base):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn('was removed', proc.stderr)
         self.assertEqual(sb.instruct_list(), [])
-        self.assertNotIn('全局的约束',
+        self.assertNotIn('a global constraint',
                          (sb.root / '.pf' / 'instructions.json').read_text(encoding='utf-8'))

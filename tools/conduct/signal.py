@@ -22,7 +22,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent      # the conduct tool directory: the entry sits at its top
 CONDUCT = HERE
 
-# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
+# Bootstrap: the loader is fetched by path too, so every file has to carry this paragraph itself
+# (see `shared/loader.py`).
 SHARED = CONDUCT.parent / 'shared'
 
 _LOADER = None
@@ -91,8 +92,9 @@ def write_signal(cycle: str, node: str, status: str, summary: str,
 
 
 def main() -> None:
-    # stdout/stderr 都按 UTF-8 走：报错和路径里可能出现中文，控制台代码页（这台机器默认 GBK）
-    # 会把字节写歪，按 UTF-8 解码的父进程直接炸在读线程上。
+    # Both stdout and stderr go out as UTF-8: errors and paths may carry non-ASCII text, and the
+    # console code page (GBK by default on this machine) would write the bytes wrong, so a parent
+    # process decoding as UTF-8 blows up in its read thread.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, 'reconfigure'):
             stream.reconfigure(encoding='utf-8', errors='replace')

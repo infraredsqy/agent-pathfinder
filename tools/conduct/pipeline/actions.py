@@ -34,11 +34,11 @@ def _node_entry(project: Path, cycle: dict, row: dict, mode: str) -> dict:
 
 
 def _dispatch_many(project: Path, cycle: dict, node_ids: list) -> dict:
-    """一条线手里的每个节点各一份 dispatch，装进同一个动作。
+    """One dispatch per node in a line's hand, gathered into the same action.
 
-    一条多节点的线在派发上就是若干个「一格」并排：每个节点有自己的 prompt 文件、自己的会话、
-    自己的收尾命令，`dispatch <cycle>` 把它们一起开出去。单节点的线拿到的还是同一份形状，
-    只是 `nodes` 里恰好有一项。
+    On the dispatch side a multi-node line is several "one slot"s side by side: each node has its own
+    prompt file, its own session and its own closing commands, and `dispatch <cycle>` opens them all
+    together. A single-node line still gets the same shape, with exactly one entry in `nodes`.
     """
     dag = load_dag(project)
     nodes = [_node_entry(project, cycle, node_row(dag, node_id), mode_for(node_id, dag))
@@ -70,7 +70,7 @@ def _maintenance_due(project: Path, cycle: dict, closed: str, hit: dict, target:
     is there, create the maintenance node, wire the two edges, and pin the cycle on it. Nothing is
     written here -- `apply` is the only writer, and `plan` must stay byte-for-byte read-only.
 
-    It is shaped like `_dispatch_many` on purpose ("走法和 dispatch 一样"): the same `prompt` /
+    It is shaped like `_dispatch_many` on purpose ("the same walk as dispatch"): the same `prompt` /
     `prompt_text` / `mode` fields, so `dispatch <cycle>` and `next --spawn` need no second case. The
     difference is WHICH node is pinned -- the one just inserted, not the one the close had picked --
     and that the picked node is named in `deferred_node`, because it is still the next thing the
@@ -80,12 +80,11 @@ def _maintenance_due(project: Path, cycle: dict, closed: str, hit: dict, target:
     entry = _node_entry(project, cycle, {'id': node_id, 'title': hit['title']}, DEFAULT_MODE)
     shown = (f'{hit["value"]:g}{hit["unit"]}')
     line = (f'{hit["at"]:g}{hit["unit"]}')
-    note = (f'{hit["subject"]} 读到 {shown}，达到这条线策略里的线 {line}'
-            f'（`policies.{hit["line"]}`）：'
-            f'已把维护节点插在刚收掉的 {closed[:8]} 与它原本挑中的 '
-            f'{target.get("title") or target["id"]} 之间，并钉在新节点上。'
-            f'派发与 `dispatch` 一样，提交并推送之后跑 '
-            f'`pf dispatch {cycle["id"]}`。')
+    note = (f'{hit["subject"]} read {shown}, over the line {line} in this line\'s policies '
+            f'(`policies.{hit["line"]}`): the maintenance node is inserted between the just-closed '
+            f'{closed[:8]} and the {target.get("title") or target["id"]} it had picked, and pinned '
+            f'on the new node. Dispatch as with `dispatch`: after committing and pushing, run '
+            f'`pf dispatch {cycle["id"]}`.')
     edit = maintenance.insertion(project, closed, target['id'], cycle['id'], hit,
                                  spec_of=hit['spec_of'], close_commands=close_commands)
     return {
@@ -96,7 +95,7 @@ def _maintenance_due(project: Path, cycle: dict, closed: str, hit: dict, target:
         # `extra_note` is the line that would have ridden on the dispatch this action replaces (a
         # hand-named node outside the filter set, for one). It has to keep riding along: the caller
         # never sees the action it displaced.
-        'note': f'{note}；{extra_note}' if extra_note else note,
+        'note': f'{note}; {extra_note}' if extra_note else note,
         'steps': [f'write prompt text to {entry["prompt"]}',
                   f'insert a maintenance node with the generated spec '
                   f'({node_spec_path(project, node_id)}), between {closed} and {target["id"]}',
@@ -118,8 +117,8 @@ def _ticket_wait(cycle: dict, node_id: str, holding=None) -> dict:
     same answer. It must never be a dead end -- the caller that lands here is told, in the `note`
     and again in `close_with`, the exact command that closes the node.
 
-    一条线手里还有别的节点时（`holding`），那句话带上它们：各自的条子到了照常收；整条线要走完，
-    还得靠它们各自的收尾。
+    When the line still holds other nodes (`holding`), that sentence carries them too: their own
+    notes are collected as they land, and for the whole line to finish, their own closes have to run.
 
     `--spawn` is deliberately NOT part of `close_with`: closing a node and starting the next session
     are two steps, because the worker still has to commit and push what it made before the next
@@ -127,50 +126,54 @@ def _ticket_wait(cycle: dict, node_id: str, holding=None) -> dict:
     """
     close_with = f'pf next --after {node_id} --json'
     others = [x for x in (holding or []) if x != node_id]
-    tail = (f'（手里还有 {", ".join(x[:8] for x in others)}，它们的条子到了照常收）'
-            if others else '')
+    tail = (f' (still holding {", ".join(x[:8] for x in others)}, their notes are collected as they '
+            f'arrive)' if others else '')
     return {
         'action': 'wait', 'cycle': cycle['id'], 'node_id': node_id, 'commands': [],
         'close_with': close_with,
-        'note': f'{node_id[:8]} 的条子已经在盘上，但这个节点还没被收尾 —— 别轮询，也别自己动状态。'
-                f'收尾就一条命令：{close_with}（工具读这个节点的条子、收掉它，然后告诉你下一格是'
-                f'`dispatch` 还是 `stop_pipeline`）。{tail}'
-                f'派发要排在这一趟提交并推送之后：'
-                f'`pf dispatch {cycle["id"]}`。',
+        'note': f'The note for {node_id[:8]} is already on disk, but this node has not been closed '
+                f'out yet -- do not poll, and do not move the state yourself. '
+                f'Closing it out is one command: {close_with} (the tool reads this node\'s note, '
+                f'closes it, and then tells you whether the next slot is `dispatch` or '
+                f'`stop_pipeline`).{tail}'
+                f' Dispatch comes after this run\'s commit and push: '
+                f'`pf dispatch {cycle["id"]}`.',
     }
 
 
 def _sessions_wait(cycle: dict, node_ids: list, holding=None) -> dict:
-    """手里那几格的会话都开出去了：没有可派的，等它们的条子。
+    """Every slot in hand has its session open: there is nothing to dispatch, so wait for their notes.
 
     A dispatch that names a node whose session already runs would boot a second session onto it --
-    nothing a caller can act on. 下一步在它们自己的收尾（`next --after <节点id>`）那里，所以这里
-    答 `wait`。
+    nothing a caller can act on. The next step is their own closes (`next --after <node id>`), so
+    this answers `wait`.
     """
     others = [x for x in (holding or []) if x not in node_ids]
-    tail = (f'（手里还有 {", ".join(x[:8] for x in others)}，它们照跑）' if others else '')
+    tail = (f' (still holding {", ".join(x[:8] for x in others)}, they keep running)'
+            if others else '')
     names = ', '.join(x[:8] for x in node_ids)
     return {'action': 'wait', 'cycle': cycle['id'], 'node_id': node_ids[0], 'commands': [],
-            'note': f'{names} 的会话已经开出去了（`started` 记号在盘上）—— 没有可派的东西，'
-                    f'等它们的条子，绝不轮询。它们各自的收尾：'
-                    f'pf next --after <节点id> --json。{tail}'}
+            'note': f'{names}: their sessions are already open (the `started` stamp is on disk) -- '
+                    f'there is nothing to dispatch, so wait for their notes and never poll. '
+                    f'Their own closes: pf next --after <node id> --json.{tail}'}
 
 
 def _retry_wait(cycle: dict, node_id: str, holding=None) -> dict:
     """A `pending` signal is never a green light -- wait, and name the unwind.
 
     The note carries the literal commands of the documented retry: a retry is a tool command, not
-    steps an agent has to remember. 三条，`--drop` 那条不能省：重写出来的 `pending` 也是红灯，
-    光清不拿掉，`next` 就永远答 `wait`（这条卡住过一条线）。
+    steps an agent has to remember. Three commands, and the `--drop` one cannot be skipped: a
+    rewritten `pending` is a red light too, and clearing the note without taking it out leaves
+    `next` answering `wait` forever (this has stalled a line before).
     """
     others = [x for x in (holding or []) if x != node_id]
-    tail = (f'（手里还有 {", ".join(x[:8] for x in others)}，它们照跑）' if others else '')
+    tail = (f' (still holding {", ".join(x[:8] for x in others)}, they keep running)'
+            if others else '')
     return {'action': 'wait', 'cycle': cycle['id'], 'node_id': node_id, 'commands': [],
-            'note': f'{node_id[:8]} 的条子还是 pending（还没结论，或者有人清了条子准备重试）；'
-                    f'不要轮询。解套三条：'
-                    f'pf cycle retry {cycle["id"]} {node_id} --drop --summary "重试"，'
-                    f'再 pf cycle hold {cycle["id"]} {node_id}，'
-                    f'再 pf next --spawn --json。'
+            'note': f'The note for {node_id[:8]} is still pending (no verdict yet, or somebody '
+                    f'cleared the note to retry); do not poll. Three commands unwind it: '
+                    f'pf cycle retry {cycle["id"]} {node_id} --drop --summary "retry", then '
+                    f'pf cycle hold {cycle["id"]} {node_id}, then pf next --spawn --json.'
                     f'{tail}'}
 
 
@@ -183,18 +186,22 @@ def _close_commands(project: Path, cycle: dict, node_id: str, outcome: str,
     that did not is `shelved` (out of play, waiting for a human), and a node being worked on is
     `todo`.
 
-    **停手就是转 inactive，一条写死的命令。** 「这条线是不是还该往前走」不押在图上：图会长出新
-    节点，而一条停下来的线该不该接着跑，是人说了算的事。工具永远不写 `active`。
+    **Stopping is turning inactive, one hardcoded command.** Whether this line should still push on
+    is not pinned on the graph: the graph grows new nodes, and whether a stopped line should keep
+    running is the human's call. The tool never writes `active`.
 
-    一条没交付的节点被搁置，但它后面要不要接着挑人，走的还是同一条岔路（`when_shelved` 策略已经在
-    那一步决定过了）：`shelved` 只说明这个节点出局等人，与线走不走是两件事。
+    A node that was not delivered is shelved, but whether the line picks anyone after it walks the
+    same fork (the `when_shelved` policy already decided at that step): `shelved` only says this node
+    is out of play waiting for a human -- whether the line keeps going is a separate matter.
 
-    `park=False` 只做登记，一个字的状态都不写 —— 一条不在服务中的线上，线的状态是人给的，工具
-    没有资格动它（收尾那道门用它）。
+    `park=False` registers only and writes not one word of status -- on a line that is not in
+    service, the status is the human's to give and the tool has no business touching it (the close
+    gate uses it).
 
-    `next_nodes` 收的是这次收尾补上来的**整份名单**，里头有几个就 pin 几条：腾出的空位可以不止
-    一个（`parallel` 减手里还握着的），少 pin 一条，那一格就静静地空着 —— 动作里的 `nodes` 报了
-    它，盘上的手里却没有它，而派发是按手里那几个出的。
+    `next_nodes` is the **whole list** this close fills in, and one is pinned per entry: the slots
+    freed can be more than one (`parallel` minus what is still in hand), and pin one too few and that
+    slot sits quietly empty -- the action's `nodes` reports it while the hand on disk does not hold
+    it, and the dispatch goes by what the hand holds.
     """
     cmds = [seam.cmd('cycle', 'close', cycle['id'], node_id, '--result', outcome),
             seam.dag('status', node_id, 'completed' if outcome == 'completed' else 'shelved')]
@@ -235,9 +242,10 @@ def attention_items(project: Path, cycle: dict, shelved_nodes=(), dag: dict | No
     A node that just CLOSED as completed is deliberately not in here: this list is read as "go look
     at these", and naming a success would send the reader to revive work that is already done.
 
-    **`shelved` 是节点状态，`failed` 是条子上的判决**：一个会话报告 `failed`，说的是「我没交出东西」，
-    收尾据此把这个节点搁置（标 `shelved`，出局等人）。所以这里说的是节点状态；而路径上的那一格、
-    以及 `signal.py` 的 `failed`，说的是判决。
+    **`shelved` is a node status; `failed` is a verdict on the note**: a session reporting `failed`
+    is saying "I handed over nothing", and the close shelves this node on that basis (marked
+    `shelved`, out of play waiting for a human). So what is spoken of here is node status, while the
+    entry on the path, and `signal.py`'s `failed`, speak of the verdict.
     """
     out = []
     nodes = (dag if dag is not None else load_dag(project)).get('nodes') or {}
@@ -250,7 +258,8 @@ def attention_items(project: Path, cycle: dict, shelved_nodes=(), dag: dict | No
         out.append({
             'kind': 'node_shelved', 'cycle': cycle['id'], 'node_id': uid,
             'node_title': node.get('title', ''),
-            'hint': f'dag-manage revive {uid} 放回 todo（shelved → todo），或人工处理后重开 cycle',
+            'hint': f'dag-manage revive {uid} puts it back to todo (shelved → todo), or handle it '
+                    f'by hand and restart the cycle',
         })
     return out
 
@@ -260,11 +269,14 @@ def attention_items(project: Path, cycle: dict, shelved_nodes=(), dag: dict | No
 def render_action(action: dict, as_json: bool = False, preview: bool = False) -> str:
     """One action as the caller reads it -- the ONE place both `next` front ends print from.
 
-    `preview` 是 `--plan` 那一趟：**预览不可执行**。一份还带着 `commands` 的计划停在半路（机械的那
-    几步还没跑），这种情况只报「还在落定」，绝不把命令交给调用方 —— 这是那道不变量在输出这一侧的
-    落点，两个前端（`conduct_pipeline.py` 与 `state-manage.py next`）共用它一份。
+    `preview` is the `--plan` run: **a preview is not executable**. A plan that still carries
+    `commands` has stopped half way (the mechanical steps have not run yet), and that case reports
+    only "still settling" -- it never hands the commands to the caller. This is that invariant's
+    landing point on the output side, shared by both front ends (`conduct_pipeline.py` and
+    `state-manage.py next`).
 
-    `as_json` 只是形状：JSON 给人以外的读者（`ensure_ascii=False`，中文原样），否则是人读的那一版。
+    `as_json` is only the shape: JSON is for readers other than a human (`ensure_ascii=False`, so
+    non-ASCII text is passed through as it is), otherwise the human-readable version.
     """
     if preview and action.pop('commands', None):
         action['settling'] = True

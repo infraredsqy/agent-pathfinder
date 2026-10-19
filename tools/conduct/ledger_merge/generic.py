@@ -101,8 +101,8 @@ class Report:
         self.decisions.append(f'  {what}')
 
     def conflict(self, entry: str, field: str, ours, theirs, note: str = '') -> None:
-        tail = f'（{note}）' if note else ''
-        self.conflicts.append(f'pf 冲突 [{self.path}] {entry} 字段 {field}：'
+        tail = f' ({note})' if note else ''
+        self.conflicts.append(f'pf conflict [{self.path}] {entry} field {field}: '
                               f'ours={_fmt(ours)} theirs={_fmt(theirs)}{tail}')
 
     def flush_conflicts(self) -> None:
@@ -112,21 +112,21 @@ class Report:
 
 def _fmt(value) -> str:
     if value is _MISSING:
-        return '<没有这个字段>'
+        return '<no such field>'
     if value is _DELETED:
-        return '<这一侧删掉了>'
+        return '<deleted on this side>'
     text = json.dumps(value, ensure_ascii=False)
     return text if len(text) <= 120 else text[:117] + '...'
 
 
 def _label(kind: str, key) -> str:
     if kind == KIND_IDEAS:
-        return f'节点 {str(key)[:8]}'
+        return f'Node {str(key)[:8]}'
     if kind == KIND_STATE:
         return f'cycle {key!r}'
     if kind == KIND_INSTRUCTIONS:
-        return f'指令 {key}'
-    return '条子'
+        return f'instruction {key}'
+    return 'note'
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -218,7 +218,7 @@ def _merge_entries(base, ours, theirs, rep, resolve_entry, index_of,
     if propagate_delete:
         for key in base_index:
             if key not in ours_index and key not in theirs_index:
-                rep.decide(f'{_label(rep.kind, key)}: 两侧都删了 → 结果里不要它')
+                rep.decide(f'{_label(rep.kind, key)}: both sides deleted it -> drop it from the result')
     return merged
 
 
@@ -229,14 +229,14 @@ def _keep_or_delete(merged, key, label, base_index, survivor, deleted_token, oth
     other = 'theirs' if ours_side else 'ours'
     from_base = base_index.get(key)
     if not propagate_delete or from_base is None:
-        rep.decide(f'{label}: 只有 {side} 有 → 取 {side}')
+        rep.decide(f'{label}: only {side} has it -> take {side}')
         merged[key] = survivor
         return
     if _same(survivor, from_base):
-        rep.decide(f'{label}: {other} 删了、{side} 没动 → 删除（结果里不要它）')
+        rep.decide(f'{label}: {other} deleted it, {side} left it alone -> deleted (drop it from the result)')
         return
-    rep.conflict(label, '（整条记录）', survivor, deleted_token,
-                 f'{other} 删了、{side} 改过：删与改撞了')
+    rep.conflict(label, '(the whole record)', survivor, deleted_token,
+                 f'{other} deleted it, {side} edited it: delete vs edit collided')
     merged[key] = survivor                    # the value does not matter: the file is not written
 
 
@@ -245,8 +245,8 @@ def _plain_field(label, key, base_value, ours_value, theirs_value, rep):
     got = _three_way(base_value, ours_value, theirs_value)
     if got is not _UNDECIDED:
         return got
-    note = ('两侧都新增了这一条，但内容不同' if base_value is _MISSING
-            else '两侧都改了这个字段，规则表里没有裁它的依据')
+    note = ('both sides added this entry, with different content' if base_value is _MISSING
+            else 'both sides changed this field and the rule table has no basis for trimming it')
     rep.conflict(label, key, ours_value, theirs_value, note)
     return _MISSING
 
@@ -257,7 +257,7 @@ def _stamp(label, key, base_value, ours_value, theirs_value, rep, pick):
     if got is not _UNDECIDED:
         return got
     if not all(isinstance(v, str) for v in (ours_value, theirs_value)):
-        rep.conflict(label, key, ours_value, theirs_value, '时间戳不是字符串，取不了')
+        rep.conflict(label, key, ours_value, theirs_value, 'the timestamp is not a string; cannot pick one')
         return _MISSING
     return pick(ours_value, theirs_value)
 
@@ -277,7 +277,7 @@ def _extend_or_union(label, key, base_value, ours_value, theirs_value, *,
     if got is not _UNDECIDED:
         return got
     if not isinstance(ours_value, list) or not isinstance(theirs_value, list):
-        rep.conflict(label, key, ours_value, theirs_value, '不是列表，裁不了')
+        rep.conflict(label, key, ours_value, theirs_value, 'not a list, cannot trim')
         return _MISSING
     ours, theirs = list(ours_value), list(theirs_value)
     i = 0
@@ -285,22 +285,26 @@ def _extend_or_union(label, key, base_value, ours_value, theirs_value, *,
         i += 1
     if i == len(ours) or i == len(theirs):
         longer = ours if len(ours) >= len(theirs) else theirs
-        rep.decide(f'{label}: {key} 一侧是另一侧的前缀 → 取长的那侧（{len(longer)} 项）')
+        rep.decide(f'{label}: {key} one side is a prefix of the other -> take the longer one '
+                   f'({len(longer)} items)')
         return longer
     seen: dict = {}
     for mark in ours[i:] + theirs[i:]:
         if not isinstance(mark, dict):
-            rep.conflict(label, key, ours_value, theirs_value, f'{key} 里有一项不是对象，裁不了')
+            rep.conflict(label, key, ours_value, theirs_value,
+                         f'an item in {key} is not an object; cannot trim')
             return _MISSING
         tag = identity(mark)
         if tag in seen and not same_act(seen[tag], mark):
             prev = seen[tag]
             rep.conflict(label, key, prev, mark,
-                         same_note(tag, prev, mark) if same_note else '同一项两侧内容不同')
+                         same_note(tag, prev, mark) if same_note
+                         else 'the same item has different content on the two sides')
             return _MISSING
         seen.setdefault(tag, mark)
     tail = sorted(seen.values(), key=order_by)
-    rep.decide(f'{label}: {key} 共同前缀之后两侧各自追加 → 按戳排序取并集（{len(tail)} 项）')
+    rep.decide(f'{label}: {key} both sides appended after the common prefix -> '
+               f'union ordered by stamp ({len(tail)} items)')
     return ours[:i] + tail
 
 

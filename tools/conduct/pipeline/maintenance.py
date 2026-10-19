@@ -82,10 +82,12 @@ METRICS = (
         'source': 'ticket',
         'unit': 's',
         'line': 'test_seconds_limit',
-        'subject': '项目测试套件的全量墙钟（秒）',
-        'where': '条子 `outputs.reading.test_seconds`（跑过全量验证的那个会话实测）',
-        'criterion': '下一次收尾条子里 `reading.test_seconds` 必须**低于**',
-        'remedy': '把项目文档认定的那套全量验证命令**实测**跑一遍（不许估算），把实测秒数报进条子',
+        'subject': 'the project test suite\'s full wall clock (seconds)',
+        'where': 'the note\'s `outputs.reading.test_seconds` (measured by the session that ran the '
+                 'full verification)',
+        'criterion': 'the next closing note\'s `reading.test_seconds` must be **below**',
+        'remedy': 'run the full verification command the project docs settle on and **measure** it '
+                  '(never estimate), then report the measured seconds in the note',
         'method': 'pf-test-audit',
     },
     {
@@ -93,11 +95,11 @@ METRICS = (
         'source': 'pool',
         'unit': '',
         'line': 'issue_pool_weight_limit',
-        'subject': 'issue 池的加权和',
-        'where': '`pf issue weight`（issue 工具自己算，不进条子）',
-        'criterion': '下一次收尾时工具算出的池子加权和必须**低于**',
-        'remedy': '跑 `pf issue weight -v` 看这个数是怎么加出来的，'
-                  '确认它回到线下',
+        'subject': 'the issue pool\'s weighted sum',
+        'where': '`pf issue weight` (the issue tool computes it itself; it does not go into a note)',
+        'criterion': 'the pool\'s weighted sum the tool computes at the next close must be **below**',
+        'remedy': 'run `pf issue weight -v` to see how this number adds up, '
+                  'and confirm it is back under the line',
         'method': 'pf-issue-repair',
     },
 )
@@ -143,8 +145,9 @@ def reading_of(sig: dict | None) -> dict:
     """The ticket-sourced readings on one ticket, as numbers. An absent/garbled reading is simply not
     there.
 
-    只认 `READING_KEYS`（`source: ticket` 的那几个）。老条子上还躺着 `issue_pool_weight` 的，
-    这里当作没看见 —— 那个数由 issue 工具从池子里算，条子上的那份没人复核得了。
+    Only `READING_KEYS` are recognized (the `source: ticket` ones). An old note that still carries an
+    `issue_pool_weight` is ignored here -- that number is computed by the issue tool out of the pool,
+    and nobody can re-check the note's copy of it.
     """
     outputs = (sig or {}).get('outputs') or {}
     reading = outputs.get('reading') if isinstance(outputs, dict) else None
@@ -167,20 +170,23 @@ def thresholds_for(cycle: dict | None) -> dict:
     cycle policy`), which is why nobody has to write a sentence to configure one -- and why a line
     that has nothing to do with code simply does not carry them.
 
-    「配了数值型策略」= `state.cycles.POLICY_NUMBERS` 那张表里、这条线的记录上真写着的键
-    （`parallel` 那样的整数键不在其中）；一个都没配时这份读数是空的，`crossed` 的空门就靠它 ——
-    非空即「这条线至少配了一个度量」。表本身只有一处，取的就是写侧那一份。
+    "A numeric policy is configured" = a key really written on this line's record in the
+    `state.cycles.POLICY_NUMBERS` table (integer keys like `parallel` are not among them); with none
+    configured this reading is empty, and that is what `crossed`'s empty gate rests on -- non-empty
+    means "this line configured at least one metric". The table itself has one home, the writing
+    side's copy.
     """
     policy = cycle_policy(cycle or {})
     return {key: policy[key] for key in POLICY_NUMBERS if key in policy}
 
 
 def asked_readings(cycle: dict | None) -> list:
-    """这条线要哪几个读数，按 `METRICS` 的顺序。
+    """Which readings this line asks for, in `METRICS` order.
 
-    名单由两件事收窄：只点 `source: ticket` 的那几个（只有跑过验证的那个会话测得到），
-    并且只点这条线真的配了线的那几个 —— 没人读的格子问了就是白测。`handoff.py --form`
-    照这份名单印条子骨架。
+    The list is narrowed by two things: only the `source: ticket` ones are named (only the session
+    that ran the verification can measure them), and only those whose line this line really carries
+    -- a slot nobody reads would be measured for nothing. `handoff.py --form` prints the note
+    skeleton against this list.
     """
     thresholds = thresholds_for(cycle)
     return [metric['reading'] for metric in METRICS
@@ -188,10 +194,10 @@ def asked_readings(cycle: dict | None) -> list:
 
 
 def pool_weight(project) -> float | None:
-    """池子有多重：问 issue 工具要那个数（`pf issue weight`）。
+    """How heavy the pool is: ask the issue tool for that number (`pf issue weight`).
 
-    读不到就交回 `None`，这一趟不判这个度量 —— 缺一个数读作「这一趟不知道」；读成 0 会让
-    一条真实的债看起来已经还了。
+    If it cannot be read, `None` is handed back and this metric is not judged this pass -- a missing
+    number reads as "not known this pass"; reading it as 0 would make a real debt look paid off.
     """
     try:
         out = seam.capture(seam.issue('weight'), project)
@@ -208,22 +214,25 @@ def pool_weight(project) -> float | None:
 
 # ── the judgement ────────────────────────────────────────────────────────────
 
-#: 这条通道的项目级开关，住在 `pf config` 那一格里。管线这边自己说它认什么词：两个包按路径各自
-#: 加载，import 一个进另一个会绕出一个环，所以键名与词表这边各写一份 —— 写那一侧拒绝词表外的
-#: 值，读这一侧把不认识的词读作缺省（同 `store.cycle_policy`：写拒绝、读兜底）。一条用例比对两份。
+#: This channel's project-level switch, living in the `pf config` slot. The pipeline side states its
+#: own vocabulary here: the two packages are each loaded by path, and importing one into the other
+#: would loop, so the key name and the vocabulary are written once on each side -- the writing side
+#: rejects values outside the vocabulary, the reading side reads an unknown word as the default (the
+#: same split as `store.cycle_policy`: write rejects, read falls back). One case compares the two.
 ISSUE_REPAIR_KEY = 'issue_repair'
-#: 关掉它的那个词。
+#: The one word that turns it off.
 ISSUE_REPAIR_OFF = 'off'
-#: 这个词表与出厂值。
+#: This vocabulary, and the factory default.
 ISSUE_REPAIR_VALUES = ('on', ISSUE_REPAIR_OFF)
 ISSUE_REPAIR_DEFAULT = 'on'
 
 
 def issue_repair_on(project) -> bool:
-    """这个项目现在开不开「越线就插一个还债的节点」。
+    """Whether this project now opens "insert a debt-repaying node when a line is crossed".
 
-    出厂是开：没写过这一键的项目，收尾怎么做今天还怎么做。全局那一层在这条通道上照样算数
-    （项目层盖全局层），与 `pf config` 印出来的有效值是同一个读法。
+    The factory default is on: a project that never wrote this key closes exactly as it does today.
+    The global layer still counts on this channel (the project layer overrides the global layer),
+    read the same way as the effective value `pf config` prints.
     """
     value = load_config(project).get(ISSUE_REPAIR_KEY, ISSUE_REPAIR_DEFAULT)
     if value not in ISSUE_REPAIR_VALUES:
@@ -257,8 +266,10 @@ def crossed(project, cycle: dict | None, sig: dict | None, dag: dict | None = No
     and a metric that ALREADY has a maintenance node open on the graph:
     one metric, one live maintenance node at a time (`maintenance_nodes_of_metric`).
 
-    池子那一格只有在「这条线真的配了那条线」时才去问 issue 工具，收尾这条路上不白开进程。开关
-    读在同样靠后的位置：这条通道根本落不到手（不是代码那一支、一根线都没配）的线，连设置都不读。
+    The pool slot only asks the issue tool when "this line really carries that line", so the close
+    path does not spawn a process for nothing. The switch is read at a similarly late point: a line
+    the channel cannot reach at all (not the code branch, or no line configured) does not even read
+    the setting.
     """
     if not _is_coding(cycle):
         return None
@@ -291,19 +302,23 @@ def crossed(project, cycle: dict | None, sig: dict | None, dag: dict | None = No
 
 
 def maintenance_tag(reading_key: str) -> str:
-    """这个度量的维护节点身上的 tag：`add` 写上它，去重读它 —— 度量认得出，不靠标题的字。"""
+    """The tag on this metric's maintenance node: `add` writes it, the dedup reads it -- the metric
+    is recognized without relying on the words of the title."""
     return f'maint:{reading_key}'
 
 
 def maintenance_nodes_of_metric(project, reading_key: str, dag: dict | None = None) -> list:
-    """图上这个度量还没了结的维护节点（`todo` 状态），按 id 排。
+    """The maintenance nodes for this metric that are not settled yet (`todo` status), sorted by id.
 
-    「没了结」= 节点还在局中（`todo`）：`completed` 说明这一趟债已经结了、`shelved` 说明它出局等人
-    ——两种都不该拦住下一次插入，否则人一直 revive 不动，这条通道就永远哑了。
-    判定发生在收尾命令落盘之前，所以**正在被收掉的那个维护节点在这里仍是 `todo`、也照样拦住自己
-    的重复插入**——一个度量同时只有一个维护节点在跑，这一条不受收尾进度影响。
+    "Not settled yet" = the node is still in play (`todo`): `completed` means this pass of the debt
+    is settled, and `shelved` means it is out of play waiting for a human -- neither should block the
+    next insertion, or a human who never revives it would leave this channel mute forever.
+    The judgement happens before the close commands land, so **the maintenance node being closed
+    right now is still `todo` here and still blocks its own duplicate** -- one metric runs one
+    maintenance node at a time, and this holds regardless of how far the close has got.
 
-    `dag` 是收尾入口读下的那一份图：这一趟判定读的是它，收尾不再为这一个问题重读一次盘。
+    `dag` is the one graph read at the close entry: this judgement reads it, and the close does not
+    re-read the disk for this one question.
     """
     tag = maintenance_tag(reading_key)
     nodes = (dag if dag is not None else load_dag(project)).get('nodes') or {}
@@ -319,7 +334,8 @@ def maintenance_nodes_of_metric(project, reading_key: str, dag: dict | None = No
 
 
 def _is_coding(cycle: dict | None) -> bool:
-    """只有 tag 含 `coding` 的 cycle 会因这两个度量插入——两个度量都是代码这一支的债。"""
+    """Only a cycle whose tags contain `coding` gets an insertion for these two metrics -- both are
+    code-branch debt."""
     tags = [t for t in ((cycle or {}).get('tags') or []) if isinstance(t, str)]
     return 'coding' in tags
 
@@ -330,21 +346,26 @@ def maintenance_title(hit: dict) -> str:
     """The node's title: which measurement and which line, in one line a human reads in the DAG."""
     shown = f'{hit["value"]:g}' if hit['value'] != int(hit['value']) else f'{int(hit["value"])}'
     line = f'{hit["at"]:g}' if hit['at'] != int(hit['at']) else f'{int(hit["at"])}'
-    return f'维护：{hit["subject"]} = {shown}{hit["unit"]}，达到线 {line}{hit["unit"]}'
+    return (f'Maintenance: {hit["subject"]} = {shown}{hit["unit"]}, '
+            f'over the line {line}{hit["unit"]}')
 
 
 def _closing_reading(hit: dict) -> str:
-    """这条债下一次靠什么判回来：两种来源写法不同，因为它们被读的方式不同。
+    """What the next judgement of this debt reads: the two sources are written differently, because
+    they are read differently.
 
-    池子那个数由 issue 工具自己算（`pf issue weight`），条子上写它没人读；
-    墙钟只有跑过验证的会话测得出来，`handoff.py --form <cycle>` 会把那一格点出来。
+    The pool number is computed by the issue tool itself (`pf issue weight`), and writing it in the
+    note would be read by nobody; the wall clock can only be measured by the session that ran the
+    verification, and `handoff.py --form <cycle>` points that slot out.
     """
     if hit['source'] == 'pool':
-        return ('- 这个度量由 issue 工具自己算（`pf issue weight`），'
-                '条子里不用填它：\n'
-                f'  下一次收尾工具算出的数低于 {hit["at"]:g}{hit["unit"]} 就算回到线下。\n')
-    return ('- 在条子的 `-o` 里带上 `"reading": {"' + hit['reading'] + '": <实测数>}`'
-            '（表单会把这一格点出来），好让下一次收尾判得出它回没回到线下。\n')
+        return ('- the issue tool computes this metric itself (`pf issue weight`); the note does '
+                'not carry it:\n'
+                f'  at the next close, a number the tool computes below {hit["at"]:g}{hit["unit"]} '
+                f'counts as back under the line.\n')
+    return ('- in the note\'s `-o`, carry `"reading": {"' + hit['reading'] + '": <measured number>}`'
+            ' (the form points this slot out), so the next close can judge whether it is back '
+            'under the line.\n')
 
 
 def maintenance_spec(hit: dict, spec_path: str) -> str:
@@ -360,43 +381,49 @@ def maintenance_spec(hit: dict, spec_path: str) -> str:
     the node's own business, and a template that guessed would be a template that lied.
     """
     return (
-        '# 维护节点（工具生成）\n'
-        '本节点的 spec 由 conduct 的维护通道生成，逐字照抄；它写的是**为什么被插进来**、'
-        '**这一次的范围**、**怎么干**，以及**一开始就定死的完成判定**。\n'
+        '# Maintenance node (generated by the tool)\n'
+        'This node\'s spec is generated by conduct\'s maintenance channel and copied verbatim; it '
+        'says **why this node was inserted**, **the scope of this one pass**, **how to do it**, and '
+        '**the completion rule fixed from the start**.\n'
         '\n'
-        '## 为什么被插进来\n'
+        '## Why this node was inserted\n'
         '\n'
-        f'- 度量：{hit["subject"]}\n'
-        f'- 这个数从哪来：{hit["where"]}\n'
-        f'- 收尾那一次读到：**{hit["value"]:g}{hit["unit"]}**\n'
-        f'- 写在**这条线的策略**里的线：**{hit["at"]:g}{hit["unit"]}**（`policies.{hit["line"]}`）\n'
-        '- 这条通道是项目级的：维护债不归任何一条线、在图上也没有边，排序永远把它压到底，'
-        '所以它由收尾那一拍按这条线自己配的线插进来。\n'
+        f'- metric: {hit["subject"]}\n'
+        f'- where this number comes from: {hit["where"]}\n'
+        f'- read at the close: **{hit["value"]:g}{hit["unit"]}**\n'
+        f'- the line written in **this line\'s policies**: **{hit["at"]:g}{hit["unit"]}** '
+        f'(`policies.{hit["line"]}`)\n'
+        '- this channel is project-level: maintenance debt belongs to no line and has no edge in '
+        'the graph, so the ranking always pushes it to the bottom; the close therefore inserts it '
+        'against the line this line carries itself.\n'
         '\n'
-        '## 范围\n'
+        '## Scope\n'
         '\n'
-        '- **这一次只做这件事**：把这一个度量拉回线下。不顺手加功能、不顺手重构、'
-        '不做和这个度量无关的清理。\n'
-        '- 别的度量越线了也好、图里别的活更急也好，都不是本节点的范围 —— 谁越线谁自己进来一趟。\n'
-        '- 改动大小以判定为准：判定过不去就继续，判定过去了就停手。\n'
+        '- **this pass does one thing only**: pull this one metric back under the line. No adding '
+        'features on the side, no refactoring on the side, no cleanup unrelated to this metric.\n'
+        '- another metric crossing its line, or other work in the graph being more urgent, is '
+        'outside this node\'s scope -- whoever crosses comes in for a pass of their own.\n'
+        '- the size of the change follows the criterion: keep going while it fails, stop when it '
+        'passes.\n'
         '\n'
-        '## 怎么干\n'
+        '## How to do it\n'
         '\n'
-        f'- `方法：{hit["method"]}`（跑法见 `~/.agents/skills/{hit["method"]}/SKILL.md`；'
-        '那份卡自己声明谁跑它，spec 这里只指路）\n'
+        f'- `method: {hit["method"]}` (how to run it: `~/.agents/skills/{hit["method"]}/SKILL.md`; '
+        'that card declares who runs it, and this spec only points at it)\n'
         '\n'
-        '## 完成判定（机械可判）\n'
+        '## Completion rule (mechanically judgeable)\n'
         '\n'
-        f'- {hit["criterion"]} {hit["at"]:g}{hit["unit"]}。\n'
-        f'- 怎么看到这个数：{hit["remedy"]}。\n'
-        '- 判定过不去就**不要**报 `completed`；报 `failed` 并把读到的数写在 `-s` 里，'
-        '让这条债留在明面上等人。\n'
+        f'- {hit["criterion"]} {hit["at"]:g}{hit["unit"]}.\n'
+        f'- how to see this number: {hit["remedy"]}.\n'
+        '- if the criterion fails, do **not** report `completed`; report `failed` and write the '
+        'number you read in `-s`, leaving this debt out in the open for a human.\n'
         '\n'
-        '## 收尾\n'
+        '## Closing out\n'
         '\n'
-        '照 pf-conduct 的「收尾」那节走：先要一张现印的条子表单，再写条子 → 收尾 → 提交推送 → 派发。\n'
+        'Follow the "closing out" section of pf-conduct: get a freshly printed note form, then '
+        'write the note -> close -> commit and push -> dispatch.\n'
         + _closing_reading(hit) +
-        f'\n（本 spec 落在：{spec_path}）\n'
+        f'\n(this spec lands at: {spec_path})\n'
     )
 
 

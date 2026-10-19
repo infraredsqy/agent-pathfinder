@@ -12,8 +12,8 @@ No case patches a process-global name any more, so every module runs in the pool
 needs is a name on the module that owns it (`harness_env.patched` is the one place those are swapped
 and put back).
 
-**pytest 不走这条路**：它逐个用例跑，同一批用例要半分钟。要看失败详情时再用它，平时这条
-`python <这份文件>` 才是本套件的口径。
+**pytest does not take this road**: it runs case by case, and the same batch takes half a minute. Use
+it to look at failure details; day to day, `python <this file>` is this suite's own entry point.
 
 Every case builds a throwaway project in a temp dir and drives the real modules and the real CLIs.
 The rule that matters: **state only advances through the tools** (`conduct_pipeline.plan/apply/record`,

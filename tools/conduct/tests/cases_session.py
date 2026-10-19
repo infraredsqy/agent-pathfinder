@@ -60,7 +60,7 @@ class TestAddNotesTheBirthSession(Base):
 
     def add_in_session(self, sb, session=SESSION, *extra):
         with mock.patch.dict(os.environ, {'DSH_SESSION_ID': session}):
-            return run_dag(sb.root, 'add', '界面设计', *extra)
+            return run_dag(sb.root, 'add', 'UI design', *extra)
 
     def test_it_notes_the_session_and_writes_no_field_on_the_node(self):
         sb = self.make()
@@ -76,18 +76,20 @@ class TestAddNotesTheBirthSession(Base):
                          'the id is machine-local and must not ride on the record')
 
     def test_a_host_that_reports_nothing_still_makes_a_node(self):
-        """手敲的、或者不注 DSH_SESSION_ID 的宿主：节点照建，只是没有便条可写。"""
+        """A hand-typed host, or one that injects no DSH_SESSION_ID: the node is still born, there
+        is just no note to write."""
         sb = self.make()
         with mock.patch.dict(os.environ, {}):
             os.environ.pop('DSH_SESSION_ID', None)
-            uid = added(run_dag(sb.root, 'add', '手敲的节点'))
+            uid = added(run_dag(sb.root, 'add', 'a hand-typed node'))
 
         self.assertIn(uid, sb.dag()['nodes'])
         self.assertFalse((sb.root / '.pf' / 'meta' / 'sessions' / f'{uid}.json').exists())
 
     def test_a_zcode_shaped_id_is_labelled_zcode(self):
-        """`sess_…` 是 ZCode 的 id 形状（`spawn/zcode-spawn.ps1` 就按这个前缀认自己那一行）：
-        便条按形状标宿主，面板据此知道这一场它打不开。"""
+        """`sess_…` is ZCode's id shape (`spawn/zcode-spawn.ps1` reads its own line off that
+        prefix): the note labels the host by shape, and the panel learns from it that it cannot
+        open that one."""
         sb = self.make()
 
         uid = added(self.add_in_session(sb, ZCODE_SESSION))
@@ -143,10 +145,11 @@ class TestTheRunNoteAtDispatch(Base):
         self.assertTrue(note['run'][0]['at'], 'a run knows when it was opened')
 
     def test_the_discussion_and_the_runs_do_not_mix(self):
-        """One node, both roles: `discussion` 与 `run` 各归各的清单，读者不必先过滤。"""
+        """One node, both roles: `discussion` and `run` keep their own lists, so a reader need not
+        filter first."""
         sb, _action = self.pinned()
         with mock.patch.dict(os.environ, {'DSH_SESSION_ID': SESSION}):
-            run_dag(sb.root, 'add', '另一格')           # a note for a DIFFERENT node
+            run_dag(sb.root, 'add', 'another slot')     # a note for a DIFFERENT node
         self.assertTrue((sb.root / '.pf' / 'meta' / 'sessions').is_dir())
 
         sb.dispatch(spawner=self.stub(sb), dry_run=False)
@@ -184,7 +187,8 @@ class TestTheSpawnerResultLine(unittest.TestCase):
                                                   '(session sess_abc, node session, prompt=x)'))
 
     def test_a_zcode_line_without_a_session_carries_none(self):
-        """ZCode 自己核不出来时不打 session：没有 id 就没有可记的东西，不许编一个。"""
+        """When ZCode cannot prove one itself it prints no session: no id means nothing to note, and
+        inventing one is not allowed."""
         self.assertIsNone(self.spawn.session_id_of('spawned: automation automation-1 '
                                                    '(node session, prompt=x)'))
 
@@ -203,14 +207,14 @@ class TestSessionReadsAndImport(Base):
     def seeded(self, cli=True):
         """A project whose record still carries the old field, plus one header-only id."""
         sb = self.make(cli=cli)
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.add_node(NODE2, '另一格', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
+        sb.add_node(NODE2, 'another slot', mode='auto')
         dag = sb.dag()
         dag['nodes'][NODE]['dsh_session'] = SESSION
         (sb.root / '.pf' / 'ideas.json').write_text(
             json.dumps(dag, ensure_ascii=False, indent=2), encoding='utf-8')
         spec = sb.root / '.pf' / 'nodes' / NODE2 / 'spec.md'
-        spec.write_text(f'# 另一格\n\n> discussion: dsh-session:{ZCODE_SESSION}\n\nbody\n',
+        spec.write_text(f'# another slot\n\n> discussion: dsh-session:{ZCODE_SESSION}\n\nbody\n',
                         encoding='utf-8')
         return sb
 
@@ -225,9 +229,10 @@ class TestSessionReadsAndImport(Base):
         self.assertEqual([], payload['run'])
 
     def test_show_answers_empty_rather_than_failing(self):
-        """没记过就照实说没记过：空读数也是一句答案，面板问的就是这个。"""
+        """Nothing noted is answered as nothing noted: an empty reading is an answer too, and it is
+        exactly what the panel asks."""
         sb = self.make(cli=False)
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
 
         proc = run_state_manage(sb.root, 'session', 'show', NODE, '--json')
 
@@ -236,7 +241,7 @@ class TestSessionReadsAndImport(Base):
 
     def test_show_takes_a_prefix_and_refuses_an_ambiguous_one(self):
         sb = self.make(cli=False)
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
 
         self.assertEqual(NODE, json.loads(
             run_state_manage(sb.root, 'session', 'show', NODE[:8], '--json').stdout)['node'])
@@ -299,14 +304,17 @@ class TestSessionReadsAndImport(Base):
 
 
 class TestTheRecordDoors(Base):
-    """`.pf/` 底下四样东西只有一道门：每道门都收 `project`，读谁的项目由调用方说。
+    """The four things under `.pf/` have one door each: every door takes `project`, and the
+    caller says whose project to read.
 
-    `session`（图、`nodes/<id>/spec.md`、`meta/sessions/`）、`instruction`、`maintenance` 都从这里
-    取记录 —— 自拼路径的下场是同一份记录有第二种出错口径（一处读坏了大喊一声，另一处静默当空集）。
+    `session` (the graph, `nodes/<id>/spec.md`, `meta/sessions/`), `instruction` and `maintenance`
+    all take their record from here -- assembling the path locally would give one record a second
+    failure mode (one place shouts when it reads badly, the other silently reads an empty set).
     """
 
     def state_package(self):
-        """`state` 是一个带相对导入的包：按路径整包装进来（照 state-manage.py 的引导）。"""
+        """`state` is a package with relative imports: load the whole package by path (following
+        state-manage.py's bootstrap)."""
         name = 'pf_state_for_doors'
         for stale in [n for n in sys.modules if n == name or n.startswith(name + '.')]:
             del sys.modules[stale]
@@ -320,21 +328,21 @@ class TestTheRecordDoors(Base):
 
     def test_every_door_answers_for_the_project_it_is_told(self):
         mine, other = self.make(), self.make()
-        mine.add_node(NODE, '我的节点', mode='auto')
+        mine.add_node(NODE, 'my node', mode='auto')
         mine.create_cycle('cyc')
-        mine.instruct('这边的约束')
-        other.add_node(NODE2, '别人的节点', mode='auto')
+        mine.instruct('a constraint on this side')
+        other.add_node(NODE2, 'the other node', mode='auto')
         other.start_cycle('other')
         other.write_signal('other', NODE2, 'completed', 'done')
-        other.instruct('别人那边的约束')
+        other.instruct('a constraint on the other side')
 
         store = self.state_package().store
-        store.bind_paths(str(mine.root / '.pf'))        # 进程内那条路的绑定留在原处
+        store.bind_paths(str(mine.root / '.pf'))        # the in-process binding stays where it is
 
         self.assertEqual({'cyc'}, {c['id'] for c in store._read_state()['cycles']})
         self.assertEqual({'other'}, {c['id'] for c in store._read_state(str(other.root))['cycles']})
         self.assertEqual({NODE2}, set(store._read_dag(str(other.root))))
-        self.assertEqual(['别人那边的约束'],
+        self.assertEqual(['a constraint on the other side'],
                          [i['text'] for i in store._read_instructions(str(other.root))['instructions']])
         self.assertEqual('completed', store._read_signal('other', NODE2, str(other.root))['status'])
         self.assertEqual(other.signal_path('other', NODE2),
@@ -371,12 +379,13 @@ class TestTheNoteItself(unittest.TestCase):
         self.assertEqual(['session-run-1'], ids_of(self.note.read(self.root, NODE), 'run'))
 
     def test_the_role_is_checked_loudly(self):
-        """第三个角色是调用方的 bug；悄悄收下会写出一份没有读者的便条。"""
+        """A third role is the caller's bug; taking it silently would write a note nobody reads."""
         with self.assertRaises(ValueError):
             self.note.append(self.root, NODE, 'review', 'session-x')
 
     def test_an_unreadable_file_reads_as_empty_and_never_raises(self):
-        """便条是本机可丢的管道物：读不懂就当没有，绝不让工具死在它上面。"""
+        """A note is a machine-local, disposable pipeline artifact: unreadable reads as absent, and
+        a tool must never die on it."""
         path = self.root / '.pf' / 'meta' / 'sessions' / f'{NODE}.json'
         path.parent.mkdir(parents=True)
         for body in ('{not json', json.dumps({'v': 99, 'discussion': []}),

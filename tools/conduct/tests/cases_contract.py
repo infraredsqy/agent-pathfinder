@@ -31,7 +31,8 @@ __all__ = [
 
 
 class TestNodeOwnershipAcrossCycles(Base):
-    """一个节点一次只归一条 cycle：收尾认节点，挑人不碰别人正拿着的。
+    """One node belongs to one cycle at a time: a close is aimed by node, and a pick leaves what
+    another line is holding alone.
 
     `--after` is aimed by NODE, not by cycle: a node belongs to exactly one line, so the closing call
     can settle the right line without being told its name.
@@ -47,10 +48,10 @@ class TestNodeOwnershipAcrossCycles(Base):
         the two paths honest).
         """
         sb = self.make()
-        a = sb.add_node(NODE, '界面设计', mode='auto')
-        bridge = sb.add_node(NODE2, '中段', mode='auto', deps=[a])
+        a = sb.add_node(NODE, 'UI design', mode='auto')
+        bridge = sb.add_node(NODE2, 'middle', mode='auto', deps=[a])
         sb.start_cycle('one')
-        tail = sb.add_node(NODE3, '收尾', mode='auto')
+        tail = sb.add_node(NODE3, 'close out', mode='auto')
         sb.start_cycle('other', force=True)
         return sb, a, bridge, tail
 
@@ -105,22 +106,24 @@ class TestNodeOwnershipAcrossCycles(Base):
         self.assertEqual(pipeline.node_holders(sb.root).get(a), 'one')
 
     def test_a_shelved_node_is_named_as_shelved(self):
-        """别的线正忙不属于本线的故障：两句 reason 读起来必须不一样，否则读的人会去查根本不在
-        路上的 tag。"""
+        """Another line being busy is not a fault of this line, so the two reasons must not read
+        alike: a reader who cannot tell them apart goes hunting for a tag that is not there."""
         sb, a, bridge, tail = self.two_lines()
         self.hold(sb, 'other', tail)
         sb.set_cycle_status('other', 'active')
         action = sb.plan_for('other')
 
         self.assertEqual(action['action'], 'stop_pipeline')
-        self.assertIn('别的 cycle 占着', action['reason'])
-        self.assertNotIn('过滤集', action['reason'])
+        self.assertIn('another cycle already occupies', action['reason'])
+        self.assertNotIn('filter set', action['reason'])
 
     def test_an_inactive_line_settles_its_own_node_and_stays_out_of_service(self):
-        """收尾那道门不看线的状态：一条停住的线照样钉着它没收尾的节点，收不掉就永远钉在那儿。
+        """The close gate does not look at the line's status: a stopped line is still pinned on the
+        node it never closed out, and it stays pinned until it does.
 
-        但这条门只做记录 —— 记录这一步、标了 DAG，线的状态保持人给它的那个（inactive），一个
-        字都不写。`cycle hold` 没有跑：不给一条不在服务中的线挑下一个节点。
+        But this gate only records -- it books the step, marks the DAG, and writes not one word to
+        the status the human gave the line (inactive). `cycle hold` never runs: a line out of
+        service is not handed a next node to pick.
         """
         sb, a, bridge, tail = self.two_lines()
         self.deliver(sb, 'one', a)
@@ -143,7 +146,8 @@ class TestNodeOwnershipAcrossCycles(Base):
         self.assertNotEqual(before, sb.state(), 'only the accounting should have moved')
 
     def test_a_continue_cannot_pry_an_inactive_line_open(self):
-        """`--continue` 说的是「这条线接着走」，而这条线现在不归工具驱动：收尾照做，接着走照拒。"""
+        """`--continue` says "keep this line going", and this line is not tool-driven right now: the
+        close happens, carrying on does not."""
         sb, a, bridge, tail = self.two_lines()
         self.deliver(sb, 'one', a)
         sb.set_cycle_status('one', 'inactive')
@@ -160,7 +164,8 @@ class TestNodeOwnershipAcrossCycles(Base):
                       'the stop reason has to name the one command that resumes the line')
 
     def test_a_node_named_on_an_inactive_line_is_not_opened_and_the_reason_says_so(self):
-        """人敲出来的名字不许被悄悄吞掉：这条线上 `--node` 不会被打开，reason 必须点出那个名字。"""
+        """A name a human typed must not be swallowed in silence: `--node` is not opened on this
+        line, and the reason has to name the node that lost out."""
         sb, a, bridge, tail = self.two_lines()
         self.deliver(sb, 'one', a)
         sb.set_cycle_status('one', 'inactive')
@@ -171,13 +176,15 @@ class TestNodeOwnershipAcrossCycles(Base):
         self.assertEqual(settled['action'], 'stop_pipeline')
         self.assertIsNone(sb.current_node('one'), f'{bridge} was opened anyway')
         self.assertIn(bridge, settled['reason'])
-        self.assertIn('没有被打开', settled['reason'])
+        self.assertIn('was not opened', settled['reason'])
         self.assertEqual(sb.cycle('one')['status'], 'inactive')
 
     def test_a_next_aimed_at_an_inactive_line_neither_picks_nor_dispatches(self):
-        """驱动型 `next` 不碰一条不是 active 的线 —— 不管别的线在不在跑。
+        """A driven `next` does not touch a line that is not active -- whether or not another line
+        is running.
 
-        判据落在这条线自己的状态上：别的线在跑，一条停住的线照样不许被挑人、被派发 —— 人没让它开工。
+        The judgement rides on this line's own status: another line may be running, and a stopped
+        line is still not picked from and not dispatched -- the human never put it to work.
         """
         sb, a, bridge, tail = self.two_lines()
         sb.set_cycle_status('one', 'inactive')
@@ -206,7 +213,8 @@ class TestNodeOwnershipAcrossCycles(Base):
         self.assertEqual(sb.current_node('other'), tail)
 
     def test_a_bare_next_with_every_line_out_of_service_names_the_way_back(self):
-        """一条线都没有在跑时，报的不能是「没有 cycle」：线就在那儿停着（可能还钉着节点）。"""
+        """With no line in service at all, the answer must not be "no cycle": the lines are right
+        there, stopped, and possibly still pinned on a node."""
         sb, a, bridge, tail = self.two_lines()
         sb.set_cycle_status('one', 'inactive')
         sb.set_cycle_status('other', 'inactive')
@@ -377,10 +385,12 @@ class TestContract(Base):
                          f'declared type=int but not cast: {int_flags}')
 
     def test_the_cli_scope_vocabulary_is_the_pipelines_own(self):
-        """`--scope` 的词表来自判定的正本，CLI 没有自己的第二份。
+        """`--scope`'s vocabulary comes from the one source of the judgement, and the CLI keeps no
+        second copy of its own.
 
-        钉死在本地副本上的话，给判定加第四个 scope 之后 CLI 先在 argparse 那一步把合法的值拒了，
-        借来的判定根本轮不到跑 —— 两个词表，两个答案。
+        Pinned to a local copy, a fourth scope added to the judgement would be refused by the CLI at
+        the argparse step, and the borrowed judgement would never get to run -- two vocabularies,
+        two answers.
         """
         import argparse
 
@@ -397,16 +407,18 @@ class TestContract(Base):
 
         walk(parser)
 
-        self.assertEqual(2, len(scopes), '`instruction add` 与 `instruction list` 各有一处 --scope')
+        self.assertEqual(2, len(scopes), '`instruction add` and `list` each carry one --scope')
         for choices in scopes:
             self.assertEqual(list(pipeline.SCOPES), choices)
 
     def test_next_reads_the_parsed_line_itself(self):
-        """`cmd_next` / `cmd_dispatch` 各只收解析好的那一份，字段自己读。
+        """`cmd_next` / `cmd_dispatch` each take the parsed namespace alone and read the fields off
+        it themselves.
 
-        转发那一行摆着一串位置实参（12 个）的话，给 `next` 加一个旗标就要同时改 parser、那一行、
-        函数的签名；其中大半是重推 argparse 已有的缺省，另有两个是同一个答案算两遍。收成一个名字
-        空间之后，加旗标就是 parser 一行加读它的那一行。
+        With a string of positional arguments (12 of them) on the forwarding line, adding one flag
+        to `next` meant touching the parser, that line and the function's signature at once; most of
+        them re-derived a default argparse already has, and two computed the same answer twice. Cut
+        down to one namespace, a new flag is one parser line plus the line that reads it.
         """
         source = (CONDUCT_DIR / 'state' / 'nextcmd.py').read_text(encoding='utf-8')
         tree = ast.parse(source)
@@ -414,14 +426,16 @@ class TestContract(Base):
             fn = next(node for node in tree.body
                       if isinstance(node, ast.FunctionDef) and node.name == name)
             self.assertEqual([a.arg for a in fn.args.args], ['args'],
-                             f'{name} 收的还是散开的那些实参')
+                             f'{name} still takes the loose positional arguments')
 
     def test_the_prompt_text_builder_takes_the_node_id_alone(self):
-        """`build_prompt_text`：这一行的输入就是节点 id。
+        """`build_prompt_text`: the input to this line is the node id, nothing else.
 
-        派发文本不随项目或随线而变（节点自己的 mode、权重、spec 落点由会话读 `dag-manage.py info`），
-        所以签名的三个形参只该留一个 —— 多出来的形参读起来是「这个值会影响文本」的错觉。这一行怎么
-        拼也只有一处：导出面上不带第二个拼它的名字。
+        The dispatch text does not vary with the project or the line (the node's own mode, weight
+        and spec landing spot are read by the session off `dag-manage.py info`), so the signature's
+        three parameters should keep one -- the extra ones read as an illusion that "this value
+        affects the text". How this line is spelled also lives in one place: the export surface
+        carries no second name that builds it.
         """
         self.assertEqual(['node_id'],
                          list(inspect.signature(pipeline.build_prompt_text).parameters))
@@ -429,13 +443,14 @@ class TestContract(Base):
         with self.assertRaises(ValueError):
             pipeline.build_prompt_text(None)
         self.assertFalse(hasattr(pipeline, 'prompt_for'),
-                         '导出面上又多了一个拼这行的名字')
+                         'the export surface has gained a second name that builds this line')
 
     def test_the_impl_package_keeps_the_one_export_list(self):
-        """导出面只有 `pipeline/__init__.py` 那一张表。
+        """The export surface is the one table in `pipeline/__init__.py`.
 
-        模块级的第二张名单没有读者，却跟包的那张分头长：两边列的名字各说各话时，谁也没报错。层里
-        不留名单，就没有第二处可漂。
+        A second module-level list has no reader, yet grows apart from the package's: when the two
+        disagree about the names, nothing raises. With no list left in the layer, there is no second
+        place to drift.
         """
         def carries_a_list(path):
             for node in ast.parse(path.read_text(encoding='utf-8')).body:
@@ -489,20 +504,22 @@ class TestContract(Base):
             self.assertNotEqual(before, after, action)
 
     def test_the_snapshot_answers_one_shape(self):
-        """`_snapshot` 只有一种形状：这条线在不在盘上，三个位置都在、位置的含义也一样。
+        """`_snapshot` answers one shape: on disk or off it, all three slots are there and mean the
+        same thing.
 
-        契约那一趟按 `[0]` / `[1]` 读它写进 `progress`，另一个形状里含义错开的话，缺线那一趟读到的
-        就是别的东西 —— 缺线时每个位置答的都是「没有」。
+        The contract run reads it by `[0]` / `[1]` for what it writes into `progress`; with the
+        meanings shifted in the other shape, the absent-line run would read something else -- with
+        no line on disk every slot answers "nothing".
         """
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
 
         on_disk = pipeline._snapshot(sb.root, 'cyc')
         absent = pipeline._snapshot(sb.root, 'no-such-cycle')
 
         self.assertEqual(3, len(on_disk))
-        self.assertEqual(len(on_disk), len(absent), '_snapshot 的两条路答的不是一个形状')
+        self.assertEqual(len(on_disk), len(absent), '_snapshot\'s two paths do not answer one shape')
         self.assertEqual((None, None, None), absent)
 
     def test_the_fast_path_and_the_cli_agree(self):
@@ -515,7 +532,7 @@ class TestContract(Base):
         self.addCleanup(fast.close)
         self.addCleanup(slow.close)
         for sb in (fast, slow):
-            sb.add_node(NODE, '界面设计', mode='auto')
+            sb.add_node(NODE, 'UI design', mode='auto')
             sb.start_cycle()
 
         for sb in (fast, slow):
@@ -538,7 +555,7 @@ class TestPurity(Base):
 
     def test_plan_writes_nothing_at_all(self):
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         before = sb.tree_hashes()
         action = sb.plan()
@@ -547,7 +564,7 @@ class TestPurity(Base):
 
     def test_plan_builds_a_prompt_without_writing_it(self):
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         action = sb.plan()
         self.assertTrue(action['prompt_text'])
@@ -556,7 +573,7 @@ class TestPurity(Base):
 
     def test_plan_writes_nothing_on_the_close_path_either(self):
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         sb.next()
         sb.write_signal('cyc', NODE, 'completed', 'done')
@@ -567,29 +584,33 @@ class TestPurity(Base):
 
     def test_apply_is_what_writes_the_prompt_file(self):
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
+        sb.add_node(NODE, 'UI design', mode='auto')
         sb.start_cycle()
         action = sb.next()
         self.assertEqual(Path(action['prompt']).read_text(encoding='utf-8'), action['prompt_text'])
 
 
 class TestOneChildProcessPath(Base):
-    """子进程只有一条通路：入口的 `_run` / `_capture`（同一条缝的两半）。
+    """There is one road to a child process: the entry's `_run` / `_capture` (the two halves of the
+    same seam).
 
-    `seam` 许下的承诺是「patch 入口的那几个名字，到处都生效」。有一条调用自己复制一遍
-    `subprocess.run` 的写法时，那份承诺就不成立：按文档 patch 入口的人拦不到它，只能在 stdlib
-    的 `subprocess` 上做进程级猴子补丁（并为此加锁、并解释「必须打在共享模块上」）。
+    What `seam` promises is "patch the entry's names and it holds everywhere". With one call that
+    copies the `subprocess.run` spelling for itself, that promise is void: whoever patches the entry
+    as documented cannot catch it, and has to monkey-patch the stdlib's `subprocess` process-wide
+    (taking a lock for it, and explaining "it has to go on the shared module").
     """
 
     def test_the_dag_ranking_goes_through_the_seam(self):
-        """就绪集的排序那次子进程调用走接缝：patch 入口的 `_capture` 就拦得住它。
+        """The child-process call that ranks the ready set goes through the seam: patching the
+        entry's `_capture` catches it.
 
-        `dag-manage list` 是包内唯一一次「要看输出」的子进程调用（维护通道的 `add` 是另一次），
-        它自己复制过一份 `subprocess.run` 的写法，这一条钉住它从缝里走。
+        `dag-manage list` is the package's one child-process call made to *see output* (the
+        maintenance channel's `add` is the other), and it used to carry a copy of the
+        `subprocess.run` spelling of its own; this case pins that it goes through the seam.
         """
         sb = self.make()
-        sb.add_node(NODE, '界面设计', mode='auto')
-        sb.create_cycle('cyc')            # 手里没有节点：挑人要先问就绪集，就绪集要先问排序
+        sb.add_node(NODE, 'UI design', mode='auto')
+        sb.create_cycle('cyc')            # nothing in hand: a pick asks the ready set, which asks the ranking
         seen = []
         real = pipeline._capture
 
@@ -602,13 +623,14 @@ class TestOneChildProcessPath(Base):
 
         self.assertEqual(action['action'], 'open_node', action)
         self.assertTrue([argv for argv in seen if Path(argv[1]).name == 'dag-manage.py'],
-                        f'排序那次调用没走接缝：{seen}')
+                        f'the ranking call did not go through the seam: {seen}')
 
     def test_no_logic_module_reaches_a_child_process_on_its_own(self):
-        """包里的模块一个都不许自己起子进程：自己起的那些调用，patch 接缝就拦不到。
+        """No module in the package may start a child process on its own: the calls it starts itself
+        are the ones the seam's patch cannot catch.
 
-        看去掉注释与字符串后的源码（AST），不是找字面量 —— 说明里提一句 `subprocess` 不算数，
-        真的用上它才算。
+        This reads the source with comments and strings gone (the AST) rather than looking for
+        literals -- a mention of `subprocess` in prose does not count, using it does.
         """
         offenders = []
         for path in sorted((CONDUCT_DIR / 'pipeline').glob('*.py')):
@@ -619,4 +641,4 @@ class TestOneChildProcessPath(Base):
                         for alias in node.names}
             if 'subprocess' in used | imported:
                 offenders.append(path.name)
-        self.assertEqual(offenders, [], f'这些模块自己起了子进程，绕过了接缝：{offenders}')
+        self.assertEqual(offenders, [], f'these modules start a child process themselves, around the seam: {offenders}')

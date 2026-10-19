@@ -1,60 +1,75 @@
 ﻿# ============================================================================
-# zcode-spawn.ps1 — 把一个节点会话排进 ZCode 自己的 cron 调度器（管线派发用）
+# zcode-spawn.ps1 — queue one node session into ZCode's own cron scheduler (used by pipeline dispatch)
 # ============================================================================
-# 只由 conduct_spawn.py 调用（管线经 `state-manage.py next --spawn` 与 `dispatch <cycle>` 走它）。
-# 它和 dsh-spawn.ps1 是同一处的两种实现：那边走 DSH HTTP API 直接开一个
-# DSH 会话，这边往 `~/.zcode/v2/tasks-index.sqlite` 的 `automations` 表写一行，交给桌面自己的
-# 调度器（每 20 秒一轮）去开会话。
+# Called only by conduct_spawn.py (the pipeline reaches it through `state-manage.py next --spawn` and
+# `dispatch <cycle>`). It and dsh-spawn.ps1 are two implementations of one place: that one opens a DSH
+# session directly over the DSH HTTP API, this one writes a row into the `automations` table of
+# `~/.zcode/v2/tasks-index.sqlite` and leaves it to the desktop's own scheduler (one round every 20
+# seconds) to open the session.
 #
-# 为什么绕这一道：只有 GUI 自己建的会话才进它的任务列表（那份列表的来源是 agent host 进程里
-# 一次性播种的投影，本地 workspace 没有重读入口），而你盯进度、叫停、放行都靠那份列表。
-# 细节见 zcode-dispatch.py 的模块说明。
+# Why take this detour: only a session the GUI itself created enters its task list (that list's source
+# is a projection seeded once in the agent host process, and a local workspace has no re-read entry),
+# and watching progress, calling a stop and letting work through all lean on that list. For the detail
+# see zcode-dispatch.py's module docstring.
 #
-# 外壳（参数缺省、prompt 校验、降级标记的写与清）与 `dsh-spawn.ps1` 共用同一份：
-# `spawn-common.ps1`，本文件只留 ZCode 这一半（找 dispatcher、排那一行、读回结果、末行）。
-# 标记的形状与落点在 `marker.py`（ZCode 自己的库路径进标记的 `extra`）。
+# The shell (parameter defaults, the prompt check, the write and the clear of the degradation marker)
+# is shared with `dsh-spawn.ps1`: `spawn-common.ps1`; this file keeps only the ZCode half (find the
+# dispatcher, queue that row, read the result back, the final line). The marker's shape and landing
+# place live in `marker.py` (ZCode's own library path goes into the marker's `extra`).
 #
 # Usage: pwsh -File zcode-spawn.ps1 -CycleId <id> -PromptFile <path> -MarkerPath <path>
 #                                  [-WorkspacePath <dir>] [-PythonExe <path>]
 #                                  [-At <when>] [-Mode <mode>] [-Model <pick>] [-NoVerify]
-#   -CycleId       必填。cycle 标识（同 state-manage.py 的 cycle id）。
-#   -PromptFile    必填。节点 session 的 prompt 全文（第一行是 skill 调用行）；缺了直接报错退出。
-#   -MarkerPath    必填。降级标记的完整路径（`conduct_spawn.argv_for` 从 marker.py 取）。
-#   -WorkspacePath 可选。子会话的工作目录，也是 GUI 里的分组键；缺省用当前目录。
-#   -PythonExe     可选。跑 zcode-dispatch.py 那个 python；缺省认 PATH 上的 python（写标记
-#                  不经过它）。
-#   -At            可选。什么时候跑：`+30m` / `+2h` / 本地时刻（如 `2026-10-07T23:00`）。
-#                  用它把节点排进夜里那口免费窗口；缺省=立刻。
-#                  环境变量 `DSH_CONDUCT_SPAWN_AT` 同义（管线的 argv 不带这个参数）。
-#   -Mode          可选。会话的权限档：`yolo`（缺省，完全访问）/ `build` / `edit` / `plan`。
-#                  **别改成需要问的档**：干活会话第一次改文件就会停下来等人回答，而那一刻没人在。
-#                  环境变量 `DSH_CONDUCT_SPAWN_MODE` 同义。
-#   -Model         可选。会话跑哪个模型：`provider/model$level`（GUI 模型选择器的那串原文）。
-#                  缺省由 zcode-dispatch.py 里那个开关给：`MODEL_CHOICES` 的两个键（`glm` =
-#                  内置智谱账号的 GLM-5.3-Flash / `opencode` = OpenCode Go (Chat) 的
-#                  deepseek-v4.1-flash）里，`DEFAULT_MODEL` 指着哪个就用哪个。
-#                  系统性地换模型：改 `DEFAULT_MODEL` 那一行的键，别在别处再写死一份。
-#                  写 `workspace` = 跟随该 workspace 的首选，也就是你在界面上最后选的那个 ——
-#                  后台节点别用它：那批会话的消耗会落到你界面上当时选中的那份额度上。
-#                  合法 id 见 `~/.zcode/v2/provider_config.json` 的 `modelOrder` 与内置目录里的
-#                  模型列表（账号型 provider 的模型名有大小写）。
-#                  环境变量 `DSH_CONDUCT_SPAWN_MODEL` 同义且优先于缺省；它由宿主进程在启动时
-#                  快照，改完环境变量要重启宿主才生效。注意：它一旦设上就盖住上面那个开关，
-#                  想让开关说了算，得先把它清掉（含 HKCU\Environment 里的持久化那份）。
-#   -NoVerify      可选。写完那一行就返回，不等桌面把会话建出来。给演练和排期用；管线不带它，
-#                  因为"排队成功"和"会话真的存在"是两件事 —— 等不到时它会把标记写下来。
+#   -CycleId       mandatory. The cycle id (the same as state-manage.py's cycle id).
+#   -PromptFile    mandatory. The whole prompt of the node session (its first line is the skill call
+#                  line); without it the script fails and exits.
+#   -MarkerPath    mandatory. The degradation marker's full path (`conduct_spawn.argv_for` takes it
+#                  from marker.py).
+#   -WorkspacePath optional. The child session's working directory, and the grouping key in the GUI;
+#                  defaults to the current directory.
+#   -PythonExe     optional. The python that runs zcode-dispatch.py; defaults to the python on PATH
+#                  (writing the marker does not go through it).
+#   -At            optional. When to run: `+30m` / `+2h` / a local clock time (such as
+#                  `2026-10-07T23:00`). Use it to queue a node into the free window at night;
+#                  default = immediately. The env var `DSH_CONDUCT_SPAWN_AT` means the same (the
+#                  pipeline's argv does not carry this parameter).
+#   -Mode          optional. The session's permission tier: `yolo` (default, full access) / `build` /
+#                  `edit` / `plan`. **Do not change it to a tier that asks questions**: a working
+#                  session stops and waits for an answer the first time it changes a file, and nobody is
+#                  there at that moment. The env var `DSH_CONDUCT_SPAWN_MODE` means the same.
+#   -Model         optional. Which model the session runs: `provider/model$level` (the exact string from
+#                  the GUI's model picker). The default comes from the switch in zcode-dispatch.py:
+#                  among `MODEL_CHOICES`'s two keys (`glm` = the built-in Zhipu account's
+#                  GLM-5.3-Flash / `opencode` = OpenCode Go (Chat)'s deepseek-v4.1-flash), whichever
+#                  `DEFAULT_MODEL` points at. To change models systematically: change the key on the
+#                  `DEFAULT_MODEL` line, do not hard-code a second copy elsewhere. Writing `workspace`
+#                  = follow that workspace's preference, that is, whatever you last picked in the
+#                  interface -- do not use it for background nodes: those sessions' spend lands on
+#                  whatever quota was selected in your interface at the time. Legal ids: `modelOrder`
+#                  in `~/.zcode/v2/provider_config.json` and the model list in the built-in catalogue
+#                  (account-type providers' model names are case-sensitive). The env var
+#                  `DSH_CONDUCT_SPAWN_MODEL` means the same and beats the default; the host process
+#                  snapshots it at startup, so changing the env var needs a host restart to take effect.
+#                  Note: once it is set it covers the switch above, and to let the switch decide you have
+#                  to clear it first (including the persistent copy under HKCU\Environment).
+#   -NoVerify      optional. Return as soon as that row is written, without waiting for the desktop to
+#                  create the session. For drills and scheduling; the pipeline does not pass it, because
+#                  "queued successfully" and "the session really exists" are two different things -- if
+#                  it cannot wait it writes the marker down.
 #
-# 依赖：pwsh 7+、PATH 上的 python 3、ZCode 桌面在运行。桌面关着的时候排的行会在它启动时才被看见，
-# 而那时若已过期超过 5 分钟，调度器会当 misfire 跳过 —— zcode-dispatch.py 会在那种情况下往 stderr
-# 提醒一句。
+# Dependencies: pwsh 7+, python 3 on PATH, the ZCode desktop running. When the desktop is closed, a
+# queued row is only seen once it starts, and if by then it is more than 5 minutes overdue the scheduler
+# skips it as a misfire -- zcode-dispatch.py says a word on stderr in that case.
 #
-# 与 dsh-spawn.ps1 的共同契约（别改）：
-#   ① 成功时最后一行是 `spawned: ...`；
-#   ② 任何失败都写下降级标记，且不清除；
-#   ③ 成功时清掉本线自己留下的旧标记（标记存在 = 链现在是断的）；按线分文件，并行=2 时
-#      本线成功不抹别线的断链记号。
-#   ① 末行由本文件自己打（两个宿主的末行不同）；② 与 ③ 由 `spawn-common.ps1` 那一份外壳保证 ——
-#   这一半独有的「找不到 python」那一拍也照 ② 写下降级标记再退出。
+# The shared contract with dsh-spawn.ps1 (do not change):
+#   1) on success the last line is `spawned: ...`;
+#   2) any failure writes the degradation marker and does not clear it;
+#   3) on success it clears this line's own stale marker (marker present = the chain is broken right
+#      now); one file per line, with parallel=2 this line's success does not wipe another line's
+#      broken-chain mark.
+# The final line is printed by this file itself (the two hosts' final lines differ); items 2) and 3)
+# are guaranteed by the one shell in `spawn-common.ps1` -- this half's own "no python found" beat also
+# writes the degradation marker per 2) and exits.
 # ============================================================================
 
 param(
@@ -73,33 +88,38 @@ $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot 'spawn-common.ps1')
 
-# —— 工作目录与降级标记：在任何调用之前先定下来，失败时才写得了盘 ——
-# ZCode 的库路径只进标记的 extra，给人看的；真正的库路径由 zcode-dispatch.py 算（它认同一个
-# 环境变量，沙箱靠 `ZCODE_DATA_BASE_DIR` 指到临时库）。
+# -- working directory and degradation marker: settle them before any call, so a failure can write to
+# disk --
+# ZCode's library path goes only into the marker's extra, for a human to read; the real library path is
+# computed by zcode-dispatch.py (it honours one env var, and the sandbox points `ZCODE_DATA_BASE_DIR`
+# at a temp library).
 $dataBase = if ($env:ZCODE_DATA_BASE_DIR) { $env:ZCODE_DATA_BASE_DIR } else { $env:USERPROFILE }
 $dbPath = Join-Path $dataBase '.zcode\v2\tasks-index.sqlite'
 Initialize-Spawner -CycleId $CycleId -PromptFile $PromptFile -WorkspacePath $WorkspacePath `
                    -MarkerPath $MarkerPath -PythonExe $PythonExe -Extra "db=$dbPath"
 
-# —— prompt 是这次调用的全部内容：没有 prompt 就没有会话可排，不给就报错退出 ——
+# -- the prompt is the whole of this call: with no prompt there is no session to queue, and without it
+# the script fails and exits --
 Assert-PromptFile
 
 $python = $script:SpawnPython
 if (-not $python) {
-    # 这一拍链就断在这里：按契约②写下降级标记再退出 —— 标记由外壳自己写，不需要 python。
+    # The chain breaks at this beat: write the degradation marker per contract 2) and exit -- the marker
+    # is written by the shell itself, which needs no python.
     Write-CallbackFailureMarker -Phase 'find-python' `
-        -Reason "找不到 python：zcode-dispatch.py 跑不起来；把它放上 PATH，或用 -PythonExe 指名。"
-    Write-Warning "zcode-dispatch.py 需要 python：把它放上 PATH，或用 -PythonExe 指名。"
+        -Reason "no python: zcode-dispatch.py cannot run; put it on PATH, or name one with -PythonExe."
+    Write-Warning "zcode-dispatch.py needs python: put it on PATH, or name one with -PythonExe."
     throw "python not found (zcode-dispatch.py needs it)"
 }
 
 $dispatcher = Join-Path $PSScriptRoot 'zcode-dispatch.py'
 if (-not (Test-Path $dispatcher)) {
-    Write-CallbackFailureMarker -Phase 'find-dispatcher' -Reason "找不到 $dispatcher"
+    Write-CallbackFailureMarker -Phase 'find-dispatcher' -Reason "cannot find $dispatcher"
     throw "dispatcher not found: $dispatcher"
 }
 
-# —— 排一行；`--at` / `--mode` / `--model` 只认显式参数与环境变量（管线的 argv 不带它们）——
+# -- queue a row; `--at` / `--mode` / `--model` honour only explicit parameters and env vars (the
+# pipeline's argv does not carry them) --
 $when = if ($At) { $At } else { $env:DSH_CONDUCT_SPAWN_AT }
 $permissionMode = if ($Mode) { $Mode } else { $env:DSH_CONDUCT_SPAWN_MODE }
 $whichModel = if ($Model) { $Model } else { $env:DSH_CONDUCT_SPAWN_MODEL }
@@ -119,8 +139,8 @@ if ($code -ne 0) {
     throw "zcode-dispatch.py failed ($code): $detail"
 }
 
-# 成功路径：stdout 上第一行是 automation id，验证过时第二行是 `session: <id>`（warning 走 stderr，
-# 混进来也不匹配这两个形状）
+# Success path: the first line on stdout is the automation id, and when verification ran the second
+# line is `session: <id>` (warnings go to stderr and do not match these two shapes even if they mix in)
 $automationId = ($lines | Where-Object { "$_" -match '^automation-' } | Select-Object -Last 1)
 if (-not $automationId) {
     $detail = "zcode-dispatch.py printed no automation id: " + (($lines | ForEach-Object { "$_" }) -join ' | ')
@@ -131,7 +151,8 @@ $sessionId = ''
 $sessionLine = ($lines | Where-Object { "$_" -match '^session:\s*sess_' } | Select-Object -Last 1)
 if ($sessionLine) { $sessionId = ("$sessionLine" -replace '^session:\s*', '').Trim() }
 
-# 派发成功：清掉上一次留下的降级标记（标记存在 = 链现在是断的）。
+# Dispatch succeeded: clear the degradation marker left by an earlier beat (marker present = the chain
+# is broken right now).
 Clear-CallbackFailureMarker
 
 if ($sessionId) {

@@ -61,7 +61,8 @@ def _host():
 
 
 def marker_path(root, cycle):
-    """`spawn/marker.py` 算出的落点：测试跟着正本走，那条路径不在测试里再拼一遍。"""
+    """The landing place `spawn/marker.py` computes: the test follows the one source, and never
+    assembles that path again here."""
     spec = importlib_util.spec_from_file_location('pf_spawn_marker_case',
                                                   CONDUCT_DIR / 'spawn' / 'marker.py')
     module = importlib_util.module_from_spec(spec)
@@ -137,9 +138,9 @@ def zcode_sandbox(test, node_id=None):
 
 
 class TestSpawnerChoice(unittest.TestCase):
-    """两边各一份 spawner，而"用哪一份"只在一处回答。"""
+    """One spawner per host, and "which one" is answered in exactly one place."""
 
-    # ── 选路 ─────────────────────────────────────────────────────────────────
+    # ── picking the spawner ──────────────────────────────────────────────────
 
     def test_the_two_names_map_to_the_two_scripts(self):
         host = _host()
@@ -175,30 +176,34 @@ class TestSpawnerChoice(unittest.TestCase):
             self.assertEqual(host.default_spawner().name, 'dsh-spawn.ps1')
 
     def test_the_probe_lives_next_to_the_scripts_it_names(self):
-        """宿主探测只有 `spawn/host.py` 这一个家；链自跑的那一发走管线那道门。
+        """The host probe has exactly one home, `spawn/host.py`; the beat a chain runs for
+        itself goes through the pipeline's door.
 
-        接缝那个模块（`conduct_pipeline.py`）是调用方 patch 的那一个：探测与它分开住，任何一次探测
-        的改动都落在自己那份文件里。`chain-spawn.py` 只当 CLI 壳，开会话那一拍落在管线那道门上（会话
-        便条、标记的写与清都由它带着；claim 那一条拿不到 —— 那条链的 prompt 不在 launch 目录里，见
-        `chain-spawn.py` 的模块说明）。
+        The seam module (`conduct_pipeline.py`) is the one a caller patches: the probe lives apart
+        from it, so any change to the probe lands in its own file. `chain-spawn.py` is only a CLI
+        shell, and the beat that opens a session lands on the pipeline's door (it carries the session
+        note and the marker's write and clear; the claim one is out of reach -- that chain's prompt
+        is not in the launch directory, see `chain-spawn.py`'s module docstring).
         """
         entry = (CONDUCT_DIR / 'conduct_pipeline.py').read_text(encoding='utf-8')
         imported = {alias.name for node in ast.walk(ast.parse(entry))
                     if isinstance(node, (ast.Import, ast.ImportFrom)) for alias in node.names}
-        self.assertNotIn('ctypes', imported, '宿主探测住在接缝模块里')
+        self.assertNotIn('ctypes', imported, 'the host probe lives in the seam module')
 
         tree = ast.parse((CONDUCT_DIR / 'spawn' / 'chain-spawn.py').read_text(encoding='utf-8'))
-        # 第二道门不许在这份文件里留下任何痕迹：别名、内联调用、模块名与路径字符串全算。
-        # 大小写敏感地找，`DSH_CONDUCT_SPAWNER` 那类环境变量名因此分得开。
+        # The second door may leave no trace at all in this file: aliases, inline calls, module
+        # names and path strings all count. Searched case-sensitively, so `DSH_CONDUCT_SPAWNER`-style
+        # environment variable names stay apart from the module.
         texts = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
         texts |= {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
         texts |= {node.value for node in ast.walk(tree)
                   if isinstance(node, ast.Constant) and isinstance(node.value, str)}
         self.assertEqual([text for text in sorted(texts) if 'conduct_spawn' in text], [],
-                         '第二道门：chain-spawn.py 里又出现 conduct_spawn 了')
+                         'the second door: conduct_spawn shows up in chain-spawn.py again')
 
-        # 另一头钉住：开会话那一拍落在管线上。上面那条扫描管「没有再调别的门」，这一条管
-        # 「它调的是那道门」—— 别名换了目标，两条各拦一头。
+        # Pinned from the other end too: the beat that opens a session lands on the pipeline. The
+        # scan above checks that it calls no other door; this one checks that the door it calls is
+        # that one -- an alias retargeted, with one end caught by each.
         bound = {}
         for node in sorted((n for n in ast.walk(tree)
                             if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)
@@ -213,20 +218,21 @@ class TestSpawnerChoice(unittest.TestCase):
         receivers = {node.func.value.id for node in ast.walk(tree)
                      if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                      and node.func.attr == 'spawn_session' and isinstance(node.func.value, ast.Name)}
-        self.assertTrue(receivers, 'chain-spawn 没有调 spawn_session')
+        self.assertTrue(receivers, 'chain-spawn calls no spawn_session')
         for name in sorted(receivers):
             self.assertEqual(bound.get(name), 'conduct_pipeline.py',
-                             f'{name}.spawn_session 那一头要绑在管线门上')
+                             f'{name}.spawn_session must be bound to the pipeline door')
 
         called = {node.func.attr for node in ast.walk(tree)
                   if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
-        self.assertNotIn('default_spawner', called, '挑 spawner 的活归那道门')
-        self.assertNotIn('argv_for', called, 'spawner 的 argv 由 conduct_spawn 拼')
+        self.assertNotIn('default_spawner', called, 'picking the spawner belongs to that door')
+        self.assertNotIn('argv_for', called, 'the spawner argv is assembled by conduct_spawn')
 
-    # ── 线策略这一级 ─────────────────────────────────────────────────────────
-    # `resolve_spawner` 的整条优先级：CLI 点名 > 这条线的 `spawner` 策略 > 环境变量 > 宿主 >
-    # `dsh`。线策略是一份落盘的决定（`cycle policy <cycle> spawner …`），所以它压过这台机器
-    # 的环境变量与宿主探测 —— 探测偶发失败也不该把一条钉死 zcode 的线送回 DSH。
+    # ── the line-policy tier ─────────────────────────────────────────────────
+    # `resolve_spawner`'s whole priority: the CLI naming it > this line's `spawner` policy >
+    # environment variable > host > `dsh`. A line policy is a decision on disk
+    # (`cycle policy <cycle> spawner …`), so it beats this machine's environment variable and host
+    # probe -- a probe that fails intermittently must not send a line pinned to zcode back to DSH.
 
     def policy_root(self, policies):
         """A minimal project: `.pf/state.json` with one cycle, carrying `policies` (or none)."""
@@ -241,7 +247,8 @@ class TestSpawnerChoice(unittest.TestCase):
         return root
 
     def test_a_line_policy_beats_the_machine_and_the_host(self):
-        """线策略压过这台机器上的一切：环境变量与那道缝都说 zcode，线仍然走 dsh。"""
+        """The line policy beats everything on this machine: the environment variable and the seam
+        both say zcode, and the line still goes dsh."""
         root = self.policy_root({'spawner': 'dsh'})
         with mock.patch.dict(os.environ, {'DSH_CONDUCT_SPAWNER': 'zcode'}, clear=True), \
                 mock.patch.object(pipeline, 'SPAWNER_SCRIPT', _host().SPAWN_SCRIPTS['zcode']):
@@ -284,7 +291,7 @@ class TestSpawnerChoice(unittest.TestCase):
         self.assertIsNone(pipeline.cycle_policy(pipeline.find_cycle(
             pipeline.load_state(root2), 'cyc')).get('spawner'))
 
-    # ── 那一行 ───────────────────────────────────────────────────────────────
+    # ── that one row ─────────────────────────────────────────────────────────
 
     def dispatcher(self):
         """The dispatcher, imported -- for the constants a test should *follow*, not pin.
@@ -405,7 +412,7 @@ class TestSpawnerChoice(unittest.TestCase):
         con.close()
         self.assertGreater(when - int(time.time() * 1000), 29 * 60_000)
 
-    # ── 包装脚本 ─────────────────────────────────────────────────────────────
+    # ── the wrapper script ───────────────────────────────────────────────────
 
     def test_the_spawner_ends_with_its_spawned_line(self):
         """The pipeline reads the spawner's last line; the marker must not be left behind.
@@ -428,7 +435,7 @@ class TestSpawnerChoice(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertTrue(proc.stdout.strip().splitlines()[-1].startswith('spawned: automation '),
                         proc.stdout)
-        self.assertFalse(marker.exists(), '派发成功之后旧的降级标记还躺在盘上')
+        self.assertFalse(marker.exists(), 'after a successful dispatch the old degradation marker is still on disk')
         con = sqlite3.connect(str(db))
         mode, selection = con.execute('select mode, model_selection from automations').fetchone()
         con.close()
@@ -452,16 +459,18 @@ class TestSpawnerChoice(unittest.TestCase):
         record = json.loads(marker.read_text(encoding='utf-8'))
         self.assertEqual(record['cycle_id'], 'cyc-case')
         self.assertEqual(record['phase'], 'read-prompt')
-        # 宿主自己的事实进 `extra` 一个槽：dsh 放 api_base，这里放它排队用的那个库。
+        # The host's own facts get a slot of their own, `extra`: dsh puts api_base there, this one
+        # puts the database it queues through.
         self.assertEqual(record['extra'], {'db': str(db)})
         self.assertEqual(set(record), {'cycle_id', 'phase', 'attempts', 'reason', 'workspace',
                                        'extra', 'detected_at', 'note'})
 
     def test_a_host_with_no_python_still_leaves_the_marker(self):
-        """ZCode 那一半要 python 才能排队；找不到的那一拍也照契约②留下降级标记再退出。
+        """ZCode's half needs python to queue; the beat that cannot find it still leaves the
+        degradation marker per contract 2 and exits.
 
-        标记由外壳自己写（不经过 python），所以这一拍盘上那份记录是写得出来的 —— 恢复 HEAD
-        那一版就有的保证。
+        The shell writes the marker itself (no python involved), so that beat can put the record on
+        disk -- the guarantee the HEAD version already had.
         """
         if not shutil.which('pwsh'):
             self.skipTest('pwsh is not on PATH')
@@ -473,13 +482,14 @@ class TestSpawnerChoice(unittest.TestCase):
                                '-WorkspacePath', str(ws), '-MarkerPath', str(marker), '-NoVerify'],
                               capture_output=True, text=True, encoding='utf-8', errors='replace',
                               env=no_path)
-        self.assertNotEqual(proc.returncode, 0, '找不到 python 却当成功退出了')
-        self.assertTrue(marker.is_file(), '找不到 python 那一拍没留下降级标记')
+        self.assertNotEqual(proc.returncode, 0, 'python was not found, yet it exited as a success')
+        self.assertTrue(marker.is_file(), 'the no-python beat left no degradation marker')
         self.assertEqual('find-python', json.loads(marker.read_text(encoding='utf-8'))['phase'])
 
 
 class TestQueueDedup(unittest.TestCase):
-    """同一节点排第二行是两个会话上同一节点的路：在途的行、还热的会话都要挡。"""
+    """A second row for the same node is the road to two sessions on one node: rows in flight
+    and sessions still warm both have to be blocked."""
 
     def test_a_second_row_for_the_same_node_is_refused(self):
         db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
@@ -502,7 +512,8 @@ class TestQueueDedup(unittest.TestCase):
         self.assertEqual(second.returncode, 0, second.stderr)
 
     def test_a_claimed_row_is_no_longer_pending(self):
-        """行被桌面认领、且认领已过新鲜窗口（会话也没写出来）之后，文档规定的抢救重排是合法的。"""
+        """Once the desktop has claimed the row and the claim is past the freshness window (and no
+        session was written either), the documented salvage re-queue is legal."""
         db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
         first = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(first.returncode, 0, first.stderr)
@@ -515,7 +526,8 @@ class TestQueueDedup(unittest.TestCase):
         self.assertEqual(again.returncode, 0, again.stderr)
 
     def test_a_claim_just_made_with_no_session_blocks(self):
-        """认领到落库之间的窄缝：行刚被认领、会话还没写出来，第二个 queue 两个旧检查都落空。"""
+        """The narrow gap between claim and commit: the row has just been claimed and the session
+        is not written yet, so a second queue slips past both old checks."""
         db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
         first = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(first.returncode, 0, first.stderr)
@@ -533,7 +545,8 @@ class TestQueueDedup(unittest.TestCase):
         self.assertEqual(count, 1, 'the refused queue must not leave a row behind')
 
     def test_a_fresh_session_blocks_and_an_old_one_does_not(self):
-        """验证超时的竞态：会话其实建出来了——十 分钟内的会话挡住重排，再老的算死会话放行。"""
+        """The race where verification times out: the session did get created -- a session under ten
+        minutes old blocks the re-queue, and an older one counts as dead and goes through."""
         db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
         first = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(first.returncode, 0, first.stderr)

@@ -1,4 +1,5 @@
-"""`tools/shared/loader.py`：装载器的三个旋钮、包自解析，以及 `load_shared` 那道门。"""
+"""`tools/shared/loader.py`: the loader's three knobs, package self-resolution, and the
+`load_shared` door."""
 
 from __future__ import annotations
 
@@ -75,70 +76,84 @@ class TestTheOneLoader(unittest.TestCase):
 
 
 class TestTheSharedDoor(unittest.TestCase):
-    """`load_shared(stem)`：公共件的那道门 —— 落点、一个进程一份、注册名、拼错要响。"""
+    """`load_shared(stem)`: the door onto the shared pieces -- where it lands, one copy per process,
+    the registered name, and a typo that has to speak up."""
 
     def test_the_door_lands_on_the_file_that_stem_names(self):
-        """`load_shared('jsonio')` 交回来的就是 `shared/jsonio.py`，而且是执行过的那一份。
+        """`load_shared('jsonio')` hands back exactly `shared/jsonio.py`, and the copy that was
+        executed.
 
-        挡的是落点与 stem 对不上（拼错文件名、多算一层目录）：那份被交回来的文件只要有办法执行，
-        调用方就会拿它当这一件用下去，直到某次属性缺失才在远处现形。
+        What this holds off: the landing place and the stem disagreeing (a misspelled filename, one
+        directory too many). As long as the file handed back can be executed at all, the caller goes
+        on treating it as this piece, and the mistake only surfaces far away, as a missing
+        attribute.
         """
         mod = shared_loader().load_shared('jsonio')
 
         self.assertEqual((SHARED_DIR / 'jsonio.py').resolve(), Path(mod.__file__).resolve(),
-                         '这道门没有落在共享目录里那一份同名文件上')
+                         'this door did not land on the file of that name in the shared directory')
         self.assertTrue(hasattr(mod, 'atomic_write_json'),
-                        '交回来的模块没执行过：`atomic_write_json` 不在它身上')
+                        'the module handed back was never executed (no `atomic_write_json`)')
 
     def test_one_copy_per_process_however_often_you_ask(self):
-        """同一个 stem 连调两次是同一个模块对象，且它就是这个进程在 `sys.modules` 里的那一份。
+        """Two calls in a row with the same stem are one module object, and it is this process's
+        copy in `sys.modules`.
 
-        挡的是两次调用拿到两份模块对象：`load_shared` 的这一份是进程态的正主（锁的可重入记录、
-        `bind_paths` 那类绑定都挂在模块上），多出第二份时调用方各自以为在说同一件事，而它们已经
-        分家 —— 内层调用会被自己那把锁挡在门外，路径绑定也会各指各的项目。
+        What this holds off: two calls getting two module objects. `load_shared`'s copy is the one
+        that owns the process state (the lock's reentrant record, the `bind_paths`-style bindings
+        all hang off the module); with a second copy around, callers each believe they are talking
+        about the same thing while they have already parted ways -- the inner call gets shut out by
+        its own lock, and the path bindings point at a different project each.
         """
         mod = shared_loader().load_shared('jsonio')
         again = shared_loader().load_shared('jsonio')
 
-        self.assertIs(mod, again, '第二次取件交回来的是另一份模块对象')
+        self.assertIs(mod, again, 'the second fetch handed back another module object')
         self.assertIs(sys.modules['pf_shared_jsonio'], mod,
-                      '这道门的注册名与 sys.modules 里那一份对不上')
+                      'the name this door registered does not match the one in sys.modules')
 
     def test_a_hyphen_in_the_stem_stays_out_of_the_registered_name(self):
-        """带连字符的 stem 落在 `session-note.py` 上，注册名去掉连字符，且再取一次还是那一份。
+        """A stem with a hyphen lands on `session-note.py`, the registered name drops the hyphen,
+        and fetching it once more is still that one copy.
 
-        挡的是连字符被拼进 `sys.modules` 的键：第一次取件看着一切正常，第二次取件照着一个不含
-        连字符的钥匙去找、找不到就再执行一遍 —— 于是同一个文件在一个进程里有了两份，漂移只在
-        下一次取件时才现形。
+        What this holds off: the hyphen being spelled into the `sys.modules` key. The first fetch
+        looks perfectly normal, and the second one looks the file up under a hyphen-free key, finds
+        nothing and executes it again -- so one file has two copies in one process, and the drift
+        only surfaces on the next fetch.
         """
         mod = shared_loader().load_shared('session-note')
 
         self.assertEqual((SHARED_DIR / 'session-note.py').resolve(), Path(mod.__file__).resolve())
         self.assertIs(sys.modules['pf_shared_sessionnote'], mod,
-                      '注册名里的连字符没被去掉：下一次取件会另执行一份')
+                      'the registered name kept the hyphen: the next fetch runs a second copy')
         self.assertIs(shared_loader().load_shared('session-note'), mod,
-                      '带连字符的 stem 第二次取件交回来的是另一份模块对象')
+                      'the second fetch of the hyphenated stem handed back another module object')
 
     def test_the_door_and_load_by_path_hand_back_one_copy(self):
-        """这道门与直接 `load_by_path(..., register=True, reuse=True)` 交出的是同一个对象。
+        """This door and a direct `load_by_path(..., register=True, reuse=True)` hand back the same
+        object.
 
-        挡的是两道门各给一份：公共件在这棵树里是「一个进程一份」，而 monkeypatch 正本属性的用例
-        （`conduct/tests/cases_shared.py` 里 `.pf` 一改名标记跟着走那条）依赖的就是正本只有一份 ——
-        两道门给出两份时，补丁打在其中一份上，被测的那条路读另一份，用例会静默地测了个空壳。
+        What this holds off: the two doors giving a copy each. A shared piece is "one copy per
+        process" in this tree, and the case that monkeypatches the source's attributes (the one in
+        `conduct/tests/cases_shared.py` where renaming `.pf` takes the marker along) depends on
+        there being only one copy of the source -- with two, the patch lands on one of them, the
+        path under test reads the other, and the case silently tests an empty shell.
         """
         via_door = shared_loader().load_shared('ledger')
         via_knobs = shared_loader().load_by_path('pf_shared_ledger', SHARED_DIR / 'ledger.py',
                                                  register=True, reuse=True)
 
         self.assertIs(via_door, via_knobs,
-                      '两道门各交出一份 `shared/ledger.py`：补丁与读取分了家')
+                      'the two doors gave a `shared/ledger.py` each: patch and read parted ways')
 
     def test_a_stem_that_names_no_file_raises(self):
-        """拼错的 stem 当场响（`FileNotFoundError`），不许静默交回一个空模块。
+        """A misspelled stem speaks up on the spot (`FileNotFoundError`) -- never a silent empty
+        module.
 
-        挡的是把「这个公共件不存在」降级成一个空壳：调用方拿到的模块没有它要的那个名字，属性
-        缺失会在离拼错处很远的地方炸，或者更糟 —— 被某个 `getattr` 缺省收下，命令带着一半的
-        能力继续跑。
+        What this holds off: degrading "this shared piece does not exist" into an empty shell. The
+        module the caller gets does not carry the name it asked for, and the missing attribute blows
+        up far away from the typo -- or worse, some `getattr` default swallows it and the command
+        carries on with half its abilities.
         """
         with self.assertRaises(FileNotFoundError):
             shared_loader().load_shared('no-such-shared-file')

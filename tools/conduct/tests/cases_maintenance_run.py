@@ -4,9 +4,10 @@
 node's uuid only exists in that process's stdout), `TestMaintenanceDrive` walks a whole line from the
 crossing to the far end, and `TestTheForm` pins what the line asks a worker for in its ticket.
 
-什么时候插、插在哪条线上、同一个度量插几个，住在 `cases_maintenance.py`。
+When the insert happens, which line it happens on, and how many nodes one metric gets all live in
+`cases_maintenance.py`.
 
-    python -m unittest conduct.tests.cases_maintenance_run    # 这个文件单独跑
+    python -m unittest conduct.tests.cases_maintenance_run    # run this file on its own
 """
 
 from __future__ import annotations
@@ -25,17 +26,19 @@ __all__ = ['TestMaintenanceCli', 'TestMaintenanceDrive', 'TestTheForm']
 
 
 class TestMaintenanceCli(Base):
-    """改图走的是**真的那些进程**：`dag-manage add` 打的 uuid 只有它的 stdout 里有。
+    """The graph edit goes through **the real processes**: the uuid `dag-manage add` prints exists only in
+    its stdout.
 
-    沙箱默认把 `dag-manage` 的调用在这一个进程里答掉（省一个进程启动），上面那些用例走的就是那条
-    快路；而抓取子进程输出这一步，两条路上是两种东西 —— 这一条把整趟收尾放回真 CLI 上跑，
-    新节点的 uuid 由真进程印出来、由 `_capture` 读回来。
+    The sandbox answers `dag-manage` calls in this one process by default (saving a process start), and
+    the cases above take that fast path; capturing a child's output is a different thing on the two
+    paths -- this one puts the whole closing pass back on the real CLI, so the new node's uuid is
+    printed by a real process and read back by `_capture`.
     """
 
     def test_the_graph_edit_runs_through_the_real_processes(self):
         sb = self.make(cli=True)
-        sb.add_node(NODE, '写代码 A', mode='auto', tags=['coding'])
-        sb.add_node(NODE2, '写代码 B', mode='auto', tags=['coding'], deps=[NODE])
+        sb.add_node(NODE, 'Write code A', mode='auto', tags=['coding'])
+        sb.add_node(NODE2, 'Write code B', mode='auto', tags=['coding'], deps=[NODE])
         sb.start_cycle(tags=['coding'])
         sb.set_policy('cyc', 'test_seconds_limit', 60)
         sb.next()                                  # the real `next` CLI pins NODE and dispatches it
@@ -51,9 +54,10 @@ class TestMaintenanceCli(Base):
         made = action['node_id']
         self.assertEqual(nodes[made]['dependencies'], [NODE])
         self.assertEqual(nodes[NODE2]['dependencies'], [made])
-        # 派发这一步到 prompt 文件为止：`dispatch <cycle>` 读的就是它，而这条用例断言的就是
-        # 「那个文件在、里面是维护节点的调用行」。**不调 `dispatch`，也不传 `--spawn`** ——
-        # 那条通路是通的，它会真的开出会话（派发语义那一层由 `TestDispatchVerb` 的 fake spawner 守）。
+        # Dispatching stops at the prompt file: that is what `dispatch <cycle>` reads, and this case
+        # asserts exactly "the file is there, holding the maintenance node's invocation line". **No
+        # `dispatch` call and no `--spawn`** -- that path works and would really open a session (the
+        # dispatch-semantics layer is guarded by `TestDispatchVerb`'s fake spawner).
         self.assertTrue(Path(action['prompt']).is_file())
         self.assertEqual(Path(action['prompt']).parent.name, made)
         self.assertIn(made, Path(action['prompt']).read_text(encoding='utf-8'))
@@ -62,17 +66,20 @@ class TestMaintenanceCli(Base):
 
 
 class TestMaintenanceDrive(Base):
-    """整条线跑到底：维护节点照常被派发、照常收尾，然后接着走它推迟的那一个。"""
+    """A whole line walked to the end: the maintenance node is dispatched as usual, closes as usual,
+    then the line goes on to the one it deferred."""
 
     def test_the_driver_walks_through_the_inserted_node_and_on_to_the_deferred_one(self):
-        """无人值守这一趟：A 报了一个越线的读数，于是 B 之前先跑维护节点，再接着跑 B。
+        """An unattended run: A reports an over-the-line reading, so the maintenance node runs before B and
+        then B goes on.
 
-        维护节点把那笔债还上了（它报回来的读数在线下），所以这一趟插**一个**节点就收尾 ——
-        这条用例同时钉住「插进来的是普通节点、照常被派发、照常收尾」和「还上了就不再插」。
+        The maintenance node repaid that debt (the reading it reports back is under the line), so this
+        run inserts **one** node and closes -- this case pins both "what was inserted is an ordinary
+        node, dispatched as usual and closed as usual" and "once repaid, nothing more is inserted".
         """
         sb = coding_line(self, policies=[('test_seconds_limit', 60)], dispatch=False)
 
-        # 每个会话都在条子里带上读数；维护节点报的是修好之后的数
+        # every session carries a reading in its note; the maintenance node reports the repaired number
         terminal, driver = self.run_to_stop(
             sb, worker=SelfHealingWorker(sb, {'test_seconds': 400}))
 
@@ -86,11 +93,12 @@ class TestMaintenanceDrive(Base):
         self.assertEqual(terminal['action'], 'stop_pipeline')
         self.assertEqual(sb.dag()['nodes'][maintenance_node]['status'], 'completed')
         self.assertEqual(sb.dag()['nodes'][NODE2]['status'], 'completed')
-        # 插进来的那个节点是个普通的节点：它自己也被派发、也交条子
+        # the inserted node is an ordinary node: it is dispatched itself and delivers its own note
         self.assertEqual(sb.read_signal('cyc', maintenance_node)['status'], 'completed')
 
     def test_a_plain_run_never_produces_a_maintenance_action(self):
-        """没有阈值时整条线里不会出现维护动作：这条通道是加法的，关着时一点痕迹都没有。"""
+        """With no threshold, no maintenance action ever appears on the line: this channel is additive, and
+        shut it leaves no trace at all."""
         sb = self.make()
         sb.add_chain(2)
         sb.start_cycle(tags=['coding'])
@@ -100,8 +108,8 @@ class TestMaintenanceDrive(Base):
         self.assertEqual(len(sb.dag()['nodes']), 2)
 
     def test_the_closing_call_keeps_the_worker_out_of_the_graph_edit(self):
-        """收尾那次调用返回的走法只有 `dispatch` 与 `stop_pipeline`：改图是工具的事，
-        调用方手里没有可以再跑一遍的命令（不变量 6）。"""
+        """The closing call returns only `dispatch` and `stop_pipeline` walks: the graph edit is the tool's
+        business, and the caller holds no command it could run again (invariant 6)."""
         sb = coding_line(self, policies=[('test_seconds_limit', 60)], dispatch=False)
         sb.next()
         sb.write_signal('cyc', NODE, 'completed', 'done',
@@ -111,27 +119,29 @@ class TestMaintenanceDrive(Base):
 
         self.assertEqual(action['action'], 'dispatch')
         self.assertFalse(action.get('commands'), 'the caller must have nothing left to run')
-        # 工具自己那两样中间物不外泄
+        # the tool's own two intermediates do not leak out
         self.assertNotIn('add_command', action)
         self.assertNotIn('spec_of', action)
         self.assertTrue(action['applied'])
-        # 这次结算做了什么，逐条可查：建节点、拆旧边、连两条新边、钉指针
+        # what this settle did is checkable line by line: create the node, drop the old edge, wire the two
+        # new edges, pin the pointer
         did = ' '.join(action['did'])
         self.assertIn('dag-manage.py add', did)
         self.assertIn('undepend', did)
         self.assertIn('depend', did)
         self.assertIn('cycle hold', did)
-        # 插进来的那个节点被记为这一次开出来的节点
+        # the inserted node is recorded as the node this pass opened
         self.assertEqual(action['opened_node'], sb.current_node())
 
     def test_the_worker_can_report_a_reading_through_the_real_handoff(self):
-        """`reading` 是条子上普通的一个 `outputs` 键：`handoff.py` 原样收下。
+        """`reading` is an ordinary `outputs` key on the note: `handoff.py` takes it verbatim.
 
-        收尾只读它认的那几个（`test_seconds`）；池子那一格即便写在条子上也照样由 issue 工具算。
+        The close reads only the ones it recognizes (`test_seconds`); the pool slot is computed by the
+        issue tool even when it is written on the note.
         """
         sb = self.make()
-        sb.add_node(NODE, '写代码 A', mode='auto', tags=['coding'])
-        sb.add_node(NODE2, '写代码 B', mode='auto', tags=['coding'], deps=[NODE])
+        sb.add_node(NODE, 'Write code A', mode='auto', tags=['coding'])
+        sb.add_node(NODE2, 'Write code B', mode='auto', tags=['coding'], deps=[NODE])
         sb.start_cycle(tags=['coding'])
         sb.set_policy('cyc', 'test_seconds_limit', 60)
         sb.next()
@@ -144,14 +154,15 @@ class TestMaintenanceDrive(Base):
         sb.close_round(NODE)
         self.assertEqual(len(sb.dag()['nodes']), 3)
         made = sb.current_node()
-        # 只有越线的那个度量进来，没越线的那个留在原地
+        # only the metric that crossed comes in; the one that did not stays where it is
         spec = (sb.root / '.pf' / 'nodes' / made / 'spec.md').read_text(encoding='utf-8')
         self.assertIn('test_seconds', spec)
         self.assertIn('"reading": {"test_seconds"', spec)
         self.assertNotIn('issue_pool_weight', (sb.dag()['nodes'][made]['title']))
 
 class TestTheForm(Base):
-    """`handoff.py --form <cycle>`：这条线要什么，由收条子的那一方现印，写不进去任何东西。"""
+    """`handoff.py --form <cycle>`: what this line wants is printed on the spot by the note's
+    receiver, and nothing can be written into it."""
 
     def form(self, sb, cycle='cyc') -> str:
         return _run_proc(sb.root, [HANDOFF_PY, '--form', cycle]).stdout
@@ -161,7 +172,8 @@ class TestTheForm(Base):
         return coding_line(self, policies=policies.items(), dispatch=False, pair=False)
 
     def test_a_line_without_numeric_policies_asks_for_nothing(self):
-        """没配线的项目（`minimal` 档就是这种）拿到一张没有读数格子的骨架。"""
+        """A project with no line configured (the `minimal` tier is one) gets a skeleton with no reading
+        slot."""
         text = self.form(self.a_line())
 
         self.assertIn('-o \'{"deliverable"', text)
@@ -173,7 +185,8 @@ class TestTheForm(Base):
         self.assertIn('"reading":{"test_seconds":', text)
 
     def test_the_pool_line_never_becomes_a_ticket_slot(self):
-        """池子那格由 issue 工具算：这条线配了它，表单里也不出现这个键。"""
+        """The pool slot is computed by the issue tool: this line configured it, yet the key still does not
+        appear on the form."""
         text = self.form(self.a_line(issue_pool_weight_limit=8))
 
         self.assertNotIn('issue_pool_weight', text)

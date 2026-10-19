@@ -1,13 +1,13 @@
-"""`tools/shared/` 自己的套件：这一层的用例，不从别的工具的夹具里取件。
+"""`tools/shared/`'s own suite: this layer's cases, taking no fixture from another tool.
 
-跑法（两种都行）：
+How to run it (either way works):
 
-    python -m unittest discover -s shared/tests -t .      （cwd 在 tools/）
+    python -m unittest discover -s shared/tests -t .      (cwd in tools/)
     python shared/tests/test_shared.py
 
-这个文件是唯一的收集点：用例按组住在 `cases_*.py` 里，逐个 star-import 进来，所以 discover
-走到的就是这一份。（`cases_*` 这个名字同时落在 discover 的 `test*.py` 与 pytest 的 `test_*.py`
-之外，同一批用例不会被跑两遍。）
+This file is the one collection point: the cases live in groups under `cases_*.py` and are
+star-imported one by one, so this is the file discover reaches. (`cases_*` also falls outside
+discover's `test*.py` and pytest's `test_*.py`, so the same batch of cases is never run twice.)
 """
 
 from __future__ import annotations

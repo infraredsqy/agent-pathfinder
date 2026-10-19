@@ -1,11 +1,13 @@
-"""`mark`：扫描活着确认的那一笔记录 —— 只加 check_count、只报候选，一个状态都不改。
+"""`mark`: the one record a live scan confirms -- it only adds check_count and only reports
+candidates, and changes not one status.
 
-「mark 只记、不结案，结案另走 resolve」这条协议的正本在这里：候选集是「这次扫描没确认到的
-open 条目」（advisory），unknown 是报了但池子里没有的 id；两条都不动任何条目的状态。
+The one source for the protocol "mark only records, it does not close out; closing out goes through
+resolve" is here: the candidate set is "the open entries this scan did not confirm" (advisory), and
+unknown is an id that was reported but is not in the pool; neither touches any entry's status.
 
-跑法（两种都行）：
+How to run (either works):
 
-    python -m unittest discover -s issue/tests -t .      （cwd 在 tools/）
+    python -m unittest discover -s issue/tests -t .      (cwd in tools/)
     python issue/tests/test_mark.py
 """
 
@@ -23,12 +25,13 @@ TOOL = Path(__file__).resolve().parent.parent / 'issue_manager.py'
 
 
 class PoolCase(unittest.TestCase):
-    """一个 temp 假项目：记录目录摆成 init 过的样子，命令起真进程。"""
+    """A temp fake project: the ledger looks init-ed, and the command runs a real process."""
 
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix='issue-mark-'))
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
-        # 两枚标记文件就是「这个记录目录 init 过」的凭据：写命令见不到它们会停手。
+        # The two marker files are the proof that "this ledger has been init-ed": a write command
+        # stops without them.
         ledger = self.root / '.pf'
         ledger.mkdir(parents=True, exist_ok=True)
         (ledger / '.gitignore').write_text('meta/\nworktrees/\ntemp/\n', encoding='utf-8')
@@ -68,7 +71,7 @@ class TestMarkBookkeeping(PoolCase):
         self.assertEqual(2, self.pool()['a']['check_count'])
 
     def test_asking_twice_in_one_call_still_counts_once(self):
-        """同一趟里重复报的 id 是一个集合：一次扫描确认一次。"""
+        """Ids reported twice in one call are one set: one scan confirms once."""
         self.add('a')
 
         self.mark('a', 'a')
@@ -76,7 +79,7 @@ class TestMarkBookkeeping(PoolCase):
         self.assertEqual(2, self.pool()['a']['check_count'])
 
     def test_an_empty_argument_is_dropped(self):
-        """shell 引号留下的空串不算 id，也不进 unknown。"""
+        """An empty string left by shell quoting is no id, and does not go into unknown either."""
         self.add('a')
 
         report = self.mark('a', '')
@@ -93,7 +96,8 @@ class TestMarkBookkeeping(PoolCase):
         self.assertEqual(['never-filed'], report['unknown_ids'])
 
     def test_a_skipped_scan_leaves_every_status_alone(self):
-        """mark 不动状态：`open` 的仍是 `open`，等 resolve 那条路来结案。"""
+        """mark moves no status: an `open` entry stays `open`, waiting for the resolve path to
+        close it."""
         self.add('a')
 
         self.mark('a')
@@ -121,7 +125,8 @@ class TestMarkCandidates(PoolCase):
         self.assertEqual([], report['candidates'])
 
     def test_an_acknowledged_entry_is_never_a_candidate(self):
-        """候选是给「该结案了吗」看的：押后的那条已经有人看过了。"""
+        """Candidates answer "should this be closed out?": the deferred one has been looked at
+        already."""
         self.add('later')
         code, out, err = self.cli('acknowledge', 'later')
         self.assertEqual(code, 0, err or out)

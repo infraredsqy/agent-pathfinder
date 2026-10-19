@@ -1,48 +1,61 @@
 ﻿# ============================================================================
-# dsh-spawn.ps1 — 用 DSH HTTP API 新开一个 session（管线派发用）
+# dsh-spawn.ps1 — open a new session over the DSH HTTP API (used by pipeline dispatch)
 # ============================================================================
-# 只由 conduct_spawn.py 调用（管线经 `state-manage.py next --spawn` 与 `dispatch <cycle>` 走它），
-# 不直接给人用。只开一类会话：
-#   带 -PromptFile：开一个**干活**的节点 session（拿一个 DAG 节点去做的那个 pf-conduct），prompt 就是那个文件的全文。
-# `-PromptFile` 是**必填**：没有 prompt 就没有会话可开，不给就报错退出，绝不发任何手势。
-# 旧 session 一律不复活——每次都是新开一个会话。
+# Called only by conduct_spawn.py (the pipeline reaches it through `state-manage.py next --spawn` and
+# `dispatch <cycle>`), never used by a human directly. It opens one kind of session:
+#   with -PromptFile: opens a **working** node session (the pf-conduct that takes one DAG node on), and
+#   the prompt is the whole of that file.
+# `-PromptFile` is **mandatory**: with no prompt there is no session to open, and without it the script
+# fails and exits, never sending a gesture.
+# An old session is never revived -- a new session is opened every time.
 #
-# 外壳（参数缺省、prompt 校验、降级标记的写与清）与 `zcode-spawn.ps1` 共用同一份：
-# `spawn-common.ps1`，本文件只留 DSH 这一半（鉴权、HTTP 调用、末行）。标记的形状与落点在
-# `marker.py`。
+# The shell (parameter defaults, the prompt check, the write and the clear of the degradation marker)
+# is shared with `zcode-spawn.ps1`: `spawn-common.ps1`; this file keeps only the DSH half
+# (authentication, the HTTP calls, the final line). The marker's shape and landing place live in
+# `marker.py`.
 #
 # Usage: pwsh -File dsh-spawn.ps1 -CycleId <id> -PromptFile <path> -MarkerPath <path>
 #                                  [-WorkspacePath <dir>] [-PythonExe <path>] [-WebUrl <url>] [-Token <t>]
-#   -CycleId       必填。cycle 标识（同 state-manage.py 的 cycle id）。
-#   -PromptFile    必填。节点 session 的 prompt 全文（第一行是 skill 调用行）；缺了直接报错退出。
-#   -MarkerPath    必填。降级标记的完整路径（`conduct_spawn.argv_for` 从 marker.py 取）。
-#   -WorkspacePath 可选。子会话的工作目录（cwd）；缺省用当前目录。
-#   -PythonExe     可选。共用参数面里的那一个（ZCode 那一半用它跑 zcode-dispatch.py）；写标记
-#                  不经过 python（见 `spawn-common.ps1` 头部），DSH 这一半拿到它也不用。
-#   -WebUrl        可选。DSH web 基址；缺省取 $env:DSH_BASE / $env:DSH_API / $env:DSH_WEB_URL，
-#                  再退到 http://127.0.0.1:3080。
-#   -Token         可选。显式进程 launch token（仅用于排障；正常路径不需要）。
+#   -CycleId       mandatory. The cycle id (the same as state-manage.py's cycle id).
+#   -PromptFile    mandatory. The whole prompt of the node session (its first line is the skill call
+#                  line); without it the script fails and exits.
+#   -MarkerPath    mandatory. The degradation marker's full path (`conduct_spawn.argv_for` takes it
+#                  from marker.py).
+#   -WorkspacePath optional. The child session's working directory (cwd); defaults to the current
+#                  directory.
+#   -PythonExe     optional. The one parameter on the shared surface (the ZCode half uses it to run
+#                  zcode-dispatch.py); writing the marker does not go through python (see the head of
+#                  `spawn-common.ps1`), and the DSH half takes it without using it either.
+#   -WebUrl        optional. The DSH web base URL; defaults to $env:DSH_BASE / $env:DSH_API /
+#                  $env:DSH_WEB_URL, then falls back to http://127.0.0.1:3080.
+#   -Token         optional. An explicit process launch token (for troubleshooting only; the normal
+#                  path does not need it).
 #
-# 依赖：pwsh 7+；DSH web 默认在 http://127.0.0.1:3080。
+# Dependencies: pwsh 7+; DSH web serves http://127.0.0.1:3080 by default.
 #
-# 鉴权：
-#   直接用**持久签名密钥**自签一个 browser-session cookie：密钥存在
-#   ~/.dsh/.credentials.yaml 的 client-connection/browser-session 记录里，跨重启有效；
-#   cookie 有效期 30 天（与 dsh 默认 cookieMaxAgeDays 一致）。/api 走的是 cookie 鉴权路径，
-#   所以续跑不依赖任何一次性的进程态，contribute 子会话不需要用户介入。
+# Authentication:
+#   Sign a browser-session cookie directly with the **persistent signing key**: the key lives in the
+#   client-connection/browser-session record of ~/.dsh/.credentials.yaml and stays valid across
+#   restarts; the cookie is valid for 30 days (matching dsh's default cookieMaxAgeDays). /api goes
+#   through the cookie authentication path, so carrying on depends on no one-off process state and
+#   contribute child sessions need no user involvement.
 #
-# —— 契约（实测校准）——
-#   ① 端点用斜杠形式：session/create、session/prompt（点号写法回 not found）
-#   ② 信封：{type:"client-request", rpcId, method, payload:{args:{request:{…}}}}
-#      端点参数放在 args 下的具名键里（这两个端点都叫 request）
-#   ③ 无鉴权时回 401 "dsh web authentication required"；鉴权通过但方法名不存在回 404
+# -- Contract (calibrated against a live run) --
+#   1) Endpoints use the slash form: session/create, session/prompt (the dot form answers not found)
+#   2) Envelope: {type:"client-request", rpcId, method, payload:{args:{request:{...}}}}
+#      the endpoint parameters sit in named keys under args (both of these endpoints call it request)
+#   3) With no authentication it answers 401 "dsh web authentication required"; when authentication
+#      passes but the method name does not exist it answers 404
 #
-# 链断了怎么办：
-#   整条链的下一棒全押在这一段 POST 上：**一次 401 或网络抖动就足以让这条线静默躺下**，
-#   表面上还像在跑。所以每个 API 调用最多重试 3 次（指数退避 2s / 4s）；
-#   全部失败时写下降级标记（`spawn-common.ps1` + `marker.py`：一个显眼的、按线命名的文件），
-#   下一次人工 /pf-conduct 能看见"这里断过"。派发成功时该标记会被清掉（它存在 = 链现在是断的）。
-#   按线分文件：并行=2 时两条线并排跑，本线成功只清本线的标记，不抹别线的断链记号。
+# What to do when the chain breaks:
+#   the whole chain's next step rests on this one POST: **a single 401 or a network blip is enough to
+#   make this line lie down silently**, while on the surface it still looks like it is running. So
+#   every API call retries at most 3 times (exponential backoff 2s / 4s); when all of them fail it
+#   writes the degradation marker (`spawn-common.ps1` + `marker.py`: one conspicuous file named after
+#   the line), so the next manual /pf-conduct can see "this broke here". On a successful dispatch that
+#   marker is cleared (its presence = the chain is broken right now).
+#   One file per line: with parallel=2 two lines run side by side, and this line's success clears only
+#   this line's marker, never another line's broken-chain mark.
 # ============================================================================
 
 param(
@@ -59,21 +72,22 @@ $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot 'spawn-common.ps1')
 
-# —— API 根：-WebUrl > DSH_BASE > DSH_API（剥掉结尾 /api） > DSH_WEB_URL > 默认 ——
+# -- API root: -WebUrl > DSH_BASE > DSH_API (strip the trailing /api) > DSH_WEB_URL > the default --
 $base = if ($WebUrl) { $WebUrl.TrimEnd('/') }
         elseif ($env:DSH_BASE) { ($env:DSH_BASE).TrimEnd('/') }
         elseif ($env:DSH_API) { (($env:DSH_API) -replace '/api/?$', '').TrimEnd('/') }
         elseif ($env:DSH_WEB_URL) { ($env:DSH_WEB_URL).TrimEnd('/') }
         else { "http://127.0.0.1:3080" }
 
-# —— 工作目录与降级标记：在任何网络调用之前先定下来，失败时才写得了盘 ——
+# -- working directory and degradation marker: settle them before any network call, so a failure can
+# still write to disk --
 Initialize-Spawner -CycleId $CycleId -PromptFile $PromptFile -WorkspacePath $WorkspacePath `
                    -MarkerPath $MarkerPath -PythonExe $PythonExe -Extra "api_base=$base"
 
 $script:MaxAttempts = 3
 $script:RetryBaseDelaySec = 2
 
-# —— 鉴权：自签 browser-session cookie（跨重启有效）——
+# -- authentication: sign our own browser-session cookie (valid across restarts) --
 function ConvertTo-B64Url([byte[]]$Bytes) {
     return [Convert]::ToBase64String($Bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 }
@@ -86,25 +100,25 @@ function ConvertFrom-B64Url([string]$Value) {
 function New-BrowserSessionCookie {
     param([Parameter(Mandatory)][string]$Authority)
 
-    # 1) 取持久签名密钥（32 字节，base64url 存于凭据文件）
+    # 1) take the persistent signing key (32 bytes, base64url, in the credentials file)
     $credPath = Join-Path $env:USERPROFILE '.dsh\.credentials.yaml'
     if (-not (Test-Path $credPath)) {
-        throw "找不到凭据文件 $credPath —— 确认 dsh web 至少成功启动过一次"
+        throw "credentials file not found at $credPath -- check that dsh web has started successfully at least once"
     }
     $cred = Get-Content $credPath -Raw
     if ($cred -notmatch 'client-connection/browser-session:[\s\S]*?secret:\s*([A-Za-z0-9_\-]+)') {
-        throw "凭据文件里没有 client-connection/browser-session 记录 —— 确认 dsh web 正在运行"
+        throw "the credentials file has no client-connection/browser-session record -- check that dsh web is running"
     }
     $secretBytes = ConvertFrom-B64Url $Matches[1]
     if ($secretBytes.Length -ne 32) {
-        throw "签名密钥长度异常（$($secretBytes.Length) 字节，应为 32）"
+        throw "the signing key has an odd length ($($secretBytes.Length) bytes, expected 32)"
     }
 
-    # 2) cookie 名 = dsh-auth- + base64url(sha256(authority))
+    # 2) cookie name = dsh-auth- + base64url(sha256(authority))
     $sha = [System.Security.Cryptography.SHA256]::Create()
     $name = 'dsh-auth-' + (ConvertTo-B64Url ($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Authority))))
 
-    # 3) cookie 值 = v1.<base64url(json payload)>.<base64url(hmac_sha256(secret, body))>
+    # 3) cookie value = v1.<base64url(json payload)>.<base64url(hmac_sha256(secret, body))>
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $payload = [ordered]@{
         version   = 1
@@ -123,14 +137,16 @@ try {
     $authority = ([uri]$base).Authority
 }
 catch {
-    # 基址本身不成形：链在这一拍就断了，和签 cookie / POST 失败同一类事故 —— 一样留标记再退出。
+    # The base URL itself is malformed: the chain breaks at this beat, the same class of accident as a
+    # failed cookie signing / POST -- leave the marker the same way and exit.
     Write-CallbackFailureMarker -Phase 'auth' -Reason $_.Exception.Message
     throw
 }
 $cookieHeader = $null
 try {
     $cookieHeader = if ($Token) {
-        # 排障路径：显式给了 launch token 就先换 cookie，再取回签名 cookie 供本次调用使用
+        # Troubleshooting path: with an explicit launch token, exchange it for a cookie first, then take back
+        # the signing cookie for this call
         $null = Invoke-WebRequest -Uri "$base/?token=$Token" -SessionVariable sess -MaximumRedirection 5 -TimeoutSec 20
         ($sess.Cookies.GetCookies([uri]$base) | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join '; '
     } else {
@@ -138,7 +154,8 @@ try {
     }
 }
 catch {
-    # 签 cookie 失败和 POST 失败一样致命：链一样断在这里，所以一样留标记。
+    # A failed cookie signing is as fatal as a failed POST: the chain breaks here the same way, so it
+    # leaves the marker the same way.
     Write-CallbackFailureMarker -Phase 'auth' -Reason $_.Exception.Message
     throw
 }
@@ -151,8 +168,9 @@ function Invoke-DshApi {
         [Parameter(Mandatory = $true)][AllowEmptyCollection()]$Request
     )
     $script:RpcCounter++
-    # 参数名避开 PowerShell 的自动变量 $Args；payload 必须恰好含一个普通对象 args，
-    # 端点参数放在 args 下的具名键里（session/create 与 session/prompt 都叫 request）。
+    # The parameter name avoids PowerShell's automatic $Args variable; payload must hold exactly one
+    # plain object, args, and the endpoint parameters sit in named keys under args (session/create and
+    # session/prompt both call it request).
     $envelope = @{
         type    = "client-request"
         rpcId   = "cb$($script:RpcCounter)-$PID"
@@ -175,7 +193,8 @@ function Invoke-DshApi {
             $detail = $_.ErrorDetails.Message
             if (-not $detail) { $detail = $_.Exception.Message }
             if ($attempt -ge $script:MaxAttempts) {
-                # 有界重试用尽：把原因落到磁盘上（只写第一次，后面的调用不再覆盖它）。
+                # The bounded retry is used up: land the reason on disk (write the first one only; later calls do
+                # not overwrite it).
                 Write-CallbackFailureMarker -Phase "POST /api/$Method" -Reason $detail -Attempts $attempt
                 throw "API $Method failed after $attempt attempt(s): $detail"
             }
@@ -187,19 +206,24 @@ function Invoke-DshApi {
     }
 }
 
-# —— 新开 conduct session：先按目录拿工作区，再只带 workspaceId 建会话 ——
-# 只传 cwd 也能建出会话（落盘位置正确），但**不会挂进工作区分组**，在 GUI 里会散落在
-# 「未分组」区，用户看不到管线跑到哪了。所以先用 workspace/create（幂等：同一目录返回
-# 既有工作区）取 workspaceId，再只带它建会话——端点明确拒绝 workspaceId 与 cwd 同时出现，
-# 而只给 workspaceId 时，会话的 cwd 即该工作区绑定的目录。
-# （$script:SpawnTarget 已在前面按 -WorkspacePath / 当前目录定好，降级标记也用它。）
+# -- open a conduct session: take the workspace by directory first, then create the session with only
+# workspaceId --
+# Passing cwd alone also creates a session (it lands in the right place), but it is **not attached to
+# the workspace group**, so it scatters in the GUI's "ungrouped" area and the user cannot see where the
+# pipeline has got to. So take workspaceId with workspace/create first (idempotent: the same directory
+# returns the existing workspace), then create the session with only that -- the endpoint explicitly
+# refuses workspaceId and cwd together, and when only workspaceId is given the session's cwd is the
+# directory that workspace is bound to.
+# ($script:SpawnTarget was already settled above from -WorkspacePath / the current directory, and the
+# degradation marker uses it too.)
 $workspace = (Invoke-DshApi -Method "workspace/create" -Request @{ path = $script:SpawnTarget }).workspace
 $created = Invoke-DshApi -Method "session/create" -Request @{ workspaceId = $workspace.workspaceId }
 $sid = $created.sessionId
 
-# —— 发送 prompt（mode:"queue"）——
-# 只发 -PromptFile 的全文（节点 session 的 prompt，第一行是 skill 调用）。没给就是调用方的缺陷：
-# 报错退出，不建任何手势（会话一律由 prompt 定义，没有第二种开法）。
+# -- send the prompt (mode:"queue") --
+# Send only the full text of -PromptFile (the node session's prompt, first line the skill call).
+# Not giving it is the caller's defect: fail and exit, do not build any gesture (a session is always
+# defined by its prompt; there is no second way to open one).
 Assert-PromptFile
 $text = [System.IO.File]::ReadAllText($script:SpawnPromptFile, [System.Text.Encoding]::UTF8)
 $what = "node session (prompt=$($script:SpawnPromptFile))"
@@ -210,7 +234,8 @@ Invoke-DshApi -Method "session/prompt" -Request @{
     content   = @(@{ type = "text"; text = $text })
 } | Out-Null
 
-# 派发成功：清掉上一次留下的降级标记（标记存在 = 链现在是断的）。
+# Dispatch succeeded: clear the degradation marker left by an earlier beat (marker present = the chain
+# is broken right now).
 Clear-CallbackFailureMarker
 
 Write-Output "spawned: session $sid ($what)"

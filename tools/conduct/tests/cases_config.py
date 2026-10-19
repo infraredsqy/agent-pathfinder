@@ -35,8 +35,8 @@ __all__ = ['TestConfig']
 
 PF = TOOLS_DIR / 'bin' / 'pf.py'
 
-#: `list` prints `key<pad> = value（layer）`; the layer is the human label, not the key.
-LINE = re.compile(r'^(?P<key>[a-z_]+)\s+=\s+(?P<value>.+?)（(?P<layer>.+?)）$')
+#: `list` prints `key<pad> = value (layer)`; the layer is the human label, not the key.
+LINE = re.compile(r'^(?P<key>[a-z_]+)\s+=\s+(?P<value>.+?)\s*\((?P<layer>.+?)\)$')
 
 
 class TestConfig(unittest.TestCase):
@@ -93,7 +93,7 @@ class TestConfig(unittest.TestCase):
         # A channel nobody has written anything about stays on: that is the regression this key lives
         # around -- a project that never wrote it behaves exactly as it did before the key existed.
         self.assertEqual('on', values['issue_repair'][0])
-        self.assertEqual({'出厂默认'}, {layer for _, layer in values.values()},
+        self.assertEqual({'factory default'}, {layer for _, layer in values.values()},
                          'with no file anywhere, every value must be reported as the built-in one')
 
     def test_the_project_layer_wins_over_the_global_one(self):
@@ -102,7 +102,7 @@ class TestConfig(unittest.TestCase):
 
         value, layer = self.effective()['max_agents']
         self.assertEqual('2', value)
-        self.assertEqual('项目 .pf/config.json', layer)
+        self.assertEqual('project .pf/config.json', layer)
         self.assertEqual({'max_agents': 5},
                          json.loads((self.home / '.pf' / 'config.json').read_text(encoding='utf-8')),
                          'writing the project layer must not disturb the global one')
@@ -115,7 +115,7 @@ class TestConfig(unittest.TestCase):
 
         value, layer = self.effective()['max_agents']
         self.assertEqual('5', value)
-        self.assertEqual('全局 ~/.pf/config.json', layer)
+        self.assertEqual('global ~/.pf/config.json', layer)
         self.assertEqual({}, self.read_project(),
                          'the project layer is left as an empty object, not deleted')
 
@@ -137,7 +137,8 @@ class TestConfig(unittest.TestCase):
         self.assertEqual('minimal\n', self.state('config', 'get', 'test_tier').stdout)
 
     def test_the_global_layer_needs_no_project_at_all(self):
-        """全局那一层跟人走：站在一个没有 `.pf/` 的地方也该写得进去、读得出来。"""
+        """The global layer travels with the person: standing somewhere with no `.pf/` should still
+        allow a write and a read back."""
         self.assertFalse((self.base / '.pf').exists())
         proc = self.set_('max_agents', '4', '--global', cwd=self.base)
         self.assertEqual(0, proc.returncode, proc.stderr)
@@ -164,7 +165,8 @@ class TestConfig(unittest.TestCase):
                                  'a refused write leaves no file behind')
 
     def test_a_value_off_the_table_on_disk_is_reported_not_swallowed(self):
-        """盘上写坏的值不许悄悄落回默认：那样这一项看起来像"没配过"，而它其实配错了。"""
+        """A value written wrongly on disk must not quietly fall back to the default: that makes the
+        key look "never configured" when it is in fact configured wrongly."""
         self.write_project('{"max_agents": "three"}')
         proc = self.state('config', 'get', 'max_agents')
         self.assertNotEqual(0, proc.returncode)
@@ -172,7 +174,8 @@ class TestConfig(unittest.TestCase):
         self.assertIn('config.json', proc.stderr, 'the complaint must name the file to go fix')
 
     def test_a_refusal_names_the_words_this_key_takes(self):
-        """拒绝要说清可用取值：报错里点得出这个词表，人才知道该把它改成什么。"""
+        """A refusal has to spell out the values it takes: naming that vocabulary in the error is how
+        a human knows what to change it to."""
         proc = self.set_('issue_repair', 'maybe')
 
         self.assertNotEqual(0, proc.returncode)
@@ -182,10 +185,12 @@ class TestConfig(unittest.TestCase):
                          'a refused write leaves no file behind')
 
     def test_a_quoted_number_on_disk_is_the_same_number(self):
-        """`count` 只问「是不是一个正整数」：盘上写 `"3"` 与写 3 走同一个规则。
+        """`count` only asks "is this a positive integer": `"3"` on disk and 3 on disk go by the
+        same rule.
 
-        命令行给的是字、盘上给的是 JSON 值，两种输入从同一个门过 —— 一个 kind 的边界只有一处，
-        所以这里放行的正是「写得进的那个形状」。
+        The command line hands over a string and the disk hands over a JSON value, and both inputs
+        come through the same door -- a kind's boundary lives in one place, so what is let through
+        here is exactly "the shape that writes back the same".
         """
         self.write_project('{"max_agents": "3"}')
 
