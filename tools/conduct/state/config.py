@@ -19,7 +19,6 @@
 from __future__ import annotations
 
 import contextlib
-import os
 import sys
 from pathlib import Path
 
@@ -80,14 +79,12 @@ LAYER_LABELS = {
 # 全局那一层是家目录里同样形状的一份：`~/.pf/config.json`。
 
 def global_config_path() -> Path:
-    """全局覆盖的落点：`~/.pf/config.json`。`PF_HOME_DIR` 只给测试指到沙箱（同
-    `ZCODE_DATA_BASE_DIR` 的先例）。
+    """全局覆盖的落点：`~/.pf/config.json`。
 
-    「家目录当作一个项目来算」是这一层自己的说法：形状由 `config_path_for` 给出，与项目那一层
-    同一条拼法（两层同名同形）。
+    「家目录当作一个项目来算」是这一层自己的说法，落点本身是正本的事（`shared/ledger.py` 的
+    `home_config_path`，连同 `PF_HOME_DIR` 那枚沙箱开关）：两层同名同形，拼法只有一处。
     """
-    home = os.environ.get('PF_HOME_DIR') or str(Path.home())
-    return _ledger().config_path_for(Path(home).expanduser())
+    return _ledger().home_config_path()
 
 
 def project_config_path(project: str | None = None) -> Path:

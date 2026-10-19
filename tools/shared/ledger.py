@@ -9,12 +9,15 @@ text and the issue pool all sit under that one directory, and every tool reaches
     meta_dir_for(project)       `<project>/.pf/meta/`         the dispatch plumbing, ignored by git
     nodes_dir_for(project)      `<project>/.pf/nodes/`        one directory per node
     config_path_for(project)    `<project>/.pf/config.json`   this project's settings layer
+    home_config_path()          `~/.pf/config.json`           the machine's settings layer
 
 The three `*_of(ledger_dir)` forms take the ledger directory itself, for a caller that already holds
 one: an in-process binding that moves per project, a worktree's root, home treated as a project. The
 project forms are those three one level up. Everything takes its input explicitly -- `project` and
 `ledger_dir` are required, never None; a caller whose project is optional keeps that optionality (and
-the mutable binding behind it) in its own wrapper.
+the mutable binding behind it) in its own wrapper. The machine layer is the same shape one home up,
+and `PF_HOME_DIR` is its own switch (a sandbox, a drill copy): read here, so the reader and the writer
+of the settings resolve that layer the same way.
 
 A project either commits its ledger or keeps it to itself, and nothing here cares which. `init` is
 what puts one in place, and the two files it leaves behind are the judgement of whether that happened:
@@ -39,10 +42,11 @@ no path is computed from `__file__`, so the name has one home and no copy of it 
 """
 
 from pathlib import Path
+import os
 
 __all__ = ['CONFIG_NAME', 'INIT_MARKERS', 'LEDGER_NAME', 'config_path_for', 'config_path_of',
-           'init_message', 'is_initialized', 'ledger_dir_for', 'meta_dir_for', 'meta_dir_of',
-           'nodes_dir_for', 'nodes_dir_of', 'resolve_project_root']
+           'home_config_path', 'init_message', 'is_initialized', 'ledger_dir_for', 'meta_dir_for',
+           'meta_dir_of', 'nodes_dir_for', 'nodes_dir_of', 'resolve_project_root']
 
 #: The ledger's own name: `.pf/`, a dot-directory, the tool's own household like `.work/`.
 LEDGER_NAME = '.pf'
@@ -122,6 +126,17 @@ def nodes_dir_for(project) -> Path:
 def config_path_for(project) -> Path:
     """`<project>/.pf/config.json`。"""
     return config_path_of(ledger_dir_for(project))
+
+
+def home_config_path() -> Path:
+    """这台机器那一层设置：`~/.pf/config.json`（`pf config set --global` 写的同一份）。
+
+    家目录当作一个项目来算，所以这一层与项目那一层同一条拼法、同一个名字。`PF_HOME_DIR` 把
+    「家」指到别处（测试与演练的沙箱，同 `ZCODE_DATA_BASE_DIR` 的先例）：它是这一层自己的开关，
+    读在这里，读那一侧与写那一侧才不会各解各的。
+    """
+    home = os.environ.get('PF_HOME_DIR') or str(Path.home())
+    return config_path_for(Path(home).expanduser())
 
 
 def is_initialized(ledger_dir) -> bool:

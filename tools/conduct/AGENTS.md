@@ -4,10 +4,10 @@
 
 ## 布局
 
-- 三个工具同一条规则：`<工具>/` 顶上是入口脚本，旁边的子目录是它背后的机器，`tests/` 是测试。
-  conduct 根上因此是四个入口（`state-manage.py` / `conduct_pipeline.py` / `handoff.py` / `signal.py`）
-  与四个机器目录：`state/`（写侧：cycle 簿、常备指令、设置、init）、`pipeline/`（推进与节点收口）、
-  `spawn/`（开会话的机器链）、`ledger_merge/`（合并驱动的正文）。
+- 规则见 `docs/tool-modules.md`。conduct 根上是四个入口（`state-manage.py` /
+  `conduct_pipeline.py` / `handoff.py` / `signal.py`）与四个机器目录：`state/`（写侧：cycle 簿、
+  常备指令、设置、init）、`pipeline/`（推进与节点收口）、`spawn/`（开会话的机器链）、
+  `ledger_merge/`（合并驱动的正文）。
 - `ledger-merge.py` 必须留在 conduct 根：`pf` 的 `merge-ledger` 转发按这个相对路径找它。项目里的登记走
   `pf register`，登记的是 `pf merge-ledger %O %A %B %P`——与 checkout 位置无关，搬完不用重登记；
   `pf` 不在 PATH 上时先落绝对形式，补好 PATH 重跑一次 `pf register` 换回来。

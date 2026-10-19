@@ -238,6 +238,31 @@ class TestOneSharedDoor(unittest.TestCase):
         self.assertEqual(1, len(callers), f'调用点不止一处：{callers}')
         self.assertTrue(callers[0].startswith('shared/jsonio.py:'), callers)
 
+    def test_git_is_run_from_one_place(self):
+        """`subprocess.run(['git', ...])` 的调用点只有 `shared/gitcmd.py` 一处。
+
+        三个问 git 的地方（`pf doctor` 问合并驱动、`init` 问这是不是仓库、并行 fork 问分支占没占）
+        问的是同一件事，写法也是同一份：cwd、解码、要不要抛。各写一遍时，解码或超时的一次修改只会
+        落到其中一处；收成一处之后，问 git 的方式只有一个答案。
+        """
+        callers = []
+        for path in shipped_sources():
+            for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == 'run'
+                        and isinstance(node.func.value, ast.Name)
+                        and node.func.value.id == 'subprocess'):
+                    continue
+                if not (node.args and isinstance(node.args[0], ast.List) and node.args[0].elts):
+                    continue
+                first = node.args[0].elts[0]
+                if isinstance(first, ast.Constant) and first.value == 'git':
+                    callers.append(f'{_relative(path)}:{node.lineno}')
+
+        self.assertEqual(['shared/gitcmd.py'],
+                         sorted({caller.split(':')[0] for caller in callers}),
+                         f'问 git 的写法散在不止一处：{callers}')
+
     def test_the_spawner_module_is_one_copy_per_process(self):
         """`writer._spawner()`：一次派发问它三次（开那一次会话、读会话 id、读宿主），三次拿到的是
         同一个模块对象 —— 装载器的 `register` + `reuse` 一对，和 `spawn/host.py` 走的是同一条。

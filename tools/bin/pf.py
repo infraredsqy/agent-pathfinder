@@ -184,8 +184,8 @@ def _ledger_name() -> str:
 
 
 def _git(project: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(['git', *args], cwd=str(project), capture_output=True, text=True,
-                          encoding='utf-8', errors='replace')
+    """`tools/shared/gitcmd.py`: 这棵树问 git 的唯一种写法（cwd、解码、不抛都在那里）。"""
+    return _loader().load_shared('gitcmd').git(project, *args)
 
 
 def _is_tracked(root: Path) -> bool:
