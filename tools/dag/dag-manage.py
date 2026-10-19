@@ -41,9 +41,7 @@ from pathlib import Path
 #  Paths & Constants
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
-# loaded by path through `loader.py`. These two functions are that bootstrap, identical in every file
-# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
 HERE = Path(__file__).resolve().parent
 SHARED = HERE.parent / 'shared'
 
@@ -60,13 +58,9 @@ def _loader():
     return _LOADER
 
 
-def _shared(name, filename):
-    """One file out of `tools/shared/`, the same module for every caller in this process.
-
-    Loaded for use, not copied: the ledger lock's reentrancy record is one per process, and a second
-    copy of that module would give two of them.
-    """
-    return _loader().load_by_path(name, SHARED / filename, register=True, reuse=True)
+def _ledger():
+    """`tools/shared/ledger.py`: `.pf/` 的落点、worktree 回主树那条判定、init 闸门 —— 正本一处。"""
+    return _loader().load_shared('ledger')
 
 # One directory per project: `.pf/` holds the graph, each node's own text (`spec.md`, reports), and
 # the cycle book the conduct side keeps. A project either commits it or keeps it to itself -- the
@@ -76,38 +70,13 @@ def _shared(name, filename):
 #
 # A `.pf/` the tool created by itself, never init'ed, is the one state that must stay unreachable:
 # the lock's `mkdir` would otherwise leave a directory that is neither tracked nor ignored for the
-# next `git add -A` to sweep up. `_require_initialized` closes that door; conduct and the issue tool
-# each carry their own copy.
-LEDGER_NAME = '.pf'
-INIT_MARKERS = ('.gitignore', '.gitattributes')
+# next `git add -A` to sweep up. `_require_initialized` closes that door, and the judgement behind it
+# (the two markers, and the sentence a refused write is told) is `tools/shared/ledger.py`'s.
 
 
 def _resolve_project_root(cwd: Path) -> Path:
-    """cwd 即根，唯一的例外：cwd 是一条 linked worktree 的检出根时，回主树。
-
-    `conduct_state.store` 与 issue 侧各有一份同样的判定：worktree 根的 `.git` 是文件，指向
-    `<主树>/.git/worktrees/<名字>`，`worktrees` 上三级即主树根；`.git/modules/...` 是
-    submodule，不算。主树没有 `.pf/` 时不挪，让后面的错误当场响。
-    """
-    dot_git = cwd / '.git'
-    if not dot_git.is_file():
-        return cwd
-    try:
-        first_line = dot_git.read_text(encoding='utf-8', errors='replace').strip()
-    except OSError:
-        return cwd
-    if not first_line.startswith('gitdir:'):
-        return cwd
-    target = first_line.split(':', 1)[1].strip()
-    gitdir = Path(target)
-    if not gitdir.is_absolute():
-        gitdir = (cwd / gitdir).resolve()
-    if gitdir.parent.name != 'worktrees':
-        return cwd
-    main = gitdir.parent.parent.parent          # <main>/.git/worktrees/<name> → <main>
-    if (main / LEDGER_NAME).is_dir():
-        return main
-    return cwd
+    """cwd 即根，唯一例外：cwd 是一条 linked worktree 的检出根时回主树（判定在 ledger 正本里）。"""
+    return _ledger().resolve_project_root(cwd)
 
 
 #: 这个模块此刻指着哪一个项目：`configure()` 一次定下，CLI 在 `main()` 里按 cwd 解析一次。
@@ -119,14 +88,14 @@ IDEAS_JSON = None
 
 
 def configure(project_root) -> None:
-    """把记录目录钉在一个项目上：`<root>/.pf/`，它下面的 `ideas.json` 与 `nodes/`。
+    """把记录目录钉在一个项目上：`<root>/.pf/`，它下面的 `nodes/` 与 `ideas.json`。
 
     这是路径进这个模块的那道门：CLI 在 `main()` 里用 cwd 调一次，进程内的调用方自己点名。
     """
     global LEDGER_DIR, DATA_DIR, NODES_DIR, IDEAS_JSON
-    LEDGER_DIR = Path(project_root) / LEDGER_NAME
+    LEDGER_DIR = _ledger().ledger_dir_for(project_root)
     DATA_DIR = LEDGER_DIR
-    NODES_DIR = DATA_DIR / 'nodes'
+    NODES_DIR = _ledger().nodes_dir_of(DATA_DIR)
     IDEAS_JSON = DATA_DIR / 'ideas.json'
 
 
@@ -164,7 +133,7 @@ def _session_note():
     The conduct side writes every run's id to the same file; this side writes the discussion a node
     was born in, and reads both back for `info`.
     """
-    return _shared('pf_shared_sessionnote', 'session-note.py')
+    return _loader().load_shared('session-note')
 
 
 # ── the session note: best effort, both ways ──────────────────────────────────
@@ -231,7 +200,7 @@ def _ensure_dirs() -> None:
 
 def _now() -> str:
     """`tools/shared/clock.py`: the moment a record is written with, in the tree's one shape."""
-    return _shared('pf_shared_clock', 'clock.py').now()
+    return _loader().load_shared('clock').now()
 
 
 def _read() -> dict:
@@ -241,7 +210,7 @@ def _read() -> dict:
     each of those gets -- is `tools/shared/jsonio.py`'s. This layer is the CLI, so a record that
     cannot be read ends the command with that message, plus the one hint this tool has for it.
     """
-    jsonio = _shared('pf_shared_jsonio', 'jsonio.py')
+    jsonio = _loader().load_shared('jsonio')
     _require_configured()
     try:
         data = jsonio.read_json_strict(IDEAS_JSON, 'ideas.json') or {'nodes': {}}
@@ -261,7 +230,7 @@ def ideas_bytes(data: dict) -> bytes:
     自己的习惯，让重写过的图每次读起来一样。合并驱动拿这串字节与盘上那份比对，判据因此只有一处：
     两边各写一遍格式的话，差一个字节就是每一次合并都看起来像有改动。
     """
-    return _shared('pf_shared_jsonio', 'jsonio.py').json_bytes(data, sort_keys=True)
+    return _loader().load_shared('jsonio').json_bytes(data, sort_keys=True)
 
 
 def write_ideas_bytes(path, payload: bytes) -> None:
@@ -270,7 +239,7 @@ def write_ideas_bytes(path, payload: bytes) -> None:
     合并驱动经这两道门问同一个写方（本树的 `tools/shared/jsonio.py`），所以它不会拿一棵树的格式
     判完、再用另一棵树的写法落盘。谁持锁、写完之后怎么收场是调用方的事，这里只有这次落盘。
     """
-    _shared('pf_shared_jsonio', 'jsonio.py').atomic_write_bytes(path, payload)
+    _loader().load_shared('jsonio').atomic_write_bytes(path, payload)
 
 
 def _write(data: dict) -> None:
@@ -281,7 +250,7 @@ def _write(data: dict) -> None:
     """
     _require_configured()
     _ensure_dirs()
-    _shared('pf_shared_jsonio', 'jsonio.py').atomic_write_json(IDEAS_JSON, data, sort_keys=True)
+    _loader().load_shared('jsonio').atomic_write_json(IDEAS_JSON, data, sort_keys=True)
 
 
 # ── the cross-process ledger lock ─────────────────────────────────────────────
@@ -295,12 +264,12 @@ def _write(data: dict) -> None:
 def _require_initialized() -> None:
     """没有 init 过的 `.pf/` 什么都不许写：锁的 `mkdir` 是唯一会把它造出来的东西。
 
-    读的是 `LEDGER_DIR`，也就是 `configure()` 点过的那个记录目录。
+    读的是 `LEDGER_DIR`，也就是 `configure()` 点过的那个记录目录；判据与那句话在
+    `tools/shared/ledger.py`。
     """
-    if LEDGER_DIR.is_dir() and all((LEDGER_DIR / m).is_file() for m in INIT_MARKERS):
+    if _ledger().is_initialized(LEDGER_DIR):
         return
-    print(f'Error: {LEDGER_DIR} 没 init 过（缺 {" 或 ".join(INIT_MARKERS)}）。先跑：\n'
-          f'  pf init', file=sys.stderr)
+    print(f'Error: {_ledger().init_message(LEDGER_DIR)}', file=sys.stderr)
     sys.exit(1)
 
 
@@ -311,7 +280,7 @@ def _ledger_lock(timeout: float | None = None):
     The lock itself is `tools/shared/ledgerlock.py`. A caller that cannot get it within `timeout` is
     told loudly and exits 1 -- wedging silently is the one failure this must not have.
     """
-    lock = _shared('pf_shared_ledgerlock', 'ledgerlock.py')
+    lock = _loader().load_shared('ledgerlock')
     kwargs = {} if timeout is None else {'timeout': timeout}
     try:
         with lock.ledger_lock(LEDGER_DIR, gate=_require_initialized, **kwargs):

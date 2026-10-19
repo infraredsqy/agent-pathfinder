@@ -48,9 +48,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CONDUCT = HERE.parent                      # the conduct tool directory
 
-# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
-# loaded by path through `loader.py`. These two functions are that bootstrap, identical in every file
-# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
 SHARED = CONDUCT.parent / 'shared'
 
 _LOADER = None
@@ -66,37 +64,23 @@ def _loader():
     return _LOADER
 
 
+def _ledger():
+    """`tools/shared/ledger.py`: `.pf/` 的落点与 worktree 回主树那条判定 —— 正本一处。"""
+    return _loader().load_shared('ledger')
+
+
 def _load(name: str, path):
     """A neighbouring file, loaded by path: how every file in this tree reaches its neighbours."""
     return _loader().load_by_path(name, path)
-
-
-_STORE = None
-
-
-def _store():
-    """`conduct_state.store`, loaded by path -- one module per process.
-
-    `signal.py` needs the same copy (it writes the signal through it), so it is asked for under one
-    name and handed back to both. A by-name import is what this avoids: it would need `tools/` on
-    `sys.path`.
-    """
-    global _STORE
-    if _STORE is None:
-        _STORE = _loader().load_by_path('pf_conduct_state_store',
-                                        CONDUCT / 'conduct_state' / 'store.py',
-                                        register=True, reuse=True)
-    return _STORE
 
 
 def _project_root(project: Path) -> Path:
     """cwd（或 `--project`）落在 linked worktree 里时回主树。
 
     并行模式下这一条是从 worktree 的 cwd 跑的：条子必须落主树的 `.pf/signals/`，标记落主树的
-    `.pf/meta/`。判定与 `conduct_state.store._resolve_project_root` 是同一份约定，从这里借，
-    不复制第四份。
+    `.pf/meta/`。判定只有 `tools/shared/ledger.py` 一处，这里借它。
     """
-    return _store()._resolve_project_root(project)
+    return _ledger().resolve_project_root(project)
 
 
 def _marker():
@@ -108,11 +92,6 @@ def _marker():
     return _loader().load_by_path('conduct_spawn_marker',
                                   CONDUCT / 'spawn' / 'marker.py',
                                   register=True, reuse=True)
-
-
-def _ledger_name() -> str:
-    """`.pf` 的那一个名字。跟根判定一样从 store 借，不复制第二份。"""
-    return _store().LEDGER_NAME
 
 
 def _write_marker(project: Path, cycle: str, phase: str, reason: str, attempts: int = 0) -> None:
@@ -232,7 +211,7 @@ def main(argv=None) -> int:
     try:
         signal_mod.write_signal(args.cycle, args.node, args.status,
                                 args.summary, outputs,
-                                base_dir=project / _ledger_name() / 'signals')
+                                base_dir=_ledger().ledger_dir_for(project) / 'signals')
     except SystemExit as e:  # write_signal exits on write failure
         _write_marker(project, args.cycle, 'write-signal', f'signal write failed (exit {e.code})')
         return 1

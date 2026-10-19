@@ -25,7 +25,7 @@
             因为清不掉而失败（清不掉不许挡派发成功），所以清不经过这里。
     谁删    人。接管完、确认无碍，人自己删掉本文件。
 
-`.pf` 这个名字与 `meta/` 这一层从 `conduct_state/store.py` 借（`meta_dir_for`）：派发侧不再自
+`.pf` 这个名字与 `meta/` 这一层从 `tools/shared/ledger.py` 借（`meta_dir_for`）：派发侧不再自
 拼第二份，名字一改，标记跟着记录一起走。
 
 命令行是给人排障、演练用的那一面：`python marker.py write --path …` 按这份形状手写一条标记。
@@ -46,9 +46,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CONDUCT = HERE.parent                      # the conduct tool directory
 
-# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
-# loaded by path through `loader.py`. This function is that bootstrap, the same shape in every file
-# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
 SHARED = CONDUCT.parent / 'shared'
 
 #: 标记文件名的唯一拼法。一条线一个文件，`{cycle}` 就是 spawner 递过来的那个 cycle id。
@@ -73,20 +71,9 @@ def _loader():
     return _LOADER
 
 
-def _shared(name, filename):
-    """One file out of `tools/shared/`, the same module for every caller in this process."""
-    return _loader().load_by_path(name, SHARED / filename, register=True, reuse=True)
-
-
-def _store():
-    """`conduct_state/store.py`：`.pf` 这个名字与 `meta_dir_for()` 的正本，从这里借。
-
-    与 `handoff.py` 借的是同一个模块（同一个注册名 + `reuse`）：一个进程里一份，注册名一改两边
-    一起改 —— 这正是「标记的落点跟着记录走」那条约定的落点。
-    """
-    return _loader().load_by_path('pf_conduct_state_store',
-                                  CONDUCT / 'conduct_state' / 'store.py',
-                                  register=True, reuse=True)
+def _ledger():
+    """`tools/shared/ledger.py`: `.pf/` 与它底下的 `meta/` —— 正本一处。"""
+    return _loader().load_shared('ledger')
 
 
 def marker_path(project, cycle: str) -> Path:
@@ -95,7 +82,7 @@ def marker_path(project, cycle: str) -> Path:
     全树拼这条路径只有这里一处：`argv_for` 把它的结果作为 `-MarkerPath` 交给 spawner，
     `chain-spawn.py` 从它取报错里那句「标记在哪」。
     """
-    return _store().meta_dir_for(project) / MARKER_NAME.format(cycle=cycle)
+    return _ledger().meta_dir_for(project) / MARKER_NAME.format(cycle=cycle)
 
 
 def record(cycle: str, phase: str, reason: str, *, attempts: int = 0, workspace='',
@@ -127,7 +114,7 @@ def write(path, payload: dict) -> Path:
     （`PermissionError` 是 `OSError` 的一种）：这一拍要不要吞、怎么说话，是调用方的判断。
     """
     path = Path(path)
-    _shared('pf_shared_jsonio', 'jsonio.py').atomic_write_json(path, payload)
+    _loader().load_shared('jsonio').atomic_write_json(path, payload)
     return path
 
 

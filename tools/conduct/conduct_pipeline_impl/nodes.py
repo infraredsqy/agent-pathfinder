@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 from . import seam
-from .store import _holding_ids, ledger_dir, load_dag, load_state, normalize_mode
+from .store import _holding_ids, _ledger, load_dag, load_state, normalize_mode
 
 
 # ── DAG ──────────────────────────────────────────────────────────────────────
@@ -295,9 +295,9 @@ def node_spec_path(project: Path, node_id: str) -> str:
     """`<project>/.pf/nodes/<id>/spec.md`，按人读的方式写（正斜杠）。
 
     这是这条路径唯一的一处算法：生成的 spec 末尾报它，`maintenance.write_spec` 往它写，维护节点
-    的目录也建在它旁边。`.pf` 本身由 `store.ledger_dir` 定。
+    的目录也建在它旁边。`.pf` 与它底下的 `nodes/` 由 `shared/ledger.py` 定。
     """
-    return (ledger_dir(project) / 'nodes' / node_id / 'spec.md').as_posix()
+    return (_ledger().nodes_dir_for(project) / node_id / 'spec.md').as_posix()
 
 
 def mode_for(node_id: str | None, dag: dict) -> str:

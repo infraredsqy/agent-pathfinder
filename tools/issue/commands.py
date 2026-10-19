@@ -12,9 +12,7 @@ import re
 import sys
 from pathlib import Path
 
-# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
-# loaded by path through `loader.py`. These two functions are that bootstrap, identical in every file
-# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
 HERE = Path(__file__).resolve().parent
 SHARED = HERE.parent / 'shared'
 

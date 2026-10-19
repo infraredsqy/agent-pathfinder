@@ -26,13 +26,15 @@ from pathlib import Path
 from .store import (
     LEDGER_NAME,
     _atomic_write,
+    _ledger,
     _ledger_lock,
     _read_json,
     ledger_dir_for,
 )
 
-#: 覆盖层的文件名，两层同名。
-CONFIG_NAME = 'config.json'
+#: 覆盖层的文件名，两层同名。正本在 `tools/shared/ledger.py`，这里只是收下那个值 —— 项目那一层
+#: 的落点由 `ledger.py` 的 `config_path_of` 算，本文件不自己拼 `config.json`。
+CONFIG_NAME = _ledger().CONFIG_NAME
 
 #: 三个键的唯一定义处：出厂默认、形状、一句话说明。`kind` 是 `parse_value` 唯一的分派依据 ——
 #: 加一个键就是加这一格。
@@ -78,13 +80,23 @@ LAYER_LABELS = {
 # 全局那一层是家目录里同样形状的一份：`~/.pf/config.json`。
 
 def global_config_path() -> Path:
-    """全局覆盖的落点。`PF_HOME_DIR` 只给测试指到沙箱（同 `ZCODE_DATA_BASE_DIR` 的先例）。"""
+    """全局覆盖的落点：`~/.pf/config.json`。`PF_HOME_DIR` 只给测试指到沙箱（同
+    `ZCODE_DATA_BASE_DIR` 的先例）。
+
+    「家目录当作一个项目来算」是这一层自己的说法：形状由 `config_path_for` 给出，与项目那一层
+    同一条拼法（两层同名同形）。
+    """
     home = os.environ.get('PF_HOME_DIR') or str(Path.home())
-    return Path(home).expanduser() / LEDGER_NAME / CONFIG_NAME
+    return _ledger().config_path_for(Path(home).expanduser())
 
 
 def project_config_path(project: str | None = None) -> Path:
-    return ledger_dir_for(project) / CONFIG_NAME
+    """项目覆盖的落点：`<项目>/.pf/config.json`。
+
+    `project` 可省（省了就用本拷贝绑定的那个根），所以这里先要记录目录、再要它底下的那枚文件：
+    `ledger_dir_for(None)` 那层可省语义留在 store 里，`config_path_of` 只要一个记录目录。
+    """
+    return _ledger().config_path_of(ledger_dir_for(project))
 
 
 def layer_path(layer: str, project: str | None = None) -> Path:

@@ -5,8 +5,8 @@ survives a wiped `temp/` and travels wherever the project's work travels. A proj
 its `.pf/` or keeps that directory to itself; either way the pool is read and written the same.
 
 The read, the write and the lock are the shared ones (`tools/shared/`), so this file's records are
-read and written exactly like the conduct side's. `LEDGER_NAME` / `INIT_MARKERS` /
-`_require_initialized` are copies of conduct's and dag-manage's.
+read and written exactly like the conduct side's. `.pf/` itself, the worktree judgement and the init
+gate come from `tools/shared/ledger.py`, the one place they are spelled.
 """
 
 import contextlib
@@ -15,14 +15,7 @@ import re
 import sys
 from pathlib import Path
 
-#: `.pf/` 的名字，与 conduct、dag-manage 那两份是同一个词。
-LEDGER_NAME = '.pf'
-#: init 写下的两枚文件：没有它们就是没 init 过。
-INIT_MARKERS = ('.gitignore', '.gitattributes')
-
-# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
-# loaded by path through `loader.py`. These two functions are that bootstrap, identical in every file
-# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
 SHARED = Path(__file__).resolve().parent.parent / 'shared'
 
 _LOADER = None
@@ -38,45 +31,17 @@ def _loader():
     return _LOADER
 
 
-def _shared(name, filename):
-    """One file out of `tools/shared/`, the same module for every caller in this process.
-
-    Loaded for use, not copied: the ledger lock's reentrancy record is one per process, and a second
-    copy of that module would give two of them.
-    """
-    return _loader().load_by_path(name, SHARED / filename, register=True, reuse=True)
+def _ledger():
+    """`tools/shared/ledger.py`: `.pf/` 的落点、worktree 回主树那条判定、init 闸门 —— 正本一处。"""
+    return _loader().load_shared('ledger')
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Paths & Constants
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _resolve_project_root(cwd: Path) -> Path:
-    """cwd 即根，唯一的例外：cwd 是一条 linked worktree 的检出根时，回主树。
-
-    与 `conduct_state.store._resolve_project_root`、dag-manage 侧同名函数是同一份约定摆在
-    三处（三个工具没有共同的包），判定一致：worktree 根的 `.git` 是文件，指向
-    `<主树>/.git/worktrees/<名字>`，`worktrees` 上三级即主树根；`.git/modules/...` 是
-    submodule，不算。主树没有 `.pf/` 时不挪，让后面的错误当场响。
-    """
-    dot_git = cwd / '.git'
-    if not dot_git.is_file():
-        return cwd
-    try:
-        first_line = dot_git.read_text(encoding='utf-8', errors='replace').strip()
-    except OSError:
-        return cwd
-    if not first_line.startswith('gitdir:'):
-        return cwd
-    target = first_line.split(':', 1)[1].strip()
-    gitdir = Path(target)
-    if not gitdir.is_absolute():
-        gitdir = (cwd / gitdir).resolve()
-    if gitdir.parent.name != 'worktrees':
-        return cwd
-    main = gitdir.parent.parent.parent          # <main>/.git/worktrees/<name> → <main>
-    if (main / LEDGER_NAME).is_dir():
-        return main
-    return cwd
+    """cwd 即根，唯一例外：cwd 是一条 linked worktree 的检出根时回主树（判定在 ledger 正本里）。"""
+    return _ledger().resolve_project_root(cwd)
 
 
 #: 这个模块此刻指着哪一个项目：`configure()` 一次定下，CLI 在 `main()` 里按 cwd 解析一次。
@@ -91,7 +56,7 @@ def configure(project_root) -> None:
     这是路径进这个模块的那道门：CLI 在 `main()` 里用 cwd 调一次，进程内的调用方自己点名。
     """
     global DATA_DIR, ISSUES_JSON
-    DATA_DIR = Path(project_root) / LEDGER_NAME / 'issues'
+    DATA_DIR = _ledger().ledger_dir_for(project_root) / 'issues'
     ISSUES_JSON = DATA_DIR / 'issues.json'
 
 
@@ -124,7 +89,7 @@ def _ensure_plan_dir(plan_path: str) -> None:
 
 def _now() -> str:
     """`tools/shared/clock.py`: the moment a record is written with, in the tree's one shape."""
-    return _shared('pf_shared_clock', 'clock.py').now()
+    return _loader().load_shared('clock').now()
 
 
 def _auto_id(item: dict) -> str:
@@ -142,7 +107,7 @@ def _read() -> dict:
     conduct side and dag-manage use, so one pool is read the same way by all three. This layer is the
     CLI: a record that cannot be read ends the command with that message.
     """
-    jsonio = _shared('pf_shared_jsonio', 'jsonio.py')
+    jsonio = _loader().load_shared('jsonio')
     _require_configured()
     try:
         data = jsonio.read_json_strict(ISSUES_JSON, 'issues.json')
@@ -160,7 +125,7 @@ def _write(data: dict) -> None:
     """
     _require_configured()
     _ensure_dirs()
-    _shared('pf_shared_jsonio', 'jsonio.py').atomic_write_json(ISSUES_JSON, data, sort_keys=True)
+    _loader().load_shared('jsonio').atomic_write_json(ISSUES_JSON, data, sort_keys=True)
 
 
 # ── the cross-process ledger lock ─────────────────────────────────────────────
@@ -173,13 +138,13 @@ def _write(data: dict) -> None:
 def _require_initialized() -> None:
     """没有 init 过的 `.pf/` 什么都不许写：锁的 `mkdir` 是唯一会把它造出来的东西。
 
-    读 `DATA_DIR.parent`（也就是 `.pf/`），而 `DATA_DIR` 由 `configure()` 点过名。
+    读 `DATA_DIR.parent`（也就是 `.pf/`），而 `DATA_DIR` 由 `configure()` 点过名；判据与那句话在
+    `tools/shared/ledger.py`。
     """
     ledger = DATA_DIR.parent
-    if ledger.is_dir() and all((ledger / m).is_file() for m in INIT_MARKERS):
+    if _ledger().is_initialized(ledger):
         return
-    print(f'Error: {ledger} 没 init 过（缺 {" 或 ".join(INIT_MARKERS)}）。先跑：\n'
-          f'  pf init', file=sys.stderr)
+    print(f'Error: {_ledger().init_message(ledger)}', file=sys.stderr)
     sys.exit(1)
 
 
@@ -190,7 +155,7 @@ def _ledger_lock(timeout: float | None = None):
     The lock itself is `tools/shared/ledgerlock.py`. A caller that cannot get it within `timeout` is
     told loudly and exits 1 -- wedging silently is the one failure this must not have.
     """
-    lock = _shared('pf_shared_ledgerlock', 'ledgerlock.py')
+    lock = _loader().load_shared('ledgerlock')
     kwargs = {} if timeout is None else {'timeout': timeout}
     try:
         with lock.ledger_lock(DATA_DIR.parent, gate=_require_initialized, **kwargs):

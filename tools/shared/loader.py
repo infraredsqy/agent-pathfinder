@@ -5,6 +5,7 @@
 it from that neighbour's path. That is the convention, and this module is its only implementation:
 
     load_by_path(name, path, *, package_dir=None, register=False, fresh=False, reuse=False)
+    load_shared(stem)
 
 The name is bookkeeping, not an identity. It decides what the loaded file's relative imports
 resolve under (a package carries its own name, and `from . import x` finds it in `sys.modules`),
@@ -36,6 +37,9 @@ it must never depend on anything it is asked to load.
 import importlib.util
 import sys
 from pathlib import Path
+
+#: What this copy of the loader has already handed out, by stem: see `load_shared`.
+_LOADED = {}
 
 
 def _registered_under(name: str, path: Path):
@@ -73,4 +77,31 @@ def load_by_path(name: str, path, *, package_dir=None, register: bool = False,
     if register or package_dir:
         sys.modules[name] = module
     spec.loader.exec_module(module)
+    return module
+
+
+def load_shared(stem: str):
+    """One file out of this directory -- `shared/<stem>.py` -- as the process's one copy of it.
+
+    The door every file outside `tools/shared/` uses for the shared primitives: the folder's layout
+    (`<stem>.py`, with a hyphen in the stem where the name reads better: `session-note`) and the
+    registration name one process shares it under (`pf_shared_` + the stem without its hyphens) are
+    stated here once, and no caller spells either of them again.
+
+    `register` + `reuse` by construction: a shared primitive is one module per process, and the lock's
+    reentrancy record is the case that proves it -- a second module object would sit out its own
+    caller's lock. It is `load_by_path` underneath, so the count of path-load call sites in this file
+    does not grow with it.
+
+    The answer is kept here after the first ask. `reuse` costs a `sys.modules` lookup and two resolved
+    paths to prove the name still belongs to this file, and this door sits on the read path of every
+    command that wants a ledger path or a record's bytes -- the one copy it hands back never changes,
+    so asking twice is work nobody needs.
+    """
+    module = _LOADED.get(stem)
+    if module is None:
+        module = load_by_path('pf_shared_' + stem.replace('-', ''),
+                              Path(__file__).resolve().parent / f'{stem}.py',
+                              register=True, reuse=True)
+        _LOADED[stem] = module
     return module

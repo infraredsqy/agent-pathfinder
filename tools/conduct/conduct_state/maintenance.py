@@ -34,13 +34,16 @@ def _held_node_ids(project: str | None) -> set:
 
 
 def _nodes_roots(project: str | None) -> list:
-    """每一处可能长出 temp 的 nodes 根：主树的，加上每一棵还活着的 worktree 里的。"""
+    """每一处可能长出 temp 的 nodes 根：主树的，加上每一棵还活着的 worktree 里的。
+
+    worktree 是主树的完整检出，所以它自己那棵就是「又是一个项目根」：同一个 `nodes_dir_for`。
+    """
     ledger = ledger_dir_for(project)
     roots = [(nodes_dir_for(project), '')]
     worktrees = ledger / 'worktrees'
     if worktrees.is_dir():
         for wt in sorted(worktrees.iterdir()):
-            roots.append((wt / '.pf' / 'nodes', f'[{wt.name}] '))
+            roots.append((nodes_dir_for(wt), f'[{wt.name}] '))
     return roots
 
 

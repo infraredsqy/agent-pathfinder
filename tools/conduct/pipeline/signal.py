@@ -22,9 +22,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CONDUCT = HERE.parent                      # the conduct tool directory
 
-# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
-# loaded by path through `loader.py`. This function is that bootstrap, the same shape in every file
-# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
 SHARED = CONDUCT.parent / 'shared'
 
 _LOADER = None
@@ -51,7 +49,8 @@ def _store():
     there. A worker that runs THIS script directly (not through handoff.py, which resolves the root
     itself and passes `base_dir`) would otherwise trust cwd and drop the signal into the worktree's
     stale `.pf/` fork -- data the main tree never reads, lost in effect. Loading store by path reuses
-    its one implementation of that sense, and `handoff.py` asks for the same copy under this name.
+    its one implementation of that sense (`_write_signal`, the record's one writer), which is what a
+    caller that passes no `base_dir` lands on.
     """
     global _STORE
     if _STORE is None:

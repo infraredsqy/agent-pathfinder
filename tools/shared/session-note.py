@@ -33,12 +33,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
-# `tools/shared/` is the shared layer, and it has no package to import from: every file in it is
-# loaded by path through `loader.py`. These two functions are that bootstrap, identical in every file
-# that needs it -- a path load, never a name import, because nothing puts `tools/` on `sys.path`.
+# 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
 SHARED = Path(__file__).resolve().parent
 
 _LOADER = None
@@ -54,13 +51,9 @@ def _loader():
     return _LOADER
 
 
-def _shared(name, filename):
-    """One file out of `tools/shared/`, the same module for every caller in this process.
-
-    Loaded for use, not copied: the ledger lock's reentrancy record is one per process, and a second
-    copy of that module would give two of them.
-    """
-    return _loader().load_by_path(name, SHARED / filename, register=True, reuse=True)
+def _ledger():
+    """`tools/shared/ledger.py`: `.pf/` 的落点、init 闸门 —— 正本一处。"""
+    return _loader().load_shared('ledger')
 
 #: The two keys a note is made of, in the order a human reads them.
 ROLES = ('discussion', 'run')
@@ -80,8 +73,8 @@ NOW = object()
 
 
 def _now() -> str:
-    """The account's timestamp shape, seconds and a `Z`."""
-    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    """The note's timestamp shape, seconds and a `Z` -- `tools/shared/clock.py`'s second shape."""
+    return _loader().load_shared('clock').now_seconds()
 
 
 def host_of_session(session: str | None) -> str:
@@ -95,7 +88,7 @@ def host_of_session(session: str | None) -> str:
 
 def note_path(project, node_id) -> Path:
     """Where one node's note lives: `<project>/.pf/meta/sessions/<node id>.json`."""
-    return Path(project) / '.pf' / 'meta' / 'sessions' / f'{node_id}.json'
+    return _ledger().meta_dir_for(project) / 'sessions' / f'{node_id}.json'
 
 
 def _empty() -> dict:
@@ -147,7 +140,7 @@ def _clean_entry(entry) -> dict | None:
 
 def notes(project) -> dict:
     """Every node's note, keyed by node id. The whole directory, for a listing reader."""
-    directory = Path(project) / '.pf' / 'meta' / 'sessions'
+    directory = _ledger().meta_dir_for(project) / 'sessions'
     out = {}
     try:
         names = sorted(p.name for p in directory.iterdir() if p.suffix == '.json')
@@ -190,8 +183,8 @@ def append(project, node_id, role: str, session: str, host: str | None = None,
         raise ValueError(f'session note role must be one of {ROLES}, got {role!r}')
     if not session:
         raise ValueError('a session note entry needs a session id')
-    lock = _shared('pf_shared_ledgerlock', 'ledgerlock.py')
-    with lock.ledger_lock(Path(project) / '.pf'):
+    lock = _loader().load_shared('ledgerlock')
+    with lock.ledger_lock(_ledger().ledger_dir_for(project)):
         note = read(project, node_id)
         if session in sessions_of(note, role):
             return False
@@ -201,7 +194,7 @@ def append(project, node_id, role: str, session: str, host: str | None = None,
             entry['source'] = source
         note[role].append(entry)
         body = {'v': VERSION, **{r: note[r] for r in ROLES}}
-        _shared('pf_shared_jsonio', 'jsonio.py').atomic_write_json(note_path(project, node_id), body)
+        _loader().load_shared('jsonio').atomic_write_json(note_path(project, node_id), body)
     return True
 
 
