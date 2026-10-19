@@ -38,7 +38,6 @@ push); the graph has three, `todo` / `shelved` / `completed`. Two labels are DER
 from __future__ import annotations
 
 import importlib.util
-import os
 import sys
 import types
 from pathlib import Path
@@ -174,11 +173,10 @@ def meta_dir(project: Path) -> Path:
 def global_config_path() -> Path:
     """这台机器那一层设置，`~/.pf/config.json` —— `pf config set --global` 写的同一份。
 
-    `PF_HOME_DIR` 把它指到沙箱（与写那一侧同一枚环境变量），否则它是谁的就是谁的。家目录当作
-    "一个项目"来算那层落点，拼法也走同一个 `config_path_for`。
+    落点由正本给出（`shared/ledger.py` 的 `home_config_path`，`PF_HOME_DIR` 那枚沙箱开关也在
+    那里读）：读这一侧与写那一侧于是解的是同一个「家」。
     """
-    home = os.environ.get('PF_HOME_DIR') or str(Path.home())
-    return _ledger().config_path_for(Path(home).expanduser())
+    return _ledger().home_config_path()
 
 
 def project_config_path(project: Path) -> Path:

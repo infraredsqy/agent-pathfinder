@@ -23,7 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .store import _atomic_write, _ledger, _now, _resolve_project_root
+from .store import _atomic_write, _ledger, _loader, _now, _resolve_project_root
 
 #: 短 id 的长度：uuid 第一段的 8 个字符。
 SHORT_ID_LEN = 8
@@ -53,10 +53,9 @@ def fork_record_path(project: Path, node_id: str) -> Path:
 
 
 def _git(project: Path, *args) -> subprocess.CompletedProcess:
-    """git 的一答。cwd 必须是解析后的主树根：并行模式的 fork 可能是从 worktree 的 cwd 发起的，
-    而主树干净与否、分支占没占、worktree 加在哪，问的都是主树。"""
-    return subprocess.run(['git', *args], cwd=str(project), capture_output=True, text=True,
-                          encoding='utf-8', errors='replace')
+    """git 的一答，写法在 `tools/shared/gitcmd.py`。cwd 必须是解析后的主树根：并行模式的 fork 可能
+    是从 worktree 的 cwd 发起的，而主树干净与否、分支占没占、worktree 加在哪，问的都是主树。"""
+    return _loader().load_shared('gitcmd').git(project, *args)
 
 
 def _branch_exists(project: Path, branch: str) -> bool:

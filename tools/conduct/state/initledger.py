@@ -29,7 +29,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .store import LEDGER_NAME, _ledger, _resolve_project_root
+from .store import LEDGER_NAME, _ledger, _loader, _resolve_project_root
 
 #: `.pf/` 底下三样机械空间。提交档下它替项目仓库挡住这三样，自成仓库时替那份仓库挡。
 GITIGNORE_BODY = """\
@@ -109,8 +109,8 @@ def cmd_register(project: str | None = None) -> None:
 
 
 def _git(project: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(['git', *args], cwd=str(project), capture_output=True, text=True,
-                          encoding='utf-8', errors='replace')
+    """`tools/shared/gitcmd.py`: 这棵树问 git 的唯一种写法（cwd、解码、不抛都在那里）。"""
+    return _loader().load_shared('gitcmd').git(project, *args)
 
 
 def _exclude_file(project: Path) -> tuple[Path, str] | None:
