@@ -66,8 +66,13 @@ pf next --spawn
 
 ## 开发
 
+各工具的套件都在 `tools/` 下跑（在 `tools/` 根上 discover 一个用例都跑不到）：
+
 ```pwsh
 cd tools
+python -m unittest discover -s dag/tests -t .
+python -m unittest discover -s issue/tests -t .
+python -m unittest discover -s shared/tests -t .
 python -m unittest discover -s conduct/tests -t .
 ```
 

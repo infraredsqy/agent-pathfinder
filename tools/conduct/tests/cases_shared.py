@@ -1,9 +1,10 @@
-"""The shared layer: one loader, one reader/writer, one lock -- and the records they serve.
+"""What the shared layer owes the rest of the tree once more than one tool leans on it.
 
-`tools/shared/` holds what more than one tool needs, and every file in it is loaded by path. These
-cases pin the three properties the rest of the tree leans on: a file is loaded through the one
-loader (and nothing else in the shipped tree loads by path), a record that cannot be read says so in
-the same words wherever it is read, and a note's read-modify-write holds the project's ledger lock.
+`tools/shared/` holds what more than one tool needs, and every file in it is loaded by path. The
+cases here are the ones that need the shipped tree itself or a second tool: one door for loading by
+path, one reader/writer for a record, one wording for a record that cannot be read, one marker
+contract. What `shared/` proves about itself -- the loader's three knobs, the bytes a record lands,
+the lock, the ledger contract -- lives in `tools/shared/tests/` and is not asked of this suite.
 """
 
 from __future__ import annotations
@@ -12,12 +13,9 @@ import ast
 import contextlib
 import io
 import json
-import os
-import subprocess
 import sys
 import tempfile
 import threading
-import time
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -29,9 +27,8 @@ from harness import (HANDOFF_PY, SIGNAL_PY, TOOLS_DIR, _child_env, _fresh_module
                      init_markers, load_pipeline, run_dag, run_signal, shared_loader,
                      shipped_sources)  # noqa: E402
 
-__all__ = ['TestTheOneLoader', 'TestOneSharedDoor', 'TestOneReaderOneWording',
-           'TestTheLockSerialisesANote', 'TestTheMarkerWaitsOutAReader', 'TestTheMarkerContract',
-           'TestOneWriterPerRecord']
+__all__ = ['TestOneSharedDoor', 'TestOneReaderOneWording', 'TestTheMarkerWaitsOutAReader',
+           'TestTheMarkerContract', 'TestOneWriterPerRecord']
 
 CONDUCT_DIR = TOOLS_DIR / 'conduct'
 SHARED_DIR = TOOLS_DIR / 'shared'
@@ -117,84 +114,6 @@ def _init_ledger(root: Path) -> Path:
     ledger = init_markers(root)
     (ledger / 'issues').mkdir(parents=True, exist_ok=True)
     return ledger
-
-
-#: One child process that takes the project's lock and keeps it until its parent says go: the only
-#: way to see another process's lock from this one. `<project> <shared dir>`.
-_HOLD_THE_LOCK = '\n'.join([
-    'import importlib.util, sys',
-    'from pathlib import Path',
-    'project, shared = Path(sys.argv[1]), Path(sys.argv[2])',
-    "spec = importlib.util.spec_from_file_location('pf_shared_loader', shared / 'loader.py')",
-    'loader = importlib.util.module_from_spec(spec)',
-    'spec.loader.exec_module(loader)',
-    "lock = loader.load_by_path('pf_shared_ledgerlock', shared / 'ledgerlock.py')",
-    "with lock.ledger_lock(project / '.pf'):",
-    "    print('held', flush=True)",
-    '    sys.stdin.readline()          # the parent releases the lock by closing this line',
-])
-
-
-class TestTheOneLoader(unittest.TestCase):
-    """`tools/shared/loader.py`: the three knobs, and what each one is for."""
-
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory(prefix='pf-loader-case-')
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name)
-        self.loader = shared_loader()
-
-    def _source(self, filename='pf_case_module.py', body='VALUE = 1\n'):
-        path = self.root / filename
-        path.write_text(body, encoding='utf-8')
-        return path
-
-    def test_the_default_is_a_copy_of_its_own_that_touches_nothing(self):
-        path = self._source()
-
-        first = self.loader.load_by_path('pf_case_private', path)
-        second = self.loader.load_by_path('pf_case_private', path)
-
-        self.assertIsNot(first, second, 'each load at the default is a module of its own')
-        self.assertEqual(1, first.VALUE)
-        self.assertNotIn('pf_case_private', sys.modules, 'the default load registers nothing')
-
-    def test_fresh_drops_what_an_earlier_load_registered(self):
-        path = self._source()
-        first = self.loader.load_by_path('pf_case_fresh', path, register=True)
-        self.assertIs(sys.modules['pf_case_fresh'], first)
-
-        second = self.loader.load_by_path('pf_case_fresh', path, register=True, fresh=True)
-
-        self.assertIsNot(second, first, 'fresh shares no module object with the last load')
-        self.assertIs(sys.modules['pf_case_fresh'], second)
-
-    def test_reuse_hands_back_the_copy_already_registered_for_this_file(self):
-        path = self._source()
-
-        first = self.loader.load_by_path('pf_case_reuse', path, register=True, reuse=True)
-        second = self.loader.load_by_path('pf_case_reuse', path, register=True, reuse=True)
-
-        self.assertIs(first, second, 'reuse is how one process keeps one copy of a file')
-
-        other = self._source('pf_case_reuse_other.py', 'VALUE = 2\n')
-        third = self.loader.load_by_path('pf_case_reuse', other, register=True, reuse=True)
-
-        self.assertIsNot(third, first, 'another file under the name is a module, not a reuse')
-        self.assertEqual(2, third.VALUE)
-
-    def test_a_package_resolves_its_own_submodules(self):
-        package = self.root / 'pf_case_package'
-        package.mkdir()
-        (package / '__init__.py').write_text('from . import leaf\nMARK = leaf.MARK\n',
-                                             encoding='utf-8')
-        (package / 'leaf.py').write_text("MARK = 'leaf'\n", encoding='utf-8')
-
-        module = self.loader.load_by_path('pf_case_package', package / '__init__.py',
-                                          package_dir=package)
-
-        self.assertEqual('leaf', module.MARK)
-        self.assertIs(sys.modules['pf_case_package'], module, 'a package is registered to load')
 
 
 class TestOneSharedDoor(unittest.TestCase):
@@ -390,83 +309,9 @@ class TestOneReaderOneWording(Base):
         self.assertIn('Hint: run "validate"', proc.stderr)
 
 
-class TestTheLockSerialisesANote(Base):
-    """`session-note.append` holds the project's lock across its read-modify-write."""
-
-    def test_a_note_write_waits_for_the_lock_another_process_holds(self):
-        """The other process holds it until this one says go: the write has to be *still waiting*
-        while it is held, and land once it is not."""
-        sb = self.make()
-        holder = subprocess.Popen([sys.executable, '-c', _HOLD_THE_LOCK,
-                                   str(sb.root), str(SHARED_DIR)],
-                                  cwd=str(sb.root), env=_child_env(),
-                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  stderr=subprocess.PIPE, text=True, encoding='utf-8')
-        self.addCleanup(holder.kill)
-        self.assertEqual('held', holder.stdout.readline().strip(),
-                         'the child could not take the lock')
-
-        note = _fresh_module('session_note_lock_case', SHARED_DIR / 'session-note.py')
-        written = []
-        writer = threading.Thread(target=lambda: written.append(
-            note.append(sb.root, NODE, 'run', 'session-under-the-lock')), daemon=True)
-        writer.start()
-        writer.join(timeout=0.5)
-
-        self.assertTrue(writer.is_alive(),
-                        'the note was written without waiting for the project lock')
-
-        holder.stdin.write('\n')
-        holder.stdin.flush()
-        writer.join(timeout=30)
-        holder.communicate(timeout=30)
-
-        self.assertFalse(writer.is_alive(), 'the write never completed after the lock was let go')
-        self.assertEqual([True], written)
-        self.assertEqual(['session-under-the-lock'],
-                         note.sessions_of(note.read(sb.root, NODE), 'run'))
-
-    def test_another_spelling_of_the_same_lock_does_not_wait_for_anybody(self):
-        """The process takes the lock spelled absolutely, then nests with the same directory spelled
-        relative to the working directory. It is the one lock file, so the nested acquire takes the
-        depth this process already holds instead of sitting out the timeout against its own file
-        handle."""
-        sb = self.make()
-        lock = _fresh_module('pf_lock_second_spelling_case', SHARED_DIR / 'ledgerlock.py')
-        taken = sb.root / '.pf'
-        other = Path(os.path.relpath(taken, Path.cwd()))
-        self.assertNotEqual(str(taken), str(other), 'the two spellings have to differ to pin this')
-        self.assertEqual(taken.resolve(), other.resolve(), 'the two spellings name one directory')
-
-        started = time.monotonic()
-        with lock.ledger_lock(taken):
-            with lock.ledger_lock(other, timeout=0.5):
-                inside = True
-
-        self.assertTrue(inside)
-        self.assertLess(time.monotonic() - started, 1.0,
-                        'the nested acquire sat out the timeout on its own lock')
-
-    def test_a_caller_that_already_holds_the_lock_notes_inside_it(self):
-        """A dag command writes a node's note inside its own read-modify-write, and the note's own
-        copy of the lock module is a different module object. The record is the process's, so a
-        nested acquire takes no second file lock and waits for nobody."""
-        sb = self.make()
-        lock = _fresh_module('pf_lock_loaded_under_another_name', SHARED_DIR / 'ledgerlock.py')
-        note = _fresh_module('session_note_reentrant_case', SHARED_DIR / 'session-note.py')
-
-        started = time.monotonic()
-        with lock.ledger_lock(sb.root / '.pf'):
-            changed = note.append(sb.root, NODE, 'discussion', 'session-inside-the-lock')
-
-        self.assertTrue(changed)
-        self.assertLess(time.monotonic() - started, 1.0,
-                        'the nested acquire took the file lock a second time')
-
-
 class TestTheMarkerWaitsOutAReader(Base):
     """The broken-chain marker goes through the shared primitive: a reader that lets go mid-retry
-    costs nothing, and a reader that never lets go is an error with no leftovers."""
+    costs nothing."""
 
     def test_a_reader_that_lets_go_mid_retry_still_gets_the_marker(self):
         sb = self.make()
@@ -485,25 +330,6 @@ class TestTheMarkerWaitsOutAReader(Base):
         record = json.loads(marker.read_text(encoding='utf-8'))
         self.assertEqual('the pipeline refused the signal', record['reason'])
         self.assertIn('WARNING: conduct handoff failed', stderr.getvalue())
-
-    def test_a_reader_that_never_lets_go_fails_bounded_and_leaves_no_temp(self):
-        sb = self.make()
-        jsonio = _shared('pf_shared_jsonio', 'jsonio.py')
-        target = sb.root / '.pf' / 'meta' / 'held.json'
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text('{"stale": true}', encoding='utf-8')
-        held = open(target, 'r', encoding='utf-8')
-        self.addCleanup(held.close)
-
-        started = time.monotonic()
-        with self.assertRaises(PermissionError):
-            jsonio.atomic_write_json(target, {'fresh': True})
-        elapsed = time.monotonic() - started
-
-        self.assertLess(elapsed, 3.0, 'the retry is bounded, it does not hang')
-        self.assertEqual([], sorted(p.name for p in target.parent.iterdir() if p.suffix == '.tmp'),
-                         'a failed write leaves its temp file behind')
-        self.assertEqual({'stale': True}, json.loads(target.read_text(encoding='utf-8')))
 
 
 class TestTheMarkerContract(Base):
