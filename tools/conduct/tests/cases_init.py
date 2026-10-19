@@ -1,6 +1,6 @@
 """`init`: the one setup act, and the door it closes.
 
-Four things are worth a case here, because each of them fails silently otherwise:
+What is worth a case here, and why each of them fails silently otherwise:
 
   * `--local` really takes the directory out of the project's repository -- through the CLONE's own
     `info/exclude`, so no teammate sees a line about a directory they do not have
@@ -10,6 +10,8 @@ Four things are worth a case here, because each of them fails silently otherwise
   * a `.pf/` without the two marker files is refused by every mutating command, and refused
     BEFORE anything is created -- the lock's own `mkdir` is what would otherwise leave an unignored
     ledger in the tree for the next `git add -A` to sweep up
+  * the markers `init` writes on disk are the ones the gate reads off the contract -- the two sides
+    agreeing today is a coincidence until one of them moves
 """
 
 import sys
@@ -19,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from harness import GIT, STATE_MANAGE, git, run_argv  # noqa: E402
+from harness import GIT, STATE_MANAGE, git, run_argv, shared_loader  # noqa: E402
 
 __all__ = ['TestInit']
 
@@ -28,6 +30,11 @@ MARK = '# pf 工作系统'
 
 def run_init(root: Path, *args):
     return run_argv([STATE_MANAGE, 'init', '--project', str(root), *args], check=False)
+
+
+def ledger_contract():
+    """`tools/shared/ledger.py` 正本：闸门的记号与判定都从它这里读，一个字面量都不抄。"""
+    return shared_loader().load_shared('ledger')
 
 
 def run_state(root: Path, *args):
@@ -136,6 +143,27 @@ class TestInit(unittest.TestCase):
         for name in ('meta/', 'worktrees/', 'temp/'):
             self.assertIn(name, body,
                           'the tool machinery must stay out of the project history too')
+
+    def test_the_markers_init_writes_are_the_ones_the_gate_reads(self):
+        """`init` 落在盘上的记号，与闸门 `INIT_MARKERS` / `is_initialized` 查的记号是同一份。
+
+        两个方向都挡。正本多一枚记号而 `init` 不写它：`is_initialized` 对这个刚 init 过的目录判
+        False。`init` 改名或漏写一枚：盘上少一枚，同一个判定也判 False。两个方向一致时两边各自
+        安静；一旦分开，症状离开 `init` 跑到工具深处 —— 每个写命令都拒绝一个明明 init 过的项目
+        （或者反过来，一个没 init 的目录被放行），报出来的错与真正该改的那一处隔着几层调用。
+        这一条经真 CLI 跑 `init`，记号从正本按路径读，一个字面量都不抄。
+        """
+        proc = run_init(self.root)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+
+        contract = ledger_contract()
+        ledger = self.root / '.pf'
+
+        self.assertTrue(contract.is_initialized(ledger),
+                        '闸门说这个目录没 init 过：init 写的记号与正本查的记号分了家')
+        for marker in contract.INIT_MARKERS:
+            self.assertTrue((ledger / marker).is_file(),
+                            f'闸门要查 {marker}，`init` 没有把它写到盘上')
 
 
 if __name__ == '__main__':
