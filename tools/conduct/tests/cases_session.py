@@ -15,8 +15,7 @@ These cases pin the handoff end to end, on a throwaway project, with the real to
   * the two spawner result-line shapes the note is filled from
 
 No session is ever started here. The dispatch cases use a stub spawner that prints the contract line
-and does nothing else -- `tools/conduct/AGENTS.md`: the spawn path is live fire, and a test never
-touches it.
+and does nothing else -- the spawn path is live fire, and a test never touches it.
 """
 
 from __future__ import annotations
