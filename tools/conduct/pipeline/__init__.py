@@ -22,7 +22,7 @@ because those are what a caller patches. The machinery is here:
 There is no stage table and no per-round file: one cycle picks one DAG node at a time, and how that
 node splits its own work is the session's business.
 
-This package is loaded by PATH, never by name: `conduct_pipeline.py` registers it under the name below
+This package is loaded by PATH, never by name: `conduct_pipeline.py` registers it under `pf_pipeline`
 on every load, so a caller that loads a fresh `conduct_pipeline.py` gets a fresh package with it. See
 the bootstrap in `conduct_pipeline.py`.
 """
@@ -106,4 +106,4 @@ for _name in __all__:
             globals()[_name] = getattr(_layer, _name)
             break
     else:
-        raise ImportError(f'conduct_pipeline_impl.__all__ names {_name!r}, which no layer defines')
+        raise ImportError(f'pipeline.__all__ names {_name!r}, which no layer defines')

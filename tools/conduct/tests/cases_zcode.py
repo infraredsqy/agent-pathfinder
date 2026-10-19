@@ -34,7 +34,7 @@ from harness import _child_env, run_argv  # noqa: E402
 
 __all__ = ['TestSpawnerChoice', 'TestQueueDedup']
 
-CONDUCT_DIR = Path(pipeline.__file__).resolve().parent.parent
+CONDUCT_DIR = Path(pipeline.__file__).resolve().parent
 DISPATCHER = CONDUCT_DIR / 'spawn' / 'zcode-dispatch.py'
 SPAWNER = CONDUCT_DIR / 'spawn' / 'zcode-spawn.ps1'
 
@@ -182,7 +182,7 @@ class TestSpawnerChoice(unittest.TestCase):
         便条、标记的写与清都由它带着；claim 那一条拿不到 —— 那条链的 prompt 不在 launch 目录里，见
         `chain-spawn.py` 的模块说明）。
         """
-        entry = (CONDUCT_DIR / 'pipeline' / 'conduct_pipeline.py').read_text(encoding='utf-8')
+        entry = (CONDUCT_DIR / 'conduct_pipeline.py').read_text(encoding='utf-8')
         imported = {alias.name for node in ast.walk(ast.parse(entry))
                     if isinstance(node, (ast.Import, ast.ImportFrom)) for alias in node.names}
         self.assertNotIn('ctypes', imported, '宿主探测住在接缝模块里')

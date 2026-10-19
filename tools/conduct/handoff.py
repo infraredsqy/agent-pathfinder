@@ -45,8 +45,8 @@ import json
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-CONDUCT = HERE.parent                      # the conduct tool directory
+HERE = Path(__file__).resolve().parent      # the conduct tool directory: the entry sits at its top
+CONDUCT = HERE
 
 # 引导：装载器也按路径取，所以这一段只能每个文件自己带（见 `shared/loader.py`）。
 SHARED = CONDUCT.parent / 'shared'
@@ -86,8 +86,8 @@ def _project_root(project: Path) -> Path:
 def _marker():
     """`spawn/marker.py`: 断链降级标记的落点与记录形状，一处长成。
 
-    `spawn/` 与 `pipeline/` 是同簇的两半（spawner 那一层按同一份形状自己写，那条例外写在 `marker.py`
-    的说明里），加载方式与别的邻居一样走装载器。
+    `spawn/` 这一层与手边这个入口是同一条链的两半（spawner 那一层按同一份形状自己写，那条例外写在
+    `marker.py` 的说明里），加载方式与别的邻居一样走装载器。
     """
     return _loader().load_by_path('conduct_spawn_marker',
                                   CONDUCT / 'spawn' / 'marker.py',

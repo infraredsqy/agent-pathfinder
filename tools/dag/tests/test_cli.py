@@ -231,7 +231,7 @@ class TestTheSpecLanding(ProjectCase):
 
     def pipeline_nodes(self, mod):
         """管线那边算落点的那个模块 —— dag 侧问的就是这一份（同一个名字、同一次按路径取）。"""
-        pkg = mod._loader().load_by_path('pf_dag_conduct_impl',
+        pkg = mod._loader().load_by_path('pf_dag_pipeline',
                                          mod.CONDUCT_IMPL / '__init__.py',
                                          package_dir=mod.CONDUCT_IMPL, register=True, reuse=True)
         return pkg.nodes

@@ -9,7 +9,7 @@ init'ed.
 
 `--help` is the list of verbs, their flags and their values. This file owns the parser and the one
 route from a parsed line to the call that answers it; the machinery behind each verb is the package
-next door (`conduct_state/`, whose `__init__` names every layer).
+next door (`state/`, whose `__init__` names every layer).
 """
 
 import argparse
@@ -17,8 +17,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-CONDUCT = HERE.parent                      # the conduct tool directory
+HERE = Path(__file__).resolve().parent      # the conduct tool directory: the entry sits at its top
+CONDUCT = HERE
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -52,13 +52,13 @@ def _tool_path(env_var: str, default):
     return toolpath.tool_path(env_var, default)
 
 
-#: 本文件要读要写的那个实现包：出厂的树里是旁边那个 `conduct_state/`，草稿或演练副本用
+#: 本文件要读要写的那个实现包：出厂的树里是旁边那个 `state/`，草稿或演练副本用
 #: `DSH_CONDUCT_STATE_DIR` 指向真工具的那一份。
-STATE_PKG = _tool_path('DSH_CONDUCT_STATE_DIR', CONDUCT / 'conduct_state')
+STATE_PKG = _tool_path('DSH_CONDUCT_STATE_DIR', CONDUCT / 'state')
 
 
 def _load_impl():
-    """Load `conduct_state/` by path, fresh, and hand it back.
+    """Load `state/` by path, fresh, and hand it back.
 
     By PATH, not by name, and with the name dropped from `sys.modules` first: this file is loaded
     more than once in a process -- the test harness loads a fresh copy per sandbox, so that two
@@ -70,7 +70,7 @@ def _load_impl():
     `DSH_CONDUCT_STATE_DIR` for a tree that keeps its conduct scripts somewhere else -- the same rule
     and the same variable the merge driver resolves its copy of this package with.
     """
-    pkg = 'conduct_state'
+    pkg = 'pf_state'
     return _loader().load_by_path(pkg, STATE_PKG / '__init__.py',
                                   package_dir=STATE_PKG, register=True, fresh=True)
 

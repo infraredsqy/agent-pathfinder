@@ -22,7 +22,7 @@ path it has walked:
      "tags": [...], "policies": {"when_shelved": "stop", "parallel": 2}}
 
 `holding` is how many nodes this line carries at once: the claim goes in there and `parallel`
-decides how many fit (`_holding_of` / `_holding_ids`, borrowed from `conduct_state/store.py`, are the
+decides how many fit (`_holding_of` / `_holding_ids`, borrowed from `state/store.py`, are the
 one reading of it).
 
 How a node's own work is split never was the pipeline's business, and neither is how many sessions a
@@ -75,26 +75,26 @@ def __getattr__(name: str):
 
 
 # ── the writer package's own two files, borrowed ─────────────────────────────
-# 一条 cycle 的策略表与算法住 `conduct_state/cycles.py`（那边管写，`cycle policy`），holding 的
-# 规范读法住 `conduct_state/store.py`（那边管认领的读写）。这一侧只读它们，于是从正本取用，不
+# 一条 cycle 的策略表与算法住 `state/cycles.py`（那边管写，`cycle policy`），holding 的
+# 规范读法住 `state/store.py`（那边管认领的读写）。这一侧只读它们，于是从正本取用，不
 # 各留一份：两份分头漂移就是「一条线配了 `zcode` 却读成没配」「两条线抢同一格」的来路。
 #
 # 两个包都是按路径加载的，互相 import 会绕出一个环，所以取的是**文件**：走本树唯一的装载器
 # （`tools/shared/loader.py`），在 `sys.modules` 里给这两个文件一个本包自己的包名 —— `cycles.py`
-# 开头那句 `from .store import ...` 需要一个能解析的包，而 `conduct_state/__init__.py` 不必执行
+# 开头那句 `from .store import ...` 需要一个能解析的包，而 `state/__init__.py` 不必执行
 # （它把写侧每一层都拉进来，这里只要两个文件）。
 #
 # 这条借用的边界：**两个包各自装载同一个文件**（各按自己的名字注册），于是本进程里有两份模块
 # 对象，读出来的表**按值相等**（用例按 `==` 比对钉住 `POLICY_*` 那几张表），跨包的 `is` 不成立
-# —— 谁也不该拿 `is` 去比这两份。要改这张表，改的是 `conduct_state/cycles.py` 那个文件本身，
+# —— 谁也不该拿 `is` 去比这两份。要改这张表，改的是 `state/cycles.py` 那个文件本身，
 # 这一侧跟着变；在这里再抄一份，就是两处分头漂。
 
-_STATE_DIR = Path(__file__).resolve().parent.parent / 'conduct_state'
+_STATE_DIR = Path(__file__).resolve().parent.parent / 'state'
 _STATE_PKG = 'pf_pipeline_state_source'
 
 
 def _state_module(name: str):
-    """`conduct_state/<name>.py`，按路径加载，同一个文件在本进程里只有一份。"""
+    """`state/<name>.py`，按路径加载，同一个文件在本进程里只有一份。"""
     if _STATE_PKG not in sys.modules:
         package = types.ModuleType(_STATE_PKG)
         package.__path__ = [str(_STATE_DIR)]
@@ -110,7 +110,7 @@ def _state_module(name: str):
 _STATE_CYCLES = _state_module('cycles')
 _STATE_STORE = _state_module('store')
 
-#: 策略表与算法：`conduct_state/cycles.py` 的正本，这里只是它的另一个入口。
+#: 策略表与算法：`state/cycles.py` 的正本，这里只是它的另一个入口。
 POLICY_DEFAULTS = _STATE_CYCLES.POLICY_DEFAULTS
 POLICY_VALUES = _STATE_CYCLES.POLICY_VALUES
 POLICY_COUNTS = _STATE_CYCLES.POLICY_COUNTS
@@ -119,7 +119,7 @@ POLICY_WORDS = _STATE_CYCLES.POLICY_WORDS
 POLICY_WORD_CHOICES = _STATE_CYCLES.POLICY_WORD_CHOICES
 cycle_policy = _STATE_CYCLES.cycle_policy
 
-#: 一个节点此刻拿在哪条线手里：认领的规范读法，`conduct_state/store.py` 的正本。
+#: 一个节点此刻拿在哪条线手里：认领的规范读法，`state/store.py` 的正本。
 _holding_of = _STATE_STORE._holding_of
 _holding_ids = _STATE_STORE._holding_ids
 
@@ -165,7 +165,7 @@ def meta_dir(project: Path) -> Path:
 # ── the settings: this project's, and the machine's underneath it ─────────────
 # 一个项目与一台机器的设置（`pf config` 管的那几格）。与记录不同，设置**不属于这条管线**：它是别的
 # 工具的正本，管线只读其中一格（维护通道那个开关）。所以这里只读、只交出两层：出厂默认与词表留在
-# 写那一侧（`conduct_state/config.py`），读的那一格自己说它认什么词。
+# 写那一侧（`state/config.py`），读的那一格自己说它认什么词。
 
 #: 设置文件的名字，两层同名：`<项目>/.pf/config.json` 与 `~/.pf/config.json`。取自正本（见
 #: `_FROM_LEDGER`），本模块不拼第二个字面量。

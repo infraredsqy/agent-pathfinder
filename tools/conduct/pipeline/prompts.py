@@ -35,7 +35,7 @@ def started_marker(project: Path, cycle_id: str, node_id: str) -> Path:
 
     `.pf/meta/launch/<cycle>/<node>/started` —— prompt 被会话拿走之后剩下的那枚记号。派发与
     `--spawn` 见到它就不再把这一格交给 spawner（同一个节点上第二个会话收不回来），规划也不再
-    把它算进派发名单。重开那一格是 `cycle retry --drop`：它从 conduct_state 侧按同一个路径把
+    把它算进派发名单。重开那一格是 `cycle retry --drop`：它从 state 侧按同一个路径把
     这枚记号抹掉。
     """
     return launch_dir(project, cycle_id) / node_id / 'started'

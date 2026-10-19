@@ -26,7 +26,7 @@ parser and nothing else; the machinery is here:
                          it -- read from `.pf/meta/sessions/`, plus the one-shot import of the ids an
                          older record left behind
 
-This package is loaded by PATH, never by name: `state-manage.py` registers it under the name below
+This package is loaded by PATH, never by name: `state-manage.py` registers it under `pf_state`
 on every load, so a caller that loads a fresh `state-manage.py` per project -- the test harness does
 exactly that -- gets its own `store` (and its own `bind_paths`) with it. See the bootstrap at the top
 of `state-manage.py` for why that matters.
@@ -131,4 +131,4 @@ for _name in __all__:
             globals()[_name] = getattr(_layer, _name)
             break
     else:
-        raise ImportError(f'conduct_state.__all__ names {_name!r}, which no layer defines')
+        raise ImportError(f'state.__all__ names {_name!r}, which no layer defines')

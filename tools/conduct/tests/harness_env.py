@@ -32,10 +32,10 @@ __all__ = [
 HERE = Path(__file__).resolve().parent
 CONDUCT_DIR = HERE.parent
 TOOLS_DIR = CONDUCT_DIR.parent
-PIPELINE_PATH = CONDUCT_DIR / 'pipeline' / 'conduct_pipeline.py'
-STATE_MANAGE = CONDUCT_DIR / 'pipeline' / 'state-manage.py'
-SIGNAL_PY = CONDUCT_DIR / 'pipeline' / 'signal.py'
-HANDOFF_PY = CONDUCT_DIR / 'pipeline' / 'handoff.py'
+PIPELINE_PATH = CONDUCT_DIR / 'conduct_pipeline.py'
+STATE_MANAGE = CONDUCT_DIR / 'state-manage.py'
+SIGNAL_PY = CONDUCT_DIR / 'signal.py'
+HANDOFF_PY = CONDUCT_DIR / 'handoff.py'
 # `dag-manage.py` is NOT part of the conduct tool and is never edited by a conduct change, so it
 # is resolved: next to us in the shipped tree, else the machine's installed copy.
 #
@@ -73,11 +73,10 @@ def shipped_sources():
     argv, who spells the broken-chain marker's name, which module defines a top-level name twice --
     so a new package is added here once and no guard keeps a copy of the tree.
     """
-    return ([CONDUCT_DIR / 'ledger-merge.py']
+    return (sorted(CONDUCT_DIR.glob('*.py'))
             + [path for cluster in ('pipeline', 'spawn')
                for path in sorted((CONDUCT_DIR / cluster).glob('*.py'))]
-            + sorted((CONDUCT_DIR / 'conduct_pipeline_impl').glob('*.py'))
-            + sorted((CONDUCT_DIR / 'conduct_state').glob('*.py'))
+            + sorted((CONDUCT_DIR / 'state').glob('*.py'))
             + sorted((CONDUCT_DIR / 'ledger_merge').glob('*.py'))
             + sorted((TOOLS_DIR / 'dag').glob('*.py'))
             + sorted((TOOLS_DIR / 'issue').glob('*.py'))

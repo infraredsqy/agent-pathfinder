@@ -111,18 +111,18 @@ def _require_configured() -> None:
         sys.exit(1)
 
 
-#: 节点 spec 的落点：`conduct_pipeline_impl/nodes.py` 一处算它，这个工具照着取。
-CONDUCT_IMPL = HERE.parent / 'conduct' / 'conduct_pipeline_impl'
+#: 节点 spec 的落点：`pipeline/nodes.py` 一处算它，这个工具照着取。
+CONDUCT_IMPL = HERE.parent / 'conduct' / 'pipeline'
 
 
 def _spec_path(uid: str) -> str:
     """`<root>/.pf/nodes/<uid>/spec.md`，落点由 `nodes.node_spec_path` 给出。
 
     这条路径的算法只有一处：`add` 报的、`open` 印的、管线往那儿写 spec 的，都是这同一个值。
-    那个包按路径取，名字专用（`pf_dag_conduct_impl`），同一个进程里谁另载一份都互不打扰。
+    那个包按路径取，名字专用（`pf_dag_pipeline`），同一个进程里谁另载一份都互不打扰。
     """
     pkg_dir = CONDUCT_IMPL
-    pkg = _loader().load_by_path('pf_dag_conduct_impl', pkg_dir / '__init__.py',
+    pkg = _loader().load_by_path('pf_dag_pipeline', pkg_dir / '__init__.py',
                                  package_dir=pkg_dir, register=True, reuse=True)
     return pkg.nodes.node_spec_path(_project_root(), uid)
 

@@ -8,7 +8,7 @@ Everything else forwards to a tool, keeping the tool's own subcommand names so t
 greppable. Which words those are is the table further down, and `--help` prints that same table. A
 forwarded verb's flags are its tool's: `pf <verb> --help` is where they are. `pf init` and
 `pf register` are forwards too: the registration logic lives next to the ledger it serves, in
-`conduct_state/initledger.py`.
+`conduct/state/initledger.py`.
 """
 
 import importlib.util
@@ -23,12 +23,11 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent
 CONDUCT = TOOLS / 'conduct'
-PIPELINE = CONDUCT / 'pipeline'
 DAG = TOOLS / 'dag' / 'dag-manage.py'
 ISSUE = TOOLS / 'issue' / 'issue_manager.py'
-STATE_MANAGE = PIPELINE / 'state-manage.py'
-HANDOFF = PIPELINE / 'handoff.py'
-CONDUCT_PIPELINE = PIPELINE / 'conduct_pipeline.py'
+STATE_MANAGE = CONDUCT / 'state-manage.py'
+HANDOFF = CONDUCT / 'handoff.py'
+CONDUCT_PIPELINE = CONDUCT / 'conduct_pipeline.py'
 LEDGER_MERGE = CONDUCT / 'ledger-merge.py'
 #: Shared plumbing, and every writer treats a missing session note as best effort -- which is exactly
 #: why the doctor has to check it by name.

@@ -20,6 +20,11 @@ from cases_base import NODE, NODE2, NODE3, Base, pipeline, skill_of  # noqa: E40
 from harness import (CONDUCT_DIR, Closer, Driver, WorkerSession,  # noqa: E402
                      _dag_hook, stop_after)
 
+#: 实现包自己的目录。`graph_readers` 按栈帧**所在的目录**认「包里的调用者」，不按文件名里的子串：
+#: 入口 `conduct_pipeline.py` 与 `state/pipeline_loader.py` 的路径里都含 `pipeline`，一个子串会把
+#: 它们也当成包内，那条「包外多一个调用者就当场抛」的边界于是静默放宽。
+_IMPL_DIR = CONDUCT_DIR / 'pipeline'
+
 
 class TestNodeShape(Base):
     """One node = one cycle step = one session, recorded in the cycle itself."""
@@ -617,7 +622,7 @@ class TestTheModeWord(Base):
     def test_the_fallback_is_spelled_once_in_the_package(self):
         """源码里 `or DEFAULT_MODE` 只有一处 —— 加一个 mode 词时改的就是它。"""
         sites = []
-        for path in sorted((CONDUCT_DIR / 'conduct_pipeline_impl').glob('*.py')):
+        for path in sorted((CONDUCT_DIR / 'pipeline').glob('*.py')):
             tree = ast.parse(path.read_text(encoding='utf-8'))
             sites += [f'{path.name}:{node.lineno}' for node in ast.walk(tree)
                       if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or)
@@ -655,7 +660,7 @@ class TestThePromptPath(Base):
     def test_the_launch_path_is_built_in_one_file(self):
         """拼 `launch` 这一段的文件只有 `prompts.py`。"""
         sources = {path.name: path.read_text(encoding='utf-8')
-                   for path in sorted((CONDUCT_DIR / 'conduct_pipeline_impl').glob('*.py'))}
+                   for path in sorted((CONDUCT_DIR / 'pipeline').glob('*.py'))}
         sites = sorted(name for name, text in sources.items()
                        if "'launch'" in text or '"launch"' in text)
 
@@ -697,9 +702,10 @@ class TestTheCloseReadsTheGraphOnce(Base):
           * 新层不进包命名空间：新加的实现层没有挂进入口模块的全局（例如只被别的层 import），
             它连一次都不会被找到。
 
-        边界是响的：`load_dag` 的调用者今天全在 `conduct_pipeline_impl` 包里（计数包装按栈帧的
-        文件路径认调用者），包外多出一个直接调用者时那句 `next(...)` 当场抛 `StopIteration`，
-        不会静静地少记一笔。
+        边界是响的：`load_dag` 的调用者今天全在 `pipeline` 包里（计数包装按栈帧**所在的目录**认
+        调用者，`_IMPL_DIR` 就是那个目录），包外多出一个直接调用者时那句 `next(...)` 当场抛
+        `StopIteration`，不会静静地少记一笔 —— 入口与 `state/pipeline_loader.py` 的路径里也含
+        `pipeline` 这个词，按子串认会把它们算进来，正是这条边界要挡的那种静默。
         """
         callers = []
         real = {}
@@ -711,7 +717,7 @@ class TestTheCloseReadsTheGraphOnce(Base):
 
             def counted(project, _real=real[layer], _callers=callers):
                 frame = next(f for f in reversed(traceback.extract_stack())
-                             if 'conduct_pipeline_impl' in f.filename and f.name != 'counted')
+                             if Path(f.filename).parent == _IMPL_DIR and f.name != 'counted')
                 _callers.append(frame.name)
                 return _real(project)
 

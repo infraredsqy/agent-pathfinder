@@ -257,7 +257,7 @@ class TestMaintenanceChannel(Base):
 
     def test_the_spec_path_is_built_in_one_file(self):
         """实现包里拼 `spec.md` 这一段的文件只有 `nodes.py`。"""
-        impl = TOOLS_DIR / 'conduct' / 'conduct_pipeline_impl'
+        impl = TOOLS_DIR / 'conduct' / 'pipeline'
         sites = sorted(path.name for path in sorted(impl.glob('*.py'))
                        if "'spec.md'" in path.read_text(encoding='utf-8'))
 
@@ -460,7 +460,7 @@ class TestIssueRepairSwitch(Base):
     def test_the_two_packages_spell_the_switch_the_same_way(self):
         """写侧（`pf config` 那张表）与读侧（这条通道）各有一份键名、词表与出厂值：这条比对它们。
 
-        `conduct_pipeline_impl` 与 `conduct_state` 是两个按路径各自加载的包，import 一个进另一个会
+        `pipeline` 与 `state` 是两个按路径各自加载的包，import 一个进另一个会
         绕出一个环，所以两边各写一份 —— 两份分头漂移，就是一个项目明明关掉了通道、收尾却照插不误
         的来路。
         """
@@ -499,7 +499,7 @@ class TestMaintenanceThresholds(Base):
         self.assertIsNone(sb.cycle().get('policies'))
 
     def test_the_numeric_lines_come_from_the_one_policy_table(self):
-        """数值型那两条线取自 `conduct_state.cycles.POLICY_NUMBERS` 那一份正本。
+        """数值型那两条线取自 `state.cycles.POLICY_NUMBERS` 那一份正本。
 
         整数型的 `parallel` 是同格的另一类键，不在其中；一个数值线都没配时这份读数是空的 ——
         `crossed` 的非空门靠的就是它。

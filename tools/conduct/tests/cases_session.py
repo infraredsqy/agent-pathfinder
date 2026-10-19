@@ -306,11 +306,11 @@ class TestTheRecordDoors(Base):
     """
 
     def state_package(self):
-        """`conduct_state` 是一个带相对导入的包：按路径整包装进来（照 state-manage.py 的引导）。"""
-        name = 'conduct_state_for_doors'
+        """`state` 是一个带相对导入的包：按路径整包装进来（照 state-manage.py 的引导）。"""
+        name = 'pf_state_for_doors'
         for stale in [n for n in sys.modules if n == name or n.startswith(name + '.')]:
             del sys.modules[stale]
-        pkg_dir = CONDUCT_DIR / 'conduct_state'
+        pkg_dir = CONDUCT_DIR / 'state'
         spec = importlib_util.spec_from_file_location(
             name, pkg_dir / '__init__.py', submodule_search_locations=[str(pkg_dir)])
         mod = importlib_util.module_from_spec(spec)

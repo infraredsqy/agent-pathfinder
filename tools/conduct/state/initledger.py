@@ -73,7 +73,7 @@ LEDGER_AGENTS_BODY = """\
 #: 写进 `info/exclude` 的那两行的记号。按记号收割：种一次是它，拔一次也是它。
 EXCLUDE_MARK = '# pf 工作系统：这套记录只留本机，不进团队库'
 
-#: 这套工具树里 `pf` 的位置：`<tools>/conduct/conduct_state/` 往上三级就是 `<tools>`。
+#: 这套工具树里 `pf` 的位置：`<tools>/conduct/state/` 往上三级就是 `<tools>`。
 TOOLS = Path(__file__).resolve().parent.parent.parent
 
 

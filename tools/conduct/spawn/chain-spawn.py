@@ -9,7 +9,7 @@ text-repair rounds, say -- where the prompt file already carries the whole hando
 the next invocation line).
 
 It is a CLI over the SAME door: the session is started by the pipeline's `spawn_session`
-(`conduct_pipeline_impl/writer.py`), the one place that starts sessions, so what that door carries comes
+(`pipeline/writer.py`), the one place that starts sessions, so what that door carries comes
 with this call too -- the session note that makes the conversation visible to `session show/list`, the
 marker's write/clear policy (the spawner on the other end writes and clears it), and the spawner's own
 answer to "which one" (`spawn/host.py`'s `default_spawner`, honoring `DSH_CONDUCT_SPAWNER`; a line's
@@ -67,7 +67,7 @@ def _start(workspace: Path, cycle_id: str, prompt_file: Path, dry_run: bool) -> 
     `subprocess` process-wide: what a chain hands on is the workspace, the cycle and the prompt, and
     which script the door ends up running is answered below it, by the module that owns that argv.
     """
-    pipeline = _loaded(CONDUCT / 'pipeline' / 'conduct_pipeline.py', 'conduct_pipeline')
+    pipeline = _loaded(CONDUCT / 'conduct_pipeline.py', 'conduct_pipeline')
     return pipeline.spawn_session(workspace, cycle_id, str(prompt_file), dry_run=dry_run)
 
 
