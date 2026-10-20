@@ -70,3 +70,86 @@
 ## 六、表外的写法
 
 写进档案的只有表上的词：命令行里出现表外的写法，工具当场把它指出来，不替你折算。
+
+## 七、译成英文时用的词
+
+中英两份技能是同一份东西的两种写法，词得是一套。三条规矩：
+
+1. **机器词照抄代码里的写法**：上面四节的词、命令与旗标、字段名与键、`.pf/` 路径与文件名、
+   `P0`–`P3`、`method: ` 那一行、反模式 id。清单不在这里 —— 在代码与 `--help` 里；拿不准就跑一遍工具，
+   看它印什么。
+2. **下表照抄，不许另起同义词。** 同一个轴两套词，就是一根轴裂成两根。
+3. **表里没有的词，译者按句子选**，但一份技能里用到底 —— 同一份里两个词比选错一个词更坏。
+
+| 中文 | 英文 | 出处 |
+|---|---|---|
+| 节点 | node | |
+| cycle / 线 | cycle / line | |
+| 交接单 | the note | 工具散文里也叫 the ticket / the signal，同一个记录 |
+| 记录目录 | the ledger | |
+| 判决 | the status | 轴 ③ 那个字段 |
+| 持有 | hold / holding | 轴 ② |
+| 搁置 | shelve / shelved | 轴 ① |
+| 交付 | completed | 轴 ① |
+| 就绪 | ready | 轴 ④ |
+| 终态 | a terminal status | |
+| 派发 | dispatch | |
+| 会话 | session | |
+| 收口 / 收尾 | close out | |
+| 正本 | the one source | |
+| 出厂默认 | factory default | |
+| 维护通道 | maintenance channel | |
+| 过滤集 | filter set | |
+| 重试 | retry | |
+| 降级标记 | degradation marker | |
+| 落定 | settling | |
+| 宿主 | the host | |
+| 主树 | the main tree | |
+| 探针 | probe | |
+| 读数 | reading | |
+| 判据 | criterion | |
+| 完成判定 | completion rule | |
+| 阈值 / 线 | threshold / the line | |
+| 范围 | scope | |
+| 池子 | the pool | |
+| 条目（池子里的） | issue | 错题本里的条目是 entry |
+| 债 | debt | |
+| 加权和 | weighted sum | |
+| 严重度 | severity | 机器词是 `P0`–`P3` |
+| 测试档 | test tier | 取值 `full` / `minimal` |
+| 本地档 / 提交档 | local / commit | `worktree_mode` 的取值 |
+| 讨论节点 | discussion node | |
+| 验证边界 | verification boundary | |
+| 错题本 / 反模式 | anti-patterns | 一份东西的两个叫法，英文合成一个 |
+
+代码没定过、但每份技能都会撞上的高频词，本表选一个，别另造：
+
+| 中文 | 英文 |
+|---|---|
+| 指挥者 | the conductor |
+| 用户 / 人工 | the user / a human |
+| 方法卡 / 角色卡 | method card / role card |
+| 拍板 | the call |
+| 裁定 | the conductor's verdict |
+| 落笔 | write it down |
+| 这一趟 / 一轮 | a run / a round |
+| 快档 / 慢档 | the fast lane / the slow lane |
+| 自证 | prove it yourself |
+| 移档 | move a test |
+| 合回 | merge back |
+| 清债 | clearing the debt |
+| 人机面 | the pool's human face |
+| 骨架 | the skeleton |
+| 联调 / 实机测试 | integration / on-device testing |
+| 分批 | batch |
+| 上限 / 余量 | the cap / headroom |
+| 验收 / 总验收 | acceptance / final acceptance |
+| 两个入口 / 唯一入口 | the two ways in / the one way in |
+
+每份 `SKILL.md` 开头那三行抬头，七份用同一套写法：
+
+| 中文 | 英文 |
+|---|---|
+| 谁跑我 | Who runs me |
+| 我解决什么 | What I am for |
+| 我派不派 subagent | Do I dispatch subagents |
