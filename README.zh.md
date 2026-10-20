@@ -26,6 +26,8 @@ pwsh -File install.ps1
 
 该脚本将 `pf-*` 技能链接至 `~/.agents/skills`，把 `tools/bin` 加入 `PATH`（同时摘掉其它 checkout 的那一条，`pf` 只解析到本仓库）。仓库位置变更后重新执行即可，脚本具备幂等性，收尾自检里包含一次 `pf doctor`。
 
+技能分英文与中文两套，一次只装一套（一个方法名只有一份卡）：缺省装英文，`-Lang zh` 装中文那一套。选择记在 `~/.pf/lang.txt`，之后重跑修复不会把语言换掉。
+
 ```pwsh
 pf version     # 当前 checkout 的位置
 pf doctor      # 检查本仓库与当前项目的状态

@@ -32,6 +32,10 @@ It links the `pf-*` skills into `~/.agents/skills` and puts `tools/bin` on your 
 any other checkout's entry, so `pf` resolves here. Re-run it after moving the checkout; it is
 idempotent, and its closing self-check includes `pf doctor`.
 
+The skills ship in both languages — one language per install, because a method name has exactly one
+card. The default is English; add `-Lang zh` for the Chinese ones. The choice is recorded in
+`~/.pf/lang.txt`, so a later re-run repairs the install without switching the language you picked.
+
 ```pwsh
 pf version     # where this checkout lives
 pf doctor      # whether this checkout and the current project look right

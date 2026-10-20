@@ -1,7 +1,7 @@
 ﻿# agent-pathfinder (pf) install: link skills into ~/.agents/skills, put `pf` on PATH, self-check.
 #
 #   pwsh -File install.ps1                 install (idempotent: re-running repairs it)
-#   pwsh -File install.ps1 -Lang zh        install that language's skills instead of the default
+#   pwsh -File install.ps1 -Lang zh        install the Chinese skills (the default is en)
 #   pwsh -File install.ps1 -TakeShared      take over ~/.agents/skills/shared (a link elsewhere)
 #   pwsh -File install.ps1 -Uninstall       remove what this repository linked in
 #
@@ -33,7 +33,7 @@ $binDir = Join-Path $repo 'tools\bin'
 $pfPy = Join-Path $binDir 'pf.py'
 $skillsDir = Join-Path $repo 'skills'
 # What a fresh install gets when neither -Lang nor the record says.
-$defaultLang = 'zh'
+$defaultLang = 'en'
 $skillsRoot = Join-Path $HOME '.agents\skills'
 $sharedRoot = Join-Path $skillsRoot 'shared'
 $sharedPf = Join-Path $sharedRoot 'pf'
