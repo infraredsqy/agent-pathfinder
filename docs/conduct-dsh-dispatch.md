@@ -1,6 +1,6 @@
 # DSH 派发与鉴权（conduct 管线用）
 
-> [`../skills/pf-conduct/SKILL.md`](../skills/pf-conduct/SKILL.md) 的「派发通路」一节是给会话看的那一半（谁调它、断了看哪个文件）；
+> [`../skills/zh/pf-conduct/SKILL.md`](../skills/zh/pf-conduct/SKILL.md) 的「派发通路」一节是给会话看的那一半（谁调它、断了看哪个文件）；
 > 这份放**为什么这么写**、**别怎么写** —— 供排障与搬迁时对照。实现是
 > `tools/conduct/spawn/dsh-spawn.ps1`，**唯一**拼它那份 argv 的地方是 `spawn/conduct_spawn.py`，
 > 管线（`pf next --spawn` 与 `dispatch <cycle>`）经它调用。

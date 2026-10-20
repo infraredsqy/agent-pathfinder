@@ -5,8 +5,9 @@
 动手前必读：[`tools/conduct/AGENTS.md`](tools/conduct/AGENTS.md) —— conduct 工具的开发纪律（派发通路是实弹）。
 
 - docs/ —— 这套工具的契约正本：状态与推进、派发与鉴权、节点 tag 分流（改 conduct 行为前看）
-- skills/ —— pf-* 技能本体与 shared 公共卡（`install.ps1` 用 junction 挂进 `~/.agents/skills`）；
-  公共卡文件名用自己的名字（`shared/pf/` 下是 `subagents.md`、`pool.md`、`toolcraft.md` 这类）——
+- skills/ —— 每种语言一棵技能树 `skills/<lang>/`：`pf-*` 技能本体与 `shared/pf/` 公共卡各一份；
+  `install.ps1 -Lang` 挑一棵用 junction 挂进 `~/.agents/skills`（一个方法名一份卡，装机只能二选一）。
+  公共卡文件名用自己的名字（`subagents.md`、`pool.md`、`toolcraft.md` 这类）——
   `AGENTS.md`／`CLAUDE.md` 是宿主的保留名，大小写不敏感，落在哪个目录就被当指令注入给每个在那里开工的会话
 - tools/ —— `pf` 命令与实现：`bin/` 入口、`conduct/` 管线、`dag/` 图、`issue/` 池、`shared/` 跨工具的公共件（只有库，没有入口）
 - install.ps1 —— 装机与自检：挂技能、`pf` 上 PATH；幂等，重跑即修复

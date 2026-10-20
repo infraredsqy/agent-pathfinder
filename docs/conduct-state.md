@@ -2,7 +2,7 @@
 
 > 这份是 conduct 的**设计出处**：它把执行线想成什么样、谁是唯一写者、哪些决定是有意这么定的。
 > 命令、字段、命令行的长相都不在这里抄第二份 —— 那些以 `pf --help` / `pf next --help` 与代码为准。
-> 给 conductor 读的操作手册是 [`../skills/pf-conduct/SKILL.md`](../skills/pf-conduct/SKILL.md)，从这份派生；
+> 给 conductor 读的操作手册是 [`../skills/zh/pf-conduct/SKILL.md`](../skills/zh/pf-conduct/SKILL.md)，从这份派生；
 > 派发与鉴权见 [`./conduct-dsh-dispatch.md`](./conduct-dsh-dispatch.md)，tag 与分流见
 > [`./conduct-node-tags.md`](./conduct-node-tags.md)，各轴的词见 [`./vocabulary.md`](./vocabulary.md)。
 >

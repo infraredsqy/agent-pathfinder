@@ -1,8 +1,14 @@
 ﻿# agent-pathfinder (pf) install: link skills into ~/.agents/skills, put `pf` on PATH, self-check.
 #
 #   pwsh -File install.ps1                 install (idempotent: re-running repairs it)
+#   pwsh -File install.ps1 -Lang zh        install that language's skills instead of the default
 #   pwsh -File install.ps1 -TakeShared      take over ~/.agents/skills/shared (a link elsewhere)
 #   pwsh -File install.ps1 -Uninstall       remove what this repository linked in
+#
+# The skills come in one language per install: what gets linked is `skills\<lang>\pf-*`, because a
+# method name has exactly one card (`~/.agents/skills/<method>/SKILL.md`). `-Lang` beats the choice
+# recorded in `~/.pf/lang.txt`, which beats the default; the record is what keeps a re-run -- the
+# repair -- from silently switching the language a user picked.
 #
 # Skills are linked as junctions: editing a file in this repository takes effect at once, with
 # nothing to sync. `pf` sits on PATH exactly once: a re-run first removes another checkout's
@@ -15,6 +21,7 @@
 
 [CmdletBinding()]
 param(
+    [string]$Lang,
     [switch]$TakeShared,
     [switch]$Uninstall,
     [switch]$SkipPath
@@ -24,13 +31,25 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $MyInvocation.MyCommand.Path
 $binDir = Join-Path $repo 'tools\bin'
 $pfPy = Join-Path $binDir 'pf.py'
+$skillsDir = Join-Path $repo 'skills'
+# What a fresh install gets when neither -Lang nor the record says.
+$defaultLang = 'zh'
 $skillsRoot = Join-Path $HOME '.agents\skills'
 $sharedRoot = Join-Path $skillsRoot 'shared'
 $sharedPf = Join-Path $sharedRoot 'pf'
-$repoSharedPf = Join-Path $repo 'skills\shared\pf'
 $markerFile = Join-Path $HOME '.pf\install.txt'
+$langFile = Join-Path $HOME '.pf\lang.txt'
 
 function Say([string]$what, [string]$detail = '') { Write-Host ("  {0,-16}{1}" -f $what, $detail) }
+
+function Get-SkillLangs([string]$checkout) {
+    # What a checkout offers: `skills\<lang>\shared\pf`, one level down. This is also the signature
+    # that tells an agent-pathfinder checkout from any other directory that has a `bin`.
+    $dir = Join-Path $checkout 'skills'
+    if (-not (Test-Path -LiteralPath $dir)) { return @() }
+    return @(Get-ChildItem -LiteralPath $dir -Directory | Where-Object {
+        Test-Path -LiteralPath (Join-Path $_.FullName 'shared\pf') } | ForEach-Object { $_.Name })
+}
 
 function Test-Reparse([string]$path) {
     $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
@@ -38,14 +57,12 @@ function Test-Reparse([string]$path) {
 }
 
 function Test-PfBin([string]$dir) {
-    # An agent-pathfinder checkout's `tools\bin`: the two signatures are `pf.py` and the
-    # `skills\shared\pf` two levels up. Recognizing it is what lets another checkout's PATH
-    # entry be removed.
+    # An agent-pathfinder checkout's `tools\bin`: the two signatures are `pf.py` and a skill tree
+    # two levels up. Recognizing it is what lets another checkout's PATH entry be removed.
     if (-not $dir) { return $false }
     $checkout = Split-Path -Parent (Split-Path -Parent $dir)
     if (-not $checkout) { return $false }
-    return (Test-Path -LiteralPath (Join-Path $dir 'pf.py')) -and
-           (Test-Path -LiteralPath (Join-Path $checkout 'skills\shared\pf'))
+    return (Test-Path -LiteralPath (Join-Path $dir 'pf.py')) -and (@(Get-SkillLangs $checkout).Count -gt 0)
 }
 
 function New-Junction([string]$link, [string]$target) {
@@ -58,11 +75,23 @@ function New-Junction([string]$link, [string]$target) {
 }
 
 if (-not (Test-Path -LiteralPath $pfPy)) { throw "cannot find $pfPy -- run this from the repository root." }
+
+# Which language this run installs: `-Lang` > the record > the default. The record is a file of
+# its own because `install.txt` holds the PATH entry verbatim and is compared against PATH.
+$skillLangs = @(Get-SkillLangs $repo)
+if (-not $Lang) {
+    $Lang = if (Test-Path -LiteralPath $langFile) { (Get-Content -LiteralPath $langFile -Raw -Encoding UTF8).Trim() } else { $defaultLang }
+}
+if ($skillLangs -notcontains $Lang) {
+    throw "no skills in language '$Lang' here (this checkout has: $($skillLangs -join ', '))"
+}
+$langSkills = Join-Path $skillsDir $Lang
+$repoSharedPf = Join-Path $langSkills 'shared\pf'
 if (-not (Test-Path -LiteralPath $repoSharedPf)) { throw "cannot find $repoSharedPf -- run this from the repository root." }
 if (-not (Test-Path -LiteralPath $skillsRoot)) { New-Item -ItemType Directory -Force -Path $skillsRoot | Out-Null }
 
 # ── 1. skill junctions ────────────────────────────────────────────────────────
-$skills = Get-ChildItem -LiteralPath (Join-Path $repo 'skills') -Directory | Where-Object { $_.Name -like 'pf-*' }
+$skills = Get-ChildItem -LiteralPath $langSkills -Directory | Where-Object { $_.Name -like 'pf-*' }
 foreach ($skill in $skills) {
     $link = Join-Path $skillsRoot $skill.Name
     if ($Uninstall) {
@@ -71,6 +100,10 @@ foreach ($skill in $skills) {
         New-Junction $link $skill.FullName
         Say 'linked' "$($skill.Name)  ->  $($skill.FullName)"
     }
+}
+if (-not $Uninstall) {
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $langFile) | Out-Null
+    Set-Content -LiteralPath $langFile -Value $Lang -Encoding UTF8
 }
 
 # ── 2. shared/pf: `../shared/pf/…` in skill bodies has to land here ───────────
@@ -133,6 +166,7 @@ if ($Uninstall) {
 # to the main tree).
 $verdict = 0
 Write-Host ''
+Say 'note' "skill language: $Lang"
 Say 'note' ("pf skills visible here: " + ((Get-ChildItem -LiteralPath $skillsRoot -Directory | Where-Object { $_.Name -like 'pf-*' } | Measure-Object).Count))
 if (Test-Path -LiteralPath $sharedPf) { Say 'note' 'shared/pf is in place' } else { Say 'warning' 'shared/pf is not in place yet (section 2)' }
 if (-not $Uninstall) {
