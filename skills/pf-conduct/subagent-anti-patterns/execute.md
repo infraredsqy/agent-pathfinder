@@ -54,7 +54,7 @@
 
 **症状**：命令原始输出、合成样本、哈希、长引用这些内容整段贴进 `report.md`；一个交付文件对应一千行的说明。
 
-**纠正信号**：报告长到下一棒读不完，而里面大半是读者手上本来就有的材料。
+**纠正信号**：报告长到下一个环节读不完，而里面大半是读者手上本来就有的材料。
 
 ## `conduct-execute-appends-stale-readings` · 过期读数只追加不更正
 
@@ -62,11 +62,11 @@
 
 **纠正信号**：同一份报告里同一个数出现两次，其中一次标着「历史」。
 
-## `conduct-execute-dispatches-on-conductor-instructions` · 依指挥位说明继续派发 subagent
+## `conduct-execute-dispatches-on-conductor-instructions` · 依指挥者说明继续派发 subagent
 
 **症状**：spec 或方法卡里写着「按改动域分批，每批派 Fix / Review，批过即提交」，你就照它派起了 subagent——一层套一层。
 
-**纠正信号**：你这一棒出现了派发动作，而你的 prompt 里没有这一项。
+**纠正信号**：你这一步出现了派发动作，而你的 prompt 里没有这一项。
 
 ## `conduct-execute-defers-as-delivery` · 以"已知未解决"替代交付
 

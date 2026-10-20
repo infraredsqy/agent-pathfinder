@@ -26,6 +26,6 @@ pf instruction add --text "<用户原话>" --scope node --node <id>
 ```
 
 - 两条线并排时 `--cycle <id>` / `--node <id>` 要点名，绑不上工具会拒收
-- 干活的一棒开工时读一次清单：你中途记的，已经在跑的那棒看不见，下一棒起生效
+- 干活的那一趟开工时读一次清单：你中途记的，已经在跑的那一趟看不见，下一趟起生效
 - 「跑多远、何时停」的话（跑够三个就停）→ `--stop-after-nodes 3` 加 `--target boundary`：停机逻辑只读 boundary 栏的条目，漏了它工具不会停
 - 记完把条目 id 和 scope 念给用户

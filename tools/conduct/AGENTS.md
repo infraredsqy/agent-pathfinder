@@ -5,7 +5,7 @@
 ## 布局
 
 - 规则见 `docs/tool-modules.md`。conduct 根上是四个入口（`state-manage.py` /
-  `conduct_pipeline.py` / `handoff.py` / `signal.py`）与四个机器目录：`state/`（写侧：cycle 簿、
+  `conduct_pipeline.py` / `handoff.py` / `signal.py`）与四个机器目录：`state/`（写侧：cycle 记录、
   常备指令、设置、init）、`pipeline/`（推进与节点收口）、`spawn/`（开会话的机器链）、
   `ledger_merge/`（合并驱动的正文）。
 - `ledger-merge.py` 必须留在 conduct 根：`pf` 的 `merge-ledger` 转发按这个相对路径找它。项目里的登记走

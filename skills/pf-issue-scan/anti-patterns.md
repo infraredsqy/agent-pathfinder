@@ -6,7 +6,7 @@
 
 **症状**：一个 subagent 扫所有模块，回来一堆重复代码 + 职责越界 + 结构问题混在一起。
 
-**纠正信号**：派出去的面数与模块数一比，一个 agent 背了好几格。
+**纠正信号**：派出去的面数与模块数一比，一个 agent 背了好几份。
 
 ## `issue-scan-explores-without-reading-docs` · 未读项目文档即开始探查
 
@@ -38,8 +38,8 @@
 
 **纠正信号**：这条债的文件面铺开在三个以上模块，而条目的体积写得像顺手一改。
 
-## `issue-scan-decides-for-the-owner` · 扫描阶段代机主判定 decision
+## `issue-scan-decides-for-the-owner` · 扫描阶段代用户判定 decision
 
-**症状**：拿不准的条目一律标成"要机主定"，回来一看二十条 external。
+**症状**：拿不准的条目一律标成"要用户定"，回来一看二十条 external。
 
 **纠正信号**：条目的 `description` / `suggestion` 里出现"要拍板"，却说不出缺的是哪一课。

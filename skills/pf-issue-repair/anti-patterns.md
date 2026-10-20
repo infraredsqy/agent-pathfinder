@@ -20,7 +20,7 @@
 
 **症状**：批怎么分的、每批含哪些条目，收尾时一句不提。
 
-**纠正信号**：汇报里有读数与落定表，读的人却拼不出这批改了哪些条目、走的哪一发 commit。
+**纠正信号**：汇报里有读数与落定表，读的人却拼不出这批改了哪些条目、走的哪一次提交。
 
 ## `issue-repair-acknowledge-or-external-as-exit` · 误用 acknowledge 或 external 充当 repair 的出口
 

@@ -46,6 +46,6 @@
 
 ## 与已有 skill 的关系
 
-**pf-conduct** 管线（pf-conduct 一个节点做完：备料、执行、独立复审、修复、收尾）回答的是"怎么实现"。
+**pf-conduct** 管线（pf-conduct 一个节点做完：准备、执行、独立复审、修复、收尾）回答的是"怎么实现"。
 
 pf 系统回答的是"我们要做什么"——作为 pf-conduct 管线的上游输入。idea 从 pf-route 进入 DAG，由 pf-conduct 细化并执行。
