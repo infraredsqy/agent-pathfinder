@@ -52,7 +52,7 @@ confirmation.
 **Correction signal**: this piece of debt's file surface spreads over three or more modules, while
 the entry's size reads like a passing change.
 
-## `issue-scan-decides-for-the-owner` — the scan stage ruling decision for the owner
+## `issue-scan-decides-for-the-user` — the scan stage ruling decision for the user
 
 **Symptom**: entries that are not clear are all marked "the user has to settle this", and twenty
 externals come back.

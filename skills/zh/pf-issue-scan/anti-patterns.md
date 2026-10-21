@@ -38,7 +38,7 @@
 
 **纠正信号**：这条债的文件面铺开在三个以上模块，而条目的体积写得像顺手一改。
 
-## `issue-scan-decides-for-the-owner` · 扫描阶段代用户判定 decision
+## `issue-scan-decides-for-the-user` · 扫描阶段代用户判定 decision
 
 **症状**：拿不准的条目一律标成"要用户定"，回来一看二十条 external。
 
