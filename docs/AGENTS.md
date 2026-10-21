@@ -1,9 +1,18 @@
-# docs/ —— 这套工具的契约正本：设计口径与约定
+# docs/ — the contracts' one source: design intent and conventions
 
-> 本文件（AGENTS.md / CLAUDE.md）不得超过 100 行。
+> This file (AGENTS.md / CLAUDE.md) must not exceed 100 lines.
 
-- conduct-state.md —— 状态与推进的设计出处：谁落笔、认领与判决怎么分、两个入口、停手的判据、维护通道（改 conduct 行为、写 pf-conduct 前看）
-- conduct-dsh-dispatch.md —— 派发与鉴权：实测校准、自签 cookie、失败模式与排查（派发失败排查看）
-- conduct-node-tags.md —— 节点 tag 与 cycle 分流：词表、过滤判据、过滤为什么只落在挑人那一步（开第二条线、动 tag 前看）
-- vocabulary.md —— 词法正本：节点 / cycle / 交接单各占一个轴，派生标签不落盘，末尾一张中英用词对照（动状态词、对齐界面用词、译技能前看）
-- tool-modules.md —— tools/ 的模块形状：按路径加载的那一份装载器、谁决定一份文件在一个进程里有几份、公共件放在哪（动跨文件引用、加公共件前看）
+- conduct-state.md — where the state-and-advancing design comes from: who writes it down, how
+  claiming and the status divide, the two ways in, the stopping criteria, the maintenance channel
+  (read before changing conduct's behaviour or writing pf-conduct)
+- conduct-dsh-dispatch.md — dispatch and authentication: measured calibration, the self-signed
+  cookie, failure modes and troubleshooting (read when a dispatch fails)
+- conduct-node-tags.md — node tags and splitting between cycles: the word list, the filter
+  criteria, why filtering lands only on the picking step (read before opening a second line or
+  touching tags)
+- vocabulary.md — the word list's one source: node / cycle / the note each on its own axis,
+  derived tags never land on disk, and a Chinese-English table at the end (read before touching
+  state words, aligning UI wording, or translating a skill)
+- tool-modules.md — the shape of tools/' modules: the one loader that loads by path, who decides
+  how many copies of a file one process holds, where shared pieces go (read before touching
+  cross-file references or adding a shared piece)

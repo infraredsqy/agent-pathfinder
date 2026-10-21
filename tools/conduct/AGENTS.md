@@ -1,34 +1,46 @@
-# conduct 工具开发纪律
+# The conduct tool's development discipline
 
-> 本文件（AGENTS.md / CLAUDE.md）不得超过 100 行。
+> This file (AGENTS.md / CLAUDE.md) must not exceed 100 lines.
 
-## 布局
+## Layout
 
-- 规则见 `docs/tool-modules.md`。conduct 根上是四个入口（`state-manage.py` /
-  `conduct_pipeline.py` / `handoff.py` / `signal.py`）与四个机器目录：`state/`（写侧：cycle 记录、
-  常备指令、设置、init）、`pipeline/`（推进与节点收口）、`spawn/`（开会话的机器链）、
-  `ledger_merge/`（合并驱动的正文）。
-- `ledger-merge.py` 必须留在 conduct 根：`pf` 的 `merge-ledger` 转发按这个相对路径找它。项目里的登记走
-  `pf register`，登记的是 `pf merge-ledger %O %A %B %P`——与 checkout 位置无关，搬完不用重登记；
-  `pf` 不在 PATH 上时先落绝对形式，补好 PATH 重跑一次 `pf register` 换回来。
-- 入口互相引用走 HERE 相对路径，搬文件必须同簇搬并同步这些引用；改完跑 `python -m unittest discover -s conduct/tests -t .`（cwd 在 `tools/`）。
+- The rules live in `docs/tool-modules.md`. The conduct root holds four entries (`state-manage.py` /
+  `conduct_pipeline.py` / `handoff.py` / `signal.py`) and four machine directories: `state/` (the
+  write side: cycle records, standing instructions, settings, init), `pipeline/` (advancing and
+  closing nodes out), `spawn/` (the machine chain that opens sessions), `ledger_merge/` (the merge
+  driver's body).
+- `ledger-merge.py` must stay at the conduct root: `pf`'s `merge-ledger` forwarding finds it by
+  this relative path. A project registers through `pf register`, which records
+  `pf merge-ledger %O %A %B %P` — independent of where the checkout lives, so moving it needs no
+  re-registration; when `pf` is not on PATH the absolute form is recorded first, and once PATH is
+  fixed, one `pf register` re-run swaps it back.
+- Entries reference each other by HERE-relative paths: moving a file moves the cluster and syncs
+  these references; afterwards run `python -m unittest discover -s conduct/tests -t .`
+  (cwd `tools/`).
 
-## 测试的写法
+## How tests are written
 
-- 每个用例一个临时项目，按 CPU 核数并行跑 —— 这些用例的时间几乎全花在等子进程上。
-- **能进程内调用就进程内调用**：`conduct_pipeline.py` 用 importlib 按路径加载后直接 `apply()` / `record()`，
-  只有「被测对象就是 CLI」的用例才真调 `state-manage.py`；DAG 与 `state.json` 的骨架直接用写文件造。
-- 判红的口径落在单条用例上（≤5 秒，见根 `AGENTS.md` 的时间纪律）；全量套件的实际耗时照常报出来。
+- One temp project per case, run in parallel across the CPU cores — these cases spend nearly all
+  their time waiting on subprocesses.
+- **Call in-process whenever you can**: load `conduct_pipeline.py` by path with importlib and call
+  `apply()` / `record()` directly; only a case whose subject is the CLI itself really invokes
+  `state-manage.py`; the DAG and the `state.json` skeleton are built by writing files.
+- The red line is judged on a single case (≤5 s, see the root `AGENTS.md`'s time discipline); the
+  full suite's measured time is still reported as usual.
 
-## 派发通路是实弹
+## The dispatch path is live ammunition
 
-- 这套工具的 `--spawn` / `dispatch` 会经 `conduct_spawn.py` → spawner 脚本（DSH 上
-  `dsh-spawn.ps1`，ZCode 上 `zcode-spawn.ps1`）开出**真实的会话**并烧 token；ZCode 那一份还会往
-  用户装机的 `~/.zcode/v2/tasks-index.sqlite` 写行。测试、调试、跑样例一律不经过它。
-- 验证推进逻辑，到「返回 action + prompt 文本落盘」为止。要断言派发语义，用 fake spawner
-  （先例：`tests/cases_cli_entries.py` 的 `TestOneSpawner`）。
-- 验证机制改动一律在**一次性沙箱项目**里做：把图的记录拷进 temp 下的 git 仓库（或直接造一份假图），
-  配 fake spawner 驱动；真实项目上只许只读查询（`cycle list` / `cycle current` / `--plan`），不许开 cycle、
-  不许 `dispatch` / `--spawn`。
-- 新增测试不许把 `--spawn` 拼进命令串；临时项目用 `tempfile` 沙箱，跑完清掉。ZCode 侧的沙箱用
-  `ZCODE_DATA_BASE_DIR` 指向临时目录（先例：`tests/cases_zcode.py`）。
+- This tool tree's `--spawn` / `dispatch` goes through `conduct_spawn.py` → a spawner script
+  (`dsh-spawn.ps1` on DSH, `zcode-spawn.ps1` on ZCode) and opens **real sessions** that burn
+  tokens; the ZCode one also writes rows into the user's installed
+  `~/.zcode/v2/tasks-index.sqlite`. Tests, debugging and sample runs never go through it.
+- To verify advancing logic, stop at "the action came back and the prompt text landed on disk". To
+  assert dispatch semantics, use a fake spawner (precedent: `TestOneSpawner` in
+  `tests/cases_cli_entries.py`).
+- A mechanism change is always verified in a **one-shot sandbox project**: copy the graph's records
+  into a git repo under temp (or build a fake graph outright), driven by a fake spawner; on a real
+  project only read-only queries are allowed (`cycle list` / `cycle current` / `--plan`) — no
+  opening a cycle, no `dispatch` / `--spawn`.
+- New tests must not splice `--spawn` into a command string; temp projects use a `tempfile`
+  sandbox, cleaned up afterwards. On the ZCode side, point `ZCODE_DATA_BASE_DIR` at a temp
+  directory (precedent: `tests/cases_zcode.py`).

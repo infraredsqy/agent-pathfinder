@@ -1,33 +1,51 @@
-# agent-pathfinder —— pf：agent 执行管线的工具与技能仓
+# agent-pathfinder — pf: tools and skills for an agent execution pipeline
 
-> 本文件（AGENTS.md / CLAUDE.md）不得超过 100 行。
+> This file (AGENTS.md / CLAUDE.md) must not exceed 100 lines.
 
-动手前必读：[`tools/conduct/AGENTS.md`](tools/conduct/AGENTS.md) —— conduct 工具的开发纪律（派发通路是实弹）。
+Read before working: [`tools/conduct/AGENTS.md`](tools/conduct/AGENTS.md) — the conduct tool's
+development discipline (the dispatch path is live ammunition).
 
-- docs/ —— 这套工具的契约正本：状态与推进、派发与鉴权、节点 tag 分流（改 conduct 行为前看）
-- skills/ —— 每种语言一棵技能树 `skills/<lang>/`：`pf-*` 技能本体与 `shared/pf/` 公共卡各一份；
-  `install.ps1 -Lang` 挑一棵用 junction 挂进 `~/.agents/skills`（一个方法名一份卡，装机只能二选一）。
-  公共卡文件名用自己的名字（`subagents.md`、`pool.md`、`toolcraft.md` 这类）——
-  `AGENTS.md`／`CLAUDE.md` 是宿主的保留名，大小写不敏感，落在哪个目录就被当指令注入给每个在那里开工的会话
-- tools/ —— `pf` 命令与实现：`bin/` 入口、`conduct/` 管线、`dag/` 图、`issue/` 池、`shared/` 跨工具的公共件（只有库，没有入口）
-- install.ps1 —— 装机与自检：挂技能、`pf` 上 PATH；幂等，重跑即修复
-- .gitignore —— 工作区杂物的黑名单
+- docs/ — the contracts' one source: state and advancing, dispatch and authentication, node-tag
+  filtering (read before changing conduct's behaviour)
+- skills/ — one skill tree per language, `skills/<lang>/`: the `pf-*` skills plus one copy of the
+  `shared/pf/` common cards each; `install.ps1 -Lang` picks a tree and links it into
+  `~/.agents/skills` by junction (a method name has exactly one card, so an install picks one).
+  Common cards are named after themselves (`subagents.md`, `pool.md`, `toolcraft.md`, …) —
+  `AGENTS.md` / `CLAUDE.md` are host-reserved names, case-insensitive: whichever directory one
+  falls into, the host injects it as instructions into every session that starts work there
+- tools/ — the `pf` command and its implementation: the `bin/` entry, the `conduct/` pipeline, the
+  `dag/` graph, the `issue/` pool, `shared/` for the pieces used across tools (libraries only, no
+  entries)
+- install.ps1 — install and self-check: link the skills, put `pf` on PATH; idempotent, re-running
+  repairs it
+- .gitignore — the blocklist for workspace litter
 
-## 文档纪律
+## Documentation discipline
 
-- 文档只写现状，口径跟代码与测试走（mode 的人工确认点位置、调用行的长相、`ask_user` 的种类这类，
-  以 `tools/conduct` 的行为为准）；改了行为，同一次提交里同步改文档。
-- 不写历史、不写「以前叫 X」；条数、耗时这类读数现跑现填，别抄进散文。
-- **文档不抄代码**：字段名、命令与旗标、常量、文件清单、词表这类东西只在代码（或 `--help`）里有一
-  份；文档写的是设计口径、判据与「为什么这么定」。同一件事在一份文档里也不讲第二遍。
-- 引用只写「哪份文件 · 哪个小节」的名字，不写章节号、行号 —— 代码注释里一条都不引文档。
-- **技能说明与错题本只由一个入口相接**：`skills/` 下的说明文档（`SKILL.md` 与各角色卡）不许引用
-  错题本里的任何一条内容。它要用的判据就写进自己那份文档：引到错题本某一条的，要么把那条搬进这份
-  文档、从错题本删掉，要么把引用删掉。错题本只通过「开工前读一遍对照自查」这一句被找到，这一句在
-  带错题本的说明文档末尾的「反模式」一节，一份只写一次。
-- **同一条判据只留一处**：错题本写症状、实例与纠正信号，「为什么危险」也算判据正文、一样不留；
-  判据正文住在技能文档里——哪份文档已经写着这条，书里就不再写第二遍。一份判据被两个技能共用时，
-  正本住在其中一个，另一个只指路、不抄正文。
-- **错题本条目带一个稳定 id**：`<skill 目录名去掉 pf- 前缀>-<英文 slug>`；子 agent 那一支按角色分册，
-  执行者的角色与修复者的角色共用一册，接角色名 `conduct-execute-…`（Execute / Fix）与 `conduct-review-…`。
-  id 写在标题行开头，加条目、删条目都不重排、不复用旧 id；条目之间互相引用只写 id。
+- Docs state what is, and their wording follows the code and the tests (where a mode's human
+  confirmation point sits, what a call line looks like, which kinds of `ask_user` there are —
+  `tools/conduct`'s behaviour is the authority). Change the behaviour, change the docs in the same
+  commit.
+- No history, no "this used to be called X"; counts, timings and other readings are run and filled
+  in on the spot, never copied into prose.
+- **Docs do not copy code**: field names, commands and flags, constants, file lists, word lists
+  live in exactly one place, the code (or `--help`); a doc carries the design intent, the criteria
+  and the "why it is set this way". The same thing is not stated twice in one doc either.
+- References name the file and the section, never a section number or a line number — and not one
+  code comment points at a doc.
+- **A skill's docs and its anti-patterns connect through one door only**: the docs under `skills/`
+  (`SKILL.md` and the role cards) must not cite any anti-pattern entry. A criterion they need
+  belongs in their own file: an entry being pointed at either moves into that doc and out of the
+  anti-patterns, or the pointer goes. The anti-patterns are found only through the one sentence
+  "check yourself against this before starting", which sits in the Anti-patterns section at the end
+  of the doc that carries them — written once, in one place.
+- **One criterion, one home**: the anti-patterns keep the symptom, the instance and the correction
+  signal; "why it is dangerous" is criteria text and stays out the same way. Criteria live in the
+  skill's docs — wherever a criterion is already written, the anti-patterns do not write it a
+  second time. When two skills share one criterion, it lives in one of them and the other points at
+  it without copying the text.
+- **An anti-pattern entry carries a stable id**: `<skill dir name minus the pf- prefix>-<english
+  slug>`; the subagent branch is bound by role, the executor's role and the fixer's role sharing
+  one book, named `conduct-execute-…` (Execute / Fix) and `conduct-review-…`. The id opens the
+  heading line; adding or removing entries never renumbers and never reuses an id; entries
+  reference each other by id only.
