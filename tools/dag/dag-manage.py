@@ -29,6 +29,15 @@ Weight:
 
     **Not writing this key means standard**: old graphs and old machines need no migration, and only
     a node that really was given light lands the key.
+
+Approval:
+    A node may carry the moment a human approved what it delivered, and that moment belongs to ONE
+    delivery: it counts only at or after the node's own completion moment (see `delivery_approved`).
+    Delivering the node again pushes the completion moment past it, so the old approval lapses by
+    itself -- nothing here has to be deleted, and no caller has to remember to clean it up.
+
+        approve <uuid> [--at <moment>]   record the approval; the moment defaults to now, and
+                                         repeating the call moves it to the new one
 """
 
 import argparse
@@ -39,6 +48,7 @@ import os
 import shutil
 import sys
 import uuid as uuid_mod
+from datetime import datetime
 from pathlib import Path
 
 
@@ -432,6 +442,80 @@ def _try_add_dep(data: dict, uid: str, dep: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  Approval: "a human passed this delivery"
+# ═══════════════════════════════════════════════════════════════════════════════
+# The `checkpoint` mode is what this exists for: there the tool stops with its own sentence, "the
+# next node opens only once you say continue", and that "continue" IS an approval of the delivery the
+# line stopped on. Written down, it lets a reader outside this tool tell "a human let this go" from
+# "the line happened to move one more step" -- the path alone cannot say which of the two it was.
+#
+# The moment belongs to ONE delivery, and the two moments on the node decide it: an approval counts
+# only at or after that delivery's completion moment. Delivering again writes the completion moment
+# afresh, so the old approval lapses by itself -- nothing is deleted, and no reader has to know that
+# a cleanup step exists.
+
+
+def _moment(value) -> datetime | None:
+    """One recorded moment read back, or `None` when it is in neither of the tree's two shapes.
+
+    Both shapes are UTC with a literal `Z`, differing only in whether the seconds carry a fraction
+    (`tools/shared/clock.py`), so ordering two of them as strings is right for a pair of one shape and
+    wrong across the two: `'...44Z'` sorts after `'...44.160813Z'` while meaning earlier. Reading them
+    as moments first is what makes one verdict out of either pair; a value in neither shape has no
+    order to give, and the caller falls back to comparing the strings it was handed.
+    """
+    if not isinstance(value, str):
+        return None
+    for shape in (_loader().load_shared('clock').ISO_FMT,
+                  _loader().load_shared('clock').ISO_FMT_SECONDS):
+        try:
+            return datetime.strptime(value, shape)
+        except ValueError:
+            pass
+    return None
+
+
+def delivery_approved(node: dict) -> bool:
+    """Did a human approve THIS delivery? The approval's moment at or after the delivery's says yes.
+
+    A node with no completion moment has no delivery for an approval to be about -- it never
+    delivered, or it was taken back out of `completed` (which drops that moment) -- so it answers no
+    whatever it carries.
+    """
+    approved, completed = node.get('approved_at'), node.get('completed_at')
+    if not approved or not completed:
+        return False
+    approved_at, completed_at = _moment(approved), _moment(completed)
+    if approved_at is not None and completed_at is not None:
+        return approved_at >= completed_at
+    return str(approved) >= str(completed)
+
+
+def approve_delivery(node: dict, at: str) -> None:
+    """Write the approval onto one node: the ONE place `approved_at` lands.
+
+    `updated_at` moves with it -- the record changed, which is the habit every other edit here has.
+    """
+    node['approved_at'] = at
+    node['updated_at'] = at
+
+
+def _delivery_refusal(uid: str, node: dict) -> str | None:
+    """Why this node has nothing to approve, in one sentence a human can act on; `None` when it has.
+
+    An approval is about a delivery: a node still in play (or one shelved after a verdict of no) has
+    not delivered, and saying yes to it would record a word about something that never happened.
+    """
+    if node.get('status') == 'completed' or node.get('completed_at'):
+        return None
+    title = node.get('title') or ''
+    return (f'node {uid}{f" ({title})" if title else ""} has not been delivered yet '
+            f'(status={node.get("status") or "todo"}, and no completion moment): there is nothing '
+            f'here to approve. What an approval is about is a delivery, and that is what closing out '
+            f'the round which delivered it writes down.')
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  Commands
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -676,6 +760,50 @@ def cmd_status(args):
         _write(data)
 
 
+def cmd_approve(args):
+    """Record that a human approved one node's delivery: the moment lands at or after its completion.
+
+    Repeating the call is allowed, and it moves the moment to the new one -- a human saying yes again
+    is saying yes about the delivery on the disk right now. An approval nobody repeats lapses on its
+    own when the node is delivered again, so nothing here has to be undone.
+    """
+    with _ledger_lock():
+        data = _read()
+        uid = _resolve_uuid(args.uuid, data)
+        node = data['nodes'][uid]
+        refusal = _delivery_refusal(uid, node)
+        if refusal:
+            print(f'Error: {refusal}', file=sys.stderr)
+            sys.exit(1)
+        approve_delivery(node, args.at or _now())
+        _write(data)
+    print(f'APPROVED: {uid} at {node["approved_at"]}')
+
+
+def approve_node(project_root, uid: str, at: str | None = None) -> str | None:
+    """`cmd_approve`'s read-verdict-write, for another tool's command rather than this CLI.
+
+    The conduct side comes through here at a checkpoint gate: the human putting a line back in service
+    is that gate's "continue", and this is where that word becomes a record. The body is the verb's,
+    so the two cannot disagree about what an approval is or where it lands; the only difference is
+    that this door configures the module for the project it was handed (the module points at one
+    project at a time), and that it answers instead of printing.
+
+    `None` means there was nothing to approve -- the node is not on this graph, or it has not
+    delivered. That is not an error to raise at a caller whose own command has already done what was
+    asked: the ledger lock is held here for the read and the write, and the moment written comes back.
+    """
+    configure(project_root)
+    with _ledger_lock():
+        data = _read()
+        node = data['nodes'].get(uid)
+        if node is None or _delivery_refusal(uid, node):
+            return None
+        approve_delivery(node, at or _now())
+        _write(data)
+        return node['approved_at']
+
+
 def cmd_revive(args):
     with _ledger_lock():
         """Put a shelved node back to todo so a later round can pick it up again.
@@ -846,6 +974,11 @@ def cmd_info(args):
         result['sessions'] = {role: note[role] for role in ('discussion', 'run')}
     if node.get('completed_at'):
         result['completed_at'] = node['completed_at']
+    # Echoed like the completion moment, and for the same reason: callers may not read ideas.json raw,
+    # so a key that does not appear here was never written. Whether an approval still counts is
+    # `delivery_approved`'s verdict, not this echo's.
+    if node.get('approved_at'):
+        result['approved_at'] = node['approved_at']
 
     print(json.dumps(result, ensure_ascii=False))
 
@@ -1113,6 +1246,15 @@ def _build_parser() -> argparse.ArgumentParser:
                         'waiting for a human (never ready, never recommended; release with '
                         'status <uuid> todo); completed = delivered')
     p.set_defaults(func=cmd_status)
+
+    # approve
+    p = subs.add_parser('approve',
+                        help="Record that a human approved one node's delivery")
+    p.add_argument('uuid', help='Node UUID')
+    p.add_argument('--at', default=None,
+                   help='The moment of the approval (default: now). Written as given, in the record '
+                        'timestamp shape: 2026-10-16T15:13:44.160813Z')
+    p.set_defaults(func=cmd_approve)
 
     # revive
     p = subs.add_parser('revive',

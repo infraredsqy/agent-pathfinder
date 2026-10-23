@@ -121,6 +121,7 @@
 | 讨论节点 | discussion node | |
 | 验证边界 | verification boundary | |
 | 错题本 / 反模式 | anti-patterns | 一份东西的两个叫法，英文合成一个 |
+| 批（一次交付） | approve / approved | 机器词是动词 `approve` |
 
 代码没定过、但每份技能都会撞上的高频词，本表选一个，别另造：
 

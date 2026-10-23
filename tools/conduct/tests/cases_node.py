@@ -345,6 +345,151 @@ class TestStopRule(Base):
         self.assertEqual(sb.path_nodes(), ids[:1])
 
 
+class TestTheApprovalAtTheGate(Base):
+    """The human's "continue" at a checkpoint gate, and what the tool writes down for it.
+
+    The gate's own sentence is that the next node opens only once the human says continue, and the
+    command they say it with -- putting the line back in service -- is also where that word becomes a
+    record: the delivery the line stopped on is approved. The approval belongs to one delivery, so a
+    delivery that comes again lapses the old one by itself.
+    """
+
+    def parked_at_the_gate(self, behind='auto'):
+        """One checkpoint node with a node behind it, the line parked at the gate."""
+        sb = self.make()
+        sb.add_node(NODE, 'UI design', mode='checkpoint')
+        sb.add_node(NODE2, 'carry on', mode=behind, deps=[NODE])
+        sb.start_cycle()
+        action, _ = self.run_to_stop(sb)
+        return sb, action
+
+    def test_releasing_the_line_approves_the_delivery_it_stopped_on(self):
+        sb, action = self.parked_at_the_gate()
+
+        self.assertEqual(action['action'], 'stop_pipeline')
+        self.assertEqual(sb.cycle()['status'], 'inactive', 'the gate parks the line')
+        self.assertNotIn('approved_at', sb.node(NODE))
+
+        sb.set_cycle_status('cyc', 'active')
+
+        node = sb.node(NODE)
+        self.assertIn('approved_at', node)
+        self.assertGreaterEqual(node['approved_at'], node['completed_at'],
+                                'an approval has to be at or after the delivery it is about')
+        self.assertEqual(node['updated_at'], node['approved_at'],
+                         'the record changed, so its own moment has to move with it')
+        self.assertNotIn('approved_at', sb.node(NODE2), 'the node behind the gate was approved too')
+
+    def test_a_line_that_ended_on_an_auto_node_records_nothing(self):
+        """Releasing a line is the gate's word, and there is no gate here: the node is left exactly
+        as it is -- not one byte, its own moment included."""
+        sb = self.ready_sandbox()
+        sb.write_signal('cyc', NODE, 'completed', 'done')
+        action = sb.close_round(NODE)
+
+        self.assertEqual(action['action'], 'stop_pipeline')
+        self.assertEqual(sb.cycle()['status'], 'inactive')
+        before = sb.node(NODE)
+
+        sb.set_cycle_status('cyc', 'active')
+
+        self.assertEqual(before, sb.node(NODE),
+                         'releasing a line that did not stop at a checkpoint gate wrote to the node')
+
+    def test_releasing_an_already_approved_gate_writes_nothing_at_all(self):
+        """The repeat: the approval is already the record of this delivery, so the second release is
+        a no-op down to the node's own moment."""
+        sb, _ = self.parked_at_the_gate()
+        sb.set_cycle_status('cyc', 'active')
+        approved = sb.node(NODE)
+
+        sb.set_cycle_status('cyc', 'inactive')
+        sb.set_cycle_status('cyc', 'active')
+
+        self.assertEqual(approved, sb.node(NODE),
+                         'the second release touched the node the first one had approved')
+
+    def test_a_gate_whose_node_did_not_deliver_records_nothing(self):
+        """The checkpoint node closed without delivering (its ticket said no, so it is shelved):
+        there is no delivery an approval could be about, so releasing the line writes nothing."""
+        sb = self.make()
+        sb.add_node(NODE, 'UI design', mode='checkpoint')
+        sb.add_node(NODE2, 'carry on', mode='auto', deps=[NODE])
+        sb.start_cycle()
+        sb.next()
+        sb.write_signal('cyc', NODE, 'failed', 'produced nothing')
+        sb.close_round(NODE)
+
+        self.assertEqual(sb.dag_status(NODE), 'shelved')
+        self.assertEqual(sb.cycle()['status'], 'inactive')
+        before = sb.node(NODE)
+
+        sb.set_cycle_status('cyc', 'active')
+
+        self.assertEqual(before, sb.node(NODE))
+
+    def test_a_node_taken_off_the_graph_does_not_fail_the_release(self):
+        """The gate's node can be gone by the time the human says continue (`rm` took it off the
+        graph, or a merge did). The release is their command and it still stands."""
+        sb, _ = self.parked_at_the_gate()
+        self.assertEqual(sb.cycle()['status'], 'inactive')
+        sb.write_dag({})
+
+        sb.set_cycle_status('cyc', 'active')
+
+        self.assertEqual(sb.cycle()['status'], 'active')
+        self.assertEqual(sb.dag()['nodes'], {})
+
+    def test_a_checkpoint_delivery_closed_on_a_line_already_out_of_service(self):
+        """The other way a line comes to hold an unapproved checkpoint delivery: the human took the
+        line out of service first, so the close only records (it writes not one word of the line's
+        status). Their release is still the gate's word, and the delivery is approved from here."""
+        sb = self.make()
+        sb.add_node(NODE, 'UI design', mode='checkpoint')
+        sb.add_node(NODE2, 'carry on', mode='auto', deps=[NODE])
+        sb.start_cycle()
+        sb.set_cycle_status('cyc', 'inactive')
+        sb.write_signal('cyc', NODE, 'completed', 'done')
+
+        action = sb.close_round(NODE)
+
+        self.assertEqual(action['action'], 'stop_pipeline')
+        self.assertIn('only records', action['reason'])
+        self.assertEqual(sb.cycle()['status'], 'inactive')
+        self.assertEqual(sb.dag_status(NODE), 'completed')
+        self.assertNotIn('approved_at', sb.node(NODE))
+
+        sb.set_cycle_status('cyc', 'active')
+
+        node = sb.node(NODE)
+        self.assertIn('approved_at', node)
+        self.assertGreaterEqual(node['approved_at'], node['completed_at'])
+
+    def test_a_gate_a_wide_line_stops_at_with_another_node_in_flight(self):
+        """A line `parallel` wide stops at this gate like any other, and the human's way back is the
+        same one command -- so the delivery is approved from here too."""
+        sb = self.make()
+        sb.add_node(NODE, 'UI design', mode='checkpoint')
+        sb.add_node(NODE2, 'in flight', mode='auto')
+        sb.start_cycle(tags=['coding'], parallel=2)
+        self.assertEqual(sorted(sb.holding_ids()), sorted([NODE, NODE2]))
+        sb.write_signal('cyc', NODE, 'completed', 'done')
+
+        action = sb.close_round(NODE)
+
+        self.assertEqual(action['action'], 'stop_pipeline')
+        self.assertIn('checkpoint', action['reason'])
+        self.assertEqual(sb.cycle()['status'], 'inactive')
+        self.assertEqual(sb.holding_ids(), [NODE2], 'the other node is still in hand')
+
+        sb.set_cycle_status('cyc', 'active')
+
+        node = sb.node(NODE)
+        self.assertIn('approved_at', node)
+        self.assertGreaterEqual(node['approved_at'], node['completed_at'])
+        self.assertNotIn('approved_at', sb.node(NODE2))
+
+
 class TestAttention(Base):
     """What a human has to look at travels with the stop package; nothing else can carry it."""
 

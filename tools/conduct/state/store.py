@@ -280,6 +280,33 @@ def _read_dag(project: str | None = None) -> dict:
     return data.get('nodes') or {}
 
 
+#: `dag-manage.py` -- the graph's own writer. This tool reads `ideas.json` itself (`_read_dag`) and
+#: writes it never, with ONE exception: the approval a human's "continue" leaves on the node a
+#: checkpoint gate stopped on. That write goes through the graph's own command, so `ideas.json` still
+#: has exactly one writer. Where that file lives is `tools/shared/toolpath.py`'s rule, the same one
+#: the pipeline and the merge driver resolve their own copy with.
+DAG_MANAGE = _loader().load_shared('toolpath').tool_path(
+    'DSH_CONDUCT_DAG_MANAGE', HERE.parent / 'dag' / 'dag-manage.py')
+
+_DAG_MANAGE = None
+
+
+def dag_manage():
+    """`dag-manage.py` loaded by path: the door the checkpoint gate's approval is written through.
+
+    One private copy per process of THIS package -- never registered under a name another loader asks
+    for, because the graph's tool points at one project at a time and `approve_node` re-points it on
+    every call: two throwaway projects in one process cost a load each time this package is loaded
+    fresh, and nothing of the first project's binding survives into the second.
+    """
+    global _DAG_MANAGE
+    if _DAG_MANAGE is None:
+        if not DAG_MANAGE.exists():
+            raise FileNotFoundError(f'dag-manage.py not found at {DAG_MANAGE}')
+        _DAG_MANAGE = _loader().load_by_path('pf_state_dag_manage', DAG_MANAGE)
+    return _DAG_MANAGE
+
+
 def _instructions_path(project: str | None = None) -> Path:
     """Where the standing instruction list lands: the list is part of the ledger, so it is
     `<project>/.pf/instructions.json`."""

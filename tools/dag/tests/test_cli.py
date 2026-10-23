@@ -52,6 +52,11 @@ A = 'aaaaaaaa-1111-4111-8111-111111111111'
 B = 'aaaaaaaa-2222-4222-8222-222222222222'
 OTHER = 'bbbbbbbb-3333-4333-8333-333333333333'
 
+#: The moments the approval cases write down, in the shape a node's own timestamps carry
+#: (microseconds): one delivery, and one moment after it.
+DELIVERED_AT = '2026-03-01T10:00:00.000000Z'
+LATER = '2026-03-01T10:00:01.000000Z'
+
 
 def child_env() -> dict:
     """Every child process leaves as UTF-8; the host's session variable is dropped along the way, so
@@ -134,6 +139,7 @@ class TestThePrefixVerdict(ProjectCase):
                      ['depend', 'aaaaaaaa', '--on', OTHER],
                      ['depend', OTHER, '--on', 'aaaaaaaa'],
                      ['status', 'aaaaaaaa', 'completed'],
+                     ['approve', 'aaaaaaaa'],
                      ['update', 'aaaaaaaa', '--title', 'x'],
                      ['revive', 'aaaaaaaa'],
                      ['info', 'aaaaaaaa'],
@@ -235,6 +241,138 @@ class TestTheDependencyVerdict(ProjectCase):
 
         self.assertEqual(0, code, err or out)
         self.assertEqual([self.D1, self.D2], self.deps())
+
+
+class TestTheApproval(ProjectCase):
+    """`approve`: the moment a human passed one delivery, and what that moment is measured against.
+
+    The approval belongs to ONE delivery -- it counts only at or after the node's own completion
+    moment -- so the record answers whether it counts, and a delivery that comes again lapses the old
+    approval without anything having to be deleted.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.write_graph({
+            A: {'title': 'delivered', 'status': 'completed', 'mode': 'checkpoint',
+                'dependencies': [], 'created_at': DELIVERED_AT, 'updated_at': DELIVERED_AT,
+                'completed_at': DELIVERED_AT},
+            B: {'title': 'still to do', 'status': 'todo', 'mode': 'auto', 'dependencies': []},
+        })
+
+    def node(self, uid) -> dict:
+        return self.graph()['nodes'][uid]
+
+    def ideas_bytes(self) -> bytes:
+        return (self.root / '.pf' / 'ideas.json').read_bytes()
+
+    def test_the_moment_lands_on_a_delivered_node(self):
+        code, out, err = run(self.root, 'approve', A)
+
+        self.assertEqual(0, code, err or out)
+        self.assertIn(f'APPROVED: {A}', out)
+        node = self.node(A)
+        self.assertRegex(node['approved_at'], SHAPE)
+        self.assertGreaterEqual(node['approved_at'], node['completed_at'],
+                                'an approval has to be at or after the delivery it is about')
+        self.assertEqual(node['updated_at'], node['approved_at'],
+                         'the record changed, so its own moment has to move with it')
+
+    def test_the_call_may_name_the_moment(self):
+        code, out, err = run(self.root, 'approve', A, '--at', LATER)
+
+        self.assertEqual(0, code, err or out)
+        self.assertEqual(LATER, self.node(A)['approved_at'])
+
+    def test_repeating_the_call_moves_the_moment(self):
+        """Saying yes again is saying yes about the delivery on the disk right now -- allowed, and
+        not refused as a second answer to the same question."""
+        run(self.root, 'approve', A, '--at', DELIVERED_AT)
+
+        code, out, err = run(self.root, 'approve', A, '--at', LATER)
+
+        self.assertEqual(0, code, err or out)
+        self.assertEqual(LATER, self.node(A)['approved_at'])
+
+    def test_a_node_that_has_not_delivered_is_refused(self):
+        before = self.ideas_bytes()
+
+        code, out, err = run(self.root, 'approve', B)
+
+        self.assertEqual(1, code, out or err)
+        self.assertIn('has not been delivered', err)
+        self.assertEqual(before, self.ideas_bytes(),
+                         'a refused approval still wrote to the graph')
+
+    def test_a_node_that_names_nobody_is_refused(self):
+        code, out, err = run(self.root, 'approve', 'dddddddd')
+
+        self.assertEqual(1, code)
+        self.assertIn('not found', err)
+
+    def test_info_reads_the_moment_back(self):
+        run(self.root, 'approve', A, '--at', LATER)
+
+        code, out, err = run(self.root, 'info', A)
+
+        self.assertEqual(0, code, err or out)
+        self.assertEqual(LATER, json.loads(out)['approved_at'])
+
+    def test_a_second_delivery_lapses_the_old_approval(self):
+        """The shape a lapse is read off: delivering again pushes the completion moment past the
+        approval, and nothing had to be deleted for it."""
+        run(self.root, 'approve', A, '--at', DELIVERED_AT)
+
+        code, out, err = run(self.root, 'status', A, 'completed')
+
+        self.assertEqual(0, code, err or out)
+        node = self.node(A)
+        self.assertGreater(node['completed_at'], node['approved_at'])
+        self.assertFalse(load_module().delivery_approved(node),
+                         'the approval of the previous delivery still reads as this one\'s')
+
+
+class TestTheDeliveryVerdict(ProjectCase):
+    """The two moments on a node are the whole judgement, and it is made between moments.
+
+    `approved_at` may be written in either of the tree's two timestamp shapes (a human names one with
+    `--at`), while the node's own completion moment is always the microsecond one -- so the pair has
+    to be read as moments, not compared as words.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.mod = load_module()
+
+    def test_an_approval_counts_at_or_after_its_own_delivery(self):
+        for approved, expected in ((DELIVERED_AT, True),
+                                   (LATER, True),
+                                   ('2026-03-01T09:59:59.000000Z', False)):
+            with self.subTest(approved=approved):
+                self.assertIs(expected, self.mod.delivery_approved(
+                    {'completed_at': DELIVERED_AT, 'approved_at': approved}))
+
+    def test_without_a_delivery_moment_there_is_nothing_to_approve(self):
+        """A node that never delivered -- or one taken back out of `completed`, which drops its
+        completion moment -- answers no whatever it carries."""
+        for node in ({'approved_at': LATER},
+                     {'approved_at': LATER, 'completed_at': None},
+                     {'completed_at': DELIVERED_AT},
+                     {}):
+            with self.subTest(node=node):
+                self.assertFalse(self.mod.delivery_approved(node))
+
+    def test_the_two_recorded_shapes_compare_as_moments_not_as_words(self):
+        """The pair this verdict exists to get right: approved at the same second but half of it
+        earlier. As words `'...00Z'` sorts AFTER `'...00.500000Z'`, so a string compare would read
+        this approval as the delivery's."""
+        node = {'completed_at': '2026-03-01T10:00:00.500000Z',
+                'approved_at': '2026-03-01T10:00:00Z'}
+
+        self.assertFalse(self.mod.delivery_approved(node))
+        self.assertTrue(str(node['approved_at']) > str(node['completed_at']),
+                        'this pair is where the bare string compare answers the other way: the '
+                        'verdict must not be on that road')
 
 
 class TestTheSpecLanding(ProjectCase):

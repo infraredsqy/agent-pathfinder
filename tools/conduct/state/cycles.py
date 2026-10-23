@@ -11,8 +11,8 @@ from pathlib import Path
 
 from .store import (CYCLE_VALID_STATUSES, PARALLEL_DEFAULT, VALID_NODE_RESULTS,
                     _find_cycle, _holding_ids, _holding_of, _ledger_lock, _loader, _now,
-                    _read_signal, _read_state, _resolve_project_root, _set_holding, _signal_path,
-                    _write_signal, _write_state, ledger_dir_for)
+                    _read_dag, _read_signal, _read_state, _resolve_project_root, _set_holding,
+                    _signal_path, _write_signal, _write_state, dag_manage, ledger_dir_for)
 from .pipeline_loader import _load_pipeline
 
 
@@ -554,12 +554,57 @@ def cmd_cycle_close(cycle_id: str, node_id: str, result: str) -> None:
           f'(path is now {len(cycle["path"])} step(s))')
 
 
+def _approve_gate_delivery(cycle: dict, project: str | None = None) -> None:
+    """Record the human's "continue" at a checkpoint gate, on the node that gate stopped on.
+
+    **Putting the line back in service IS that word.** The tool's own sentence when it stops on a
+    `checkpoint` node is "the next node opens only once you say continue", and there is nothing else
+    the human has to say: this command is the whole of their answer. Written down on the node, it
+    lets a reader outside this tool tell "a human passed this delivery" from "the line happened to
+    move one more step" -- and the path alone cannot say which of the two it was.
+
+    Everything read here is read off the disk: the last step the line put down (the last record on
+    `path` that ended) and that node's own mode. Anything else -- a line whose last step down was an
+    `auto` or `manual` node, a node since taken off the graph, a node that never delivered -- gets
+    not one byte written: the graph's own door judges whether there is a delivery to approve at all
+    (`approve_node` answers "nothing was written"). The approval belongs to one delivery, so an old
+    one lapses by itself when the node is delivered again: **re-approving is the case that must not
+    be written at all**, the node's `updated_at` included.
+
+    Best effort from the write on: this rides along a command that has already done what the human
+    asked for, so a graph write that will not go warns one line and leaves that command standing.
+    """
+    ended = [step for step in (cycle.get('path') or [])
+             if step.get('ended_at') and step.get('node')]
+    if not ended:
+        return
+    node_id = ended[-1]['node']
+    # A node that never wrote a mode is not `checkpoint` (the graph's own default is `auto`).
+    node = (_read_dag(project) or {}).get(node_id) or {}
+    if node.get('mode') != 'checkpoint':
+        return
+    try:
+        dag = dag_manage()
+        if dag.delivery_approved(node):
+            return
+        dag.approve_node(ledger_dir_for(project).parent, node_id)
+    except OSError as e:
+        print(f'Warning: the approval of {node_id[:8]} was not written: {e}', file=sys.stderr)
+
+
 def cmd_cycle_status(cycle_id: str, status: str) -> None:
     """Put a line into service, or take it out.
 
     Only `active` / `inactive` land in the record: why a line stopped is written in the reason at
     the moment it stopped, and the status only answers "should it move on". This command is also
     the hand a human uses to pull a line back up -- the tool itself never writes `active`.
+
+    **Pulling a line up is the human's own word at a checkpoint gate**, and that word is written down
+    where it belongs: `_approve_gate_delivery` runs on the way in. A line that was already in service
+    has no moment here to record, and nothing is written for it. It runs BEFORE the line's own write,
+    so a graph this command cannot read stops with nothing changed -- the human fixes that and runs
+    the command again, and the approval still lands. (The other way round, the line would be in
+    service and the re-run would have no moment left to record it in.)
     """
     if status not in CYCLE_VALID_STATUSES:
         print(f'Error: cycle status must be one of {sorted(CYCLE_VALID_STATUSES)}', file=sys.stderr)
@@ -568,6 +613,9 @@ def cmd_cycle_status(cycle_id: str, status: str) -> None:
     with _ledger_lock():
         state = _read_state()
         cycle = _find_cycle(state, cycle_id)
+        was_in_service = cycle.get('status') == 'active'
+        if status == 'active' and not was_in_service:
+            _approve_gate_delivery(cycle)
         cycle['status'] = status
         cycle['updated_at'] = _now()
         _write_state(state)
