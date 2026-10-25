@@ -71,7 +71,8 @@ def marker_path(root, cycle):
 
 
 # The two tables the dispatcher touches, as the desktop ships them. Spelled out rather than trimmed:
-# a column this row forgets is exactly the failure the DDL is here to catch.
+# a column this row forgets is exactly the failure the DDL is here to catch. The three project
+# tables are the shape `project_for` reads its one link from.
 AUTOMATIONS_DDL = """
 CREATE TABLE automations (
   automation_id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '',
@@ -79,6 +80,7 @@ CREATE TABLE automations (
   mode TEXT, thought_level TEXT, model_selection TEXT,
   workspace_key TEXT NOT NULL, workspace_path TEXT NOT NULL, workspace_identity TEXT,
   target_task_id TEXT, bot_delivery_target TEXT,
+  project_id TEXT, host_id TEXT, additional_directories TEXT,
   location_kind TEXT NOT NULL DEFAULT 'local', recurring INTEGER NOT NULL DEFAULT 1,
   max_runs INTEGER, end_at INTEGER, schedule_rule TEXT,
   schedule_edited_by_user INTEGER NOT NULL DEFAULT 0,
@@ -102,7 +104,24 @@ CREATE TABLE tasks (
   deleted INTEGER NOT NULL DEFAULT 0, title_overridden INTEGER NOT NULL DEFAULT 0,
   meta_json TEXT NOT NULL DEFAULT '{}', searchable_text TEXT NOT NULL DEFAULT '',
   cron_automation_id TEXT, off_peak_task_id TEXT,
+  host_id TEXT, root_path TEXT, project_id TEXT,
   PRIMARY KEY (workspace_key, task_id))
+"""
+
+PROJECT_DDL = """
+CREATE TABLE hosts (
+  host_id TEXT PRIMARY KEY, kind TEXT NOT NULL, target_json TEXT,
+  membership_id TEXT, position INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE projects (
+  project_id TEXT PRIMARY KEY, host_id TEXT NOT NULL, name TEXT NOT NULL,
+  name_overridden INTEGER NOT NULL DEFAULT 0, position INTEGER NOT NULL DEFAULT 0,
+  pinned INTEGER NOT NULL DEFAULT 0, pinned_at INTEGER,
+  deleted INTEGER NOT NULL DEFAULT 0, deleted_at INTEGER,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE project_roots (
+  project_id TEXT NOT NULL, root_path TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0, is_primary INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (project_id, root_path));
 """
 
 
@@ -123,8 +142,9 @@ def zcode_sandbox(test, node_id=None):
     (root / 'sandbox' / '.zcode' / 'v2').mkdir(parents=True)
     db = root / 'sandbox' / '.zcode' / 'v2' / 'tasks-index.sqlite'
     con = sqlite3.connect(str(db))
-    con.execute(AUTOMATIONS_DDL)
-    con.execute(TASKS_DDL)
+    con.executescript(AUTOMATIONS_DDL)
+    con.executescript(TASKS_DDL)
+    con.executescript(PROJECT_DDL)
     con.commit()
     con.close()
     ws = root / 'ws'
@@ -602,6 +622,99 @@ class TestSessionMatch(unittest.TestCase):
                     (str(ws), str(ws), task_id, title, created_at, created_at, cron_id))
         con.commit()
         con.close()
+
+    def add_project(self, db, ws, project_id='proj-1', deleted=0):
+        """One desktop project whose single root is this workspace."""
+        now = int(time.time() * 1000)
+        con = sqlite3.connect(str(db))
+        con.execute("insert or ignore into hosts (host_id, kind) values ('local', 'local')")
+        con.execute('insert into projects (project_id, host_id, name, created_at, updated_at, '
+                    'deleted) values (?,?,?,?,?,?)', (project_id, 'local', 'proj', now, now,
+                                                      deleted))
+        con.execute('insert into project_roots (project_id, root_path) values (?,?)',
+                    (project_id, str(ws)))
+        con.commit()
+        con.close()
+
+    # ── the project the GUI hangs the session under ──────────────────────────
+
+    def test_the_row_carries_the_workspace_project(self):
+        """A workspace the desktop keeps one project for: the queued row names it and the local
+        host, so the session is born where the GUI can render it."""
+        db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
+        self.add_project(db, ws)
+        proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        con = sqlite3.connect(str(db))
+        project_id, host_id = con.execute(
+            'select project_id, host_id from automations').fetchone()
+        con.close()
+        self.assertEqual(project_id, 'proj-1')
+        self.assertEqual(host_id, 'local')
+
+    def test_a_workspace_without_a_project_queues_unlinked(self):
+        db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
+        proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        con = sqlite3.connect(str(db))
+        project_id, host_id = con.execute(
+            'select project_id, host_id from automations').fetchone()
+        con.close()
+        self.assertIsNone(project_id)
+        self.assertIsNone(host_id)
+
+    def test_an_ambiguous_project_is_left_unlinked(self):
+        """Two projects on one root: the desktop's own rule reads that as not disambiguated."""
+        db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
+        self.add_project(db, ws, 'proj-1')
+        self.add_project(db, ws, 'proj-2')
+        proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        con = sqlite3.connect(str(db))
+        project_id, = con.execute('select project_id from automations').fetchone()
+        con.close()
+        self.assertIsNone(project_id)
+
+    def test_the_wait_links_the_session_row_to_the_project(self):
+        """The link-back beat: the session lands unlinked (the v3.16 shape), the dispatcher's wait
+        sees it and fills the project -- the row then renders in the GUI's project list."""
+        db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
+        self.add_project(db, ws)
+        proc = subprocess.Popen(
+            [sys.executable, '-X', 'utf8', str(DISPATCHER), '--prompt-file', str(prompt),
+             '--workspace', str(ws), '--verify-seconds', '20'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8',
+            errors='replace', env=env)
+        time.sleep(2.0)
+        self.insert_task(db, ws, 'session_mid', int(time.time() * 1000),
+                         title=self.PROMPT_TITLE)
+        out, err = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0, err)
+        self.assertIn('session: session_mid', out)
+        con = sqlite3.connect(str(db))
+        project_id, = con.execute(
+            'select project_id from tasks where task_id=?', ('session_mid',)).fetchone()
+        con.close()
+        self.assertEqual(project_id, 'proj-1')
+
+    def test_the_link_back_never_overwrites_a_project_the_desktop_set(self):
+        db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
+        self.add_project(db, ws, 'proj-desktop')
+        now = int(time.time() * 1000)
+        self.insert_task(db, ws, 'session_linked', now, title=self.PROMPT_TITLE)
+        con = sqlite3.connect(str(db))
+        con.execute('update tasks set project_id=? where task_id=?',
+                    ('proj-already', 'session_linked'))
+        con.commit()
+        con.close()
+        module = dispatcher()
+        module.INDEX_PATH = db  # the helper opens the module path; point it at the sandbox
+        module.link_task_project(str(ws), 'session_linked')
+        con = sqlite3.connect(str(db))
+        project_id, = con.execute(
+            'select project_id from tasks where task_id=?', ('session_linked',)).fetchone()
+        con.close()
+        self.assertEqual(project_id, 'proj-already')
 
     # ── the two matchers ─────────────────────────────────────────────────────
 

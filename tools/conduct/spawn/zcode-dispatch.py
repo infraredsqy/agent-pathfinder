@@ -43,7 +43,9 @@ projects it, and otherwise on its `title` -- the prompt's first line -- inside t
 queued the row, created no earlier than the queue moment: since v3.16 the host-side createTask
 writes neither the column nor a `cronAutomationId` into `meta_json`, so a matcher reading only the
 column reports "no session appeared" while the session runs headless -- and the caller's retry then
-boots a second one onto the same node. That is what makes this spawner mean the same thing
+boots a second one onto the same node. On success the dispatcher also gives the task row the
+workspace's project, which is what the GUI's task list hangs a row under (`link_task_project`).
+That is what makes this spawner mean the same thing
 `dsh-spawn.ps1` means: a session exists now. `--no-verify` writes the row and leaves.
 
 Output and failure
@@ -130,6 +132,7 @@ COLUMNS = (
     'schedule_edited_by_user', 'run_count', 'scheduled_run_count', 'enabled', 'lifecycle_status',
     'next_run_at', 'last_run_at', 'running', 'claimed_at', 'dispatch_status', 'dispatch_attempts',
     'retry_at', 'last_error', 'mode', 'thought_level', 'created_at', 'updated_at',
+    'project_id', 'host_id',
 )
 
 
@@ -265,6 +268,25 @@ def task_row(con: sqlite3.Connection, workspace: str, automation_id: str,
     return row[0] if row else None
 
 
+def project_for(con: sqlite3.Connection, workspace: str) -> str | None:
+    """The one project the desktop keeps for this workspace root, or None.
+
+    The GUI's task list renders per project, and a task row joins one through its `project_id` --
+    a row without one shows nowhere. The desktop links a task by finding the single undeleted
+    project whose root is this exact path (its own `uniqueRootProject`): two candidates read as
+    "the user has not disambiguated", so no link. Same shape for the host: a local workspace
+    belongs to the `local` host.
+    """
+    try:
+        rows = con.execute(
+            'select p.project_id from projects p join project_roots r using(project_id) '
+            "where p.host_id='local' and p.deleted=0 and r.root_path=? limit 2",
+            (workspace,)).fetchall()
+    except sqlite3.OperationalError:
+        return None
+    return rows[0][0] if len(rows) == 1 else None
+
+
 def queue(workspace: Path, prompt_file: Path, next_run_at: int, title: str,
           mode: str = DEFAULT_MODE, model_selection: str = 'null',
           allow_existing: bool = False) -> str:
@@ -279,6 +301,11 @@ def queue(workspace: Path, prompt_file: Path, next_run_at: int, title: str,
     is refused unless `allow_existing`; a row the scheduler already retired
     (`failed_to_dispatch`) does not count as pending or in-flight, which is what makes the
     documented rescue re-queue legal.
+    The row also carries the workspace's project (`project_id`, with `host_id='local'`) when the
+    desktop has exactly one project for this root: the scheduler forwards it into the session's
+    `createTask`, which is how a session the GUI queues under a project is born -- and how this
+    one shows up in the same place. A workspace with no (or ambiguous) project queues with both
+    columns null, exactly the row this file wrote before the project columns existed.
     """
     if not INDEX_PATH.is_file():
         raise SystemExit(f'no ZCode task index at {INDEX_PATH}: this host has no ZCode desktop '
@@ -286,14 +313,6 @@ def queue(workspace: Path, prompt_file: Path, next_run_at: int, title: str,
     prompt = prompt_file.read_text(encoding='utf-8')
     now = int(time.time() * 1000)
     automation_id = 'automation-' + str(uuid.uuid4())
-    values = (
-        automation_id, title, cron_for(next_run_at), prompt, None, None, model_selection,
-        str(workspace), str(workspace), None, None,
-        None, 'local', 0, 1, None, None,
-        0, 0, 0, 1, 'active',
-        next_run_at, None, 0, None, 'idle', 0,
-        None, None, mode, None, now, now,
-    )
     placeholders = ','.join('?' * len(COLUMNS))
     statement = f"insert into automations ({','.join(COLUMNS)}) values ({placeholders})"
     con = connect()
@@ -301,6 +320,16 @@ def queue(workspace: Path, prompt_file: Path, next_run_at: int, title: str,
         # `begin immediate` takes the write lock up front, so the dedup read and the insert are one
         # atomic step: two concurrent queue() calls serialize, and the loser sees the winner's row.
         con.execute('begin immediate')
+        project_id = project_for(con, str(workspace))
+        values = (
+            automation_id, title, cron_for(next_run_at), prompt, None, None, model_selection,
+            str(workspace), str(workspace), None, None,
+            None, 'local', 0, 1, None, None,
+            0, 0, 0, 1, 'active',
+            next_run_at, None, 0, None, 'idle', 0,
+            None, None, mode, None, now, now,
+            project_id, 'local' if project_id else None,
+        )
         pending = con.execute(
             'select automation_id from automations where workspace_key=? and title=? '
             "and enabled=1 and running=0 and lifecycle_status='active' and run_count=0 "
@@ -394,6 +423,27 @@ def automation_state(automation_id: str) -> dict:
         con.close()
 
 
+def link_task_project(workspace: str, task_id: str) -> None:
+    """Give the session's task row the workspace's project, when it lacks one.
+
+    Since v3.16 the desktop links the tasks it creates from its own UI to their project but leaves
+    cron-created ones unlinked, and an unlinked row renders in no project's list. The desktop's own
+    writers never touch the column afterwards, so one fill here sticks; when the row already
+    carries a project (desktop fixed, or none resolvable) nothing is written.
+    """
+    con = connect()
+    try:
+        project_id = project_for(con, workspace)
+        if project_id:
+            con.execute('update tasks set project_id=? where task_id=? and project_id is null',
+                        (project_id, task_id))
+            con.commit()
+    except sqlite3.OperationalError:
+        pass  # the row is the desktop's to relink; a busy index is not worth a failed dispatch
+    finally:
+        con.close()
+
+
 def wait_for_session(automation_id: str, seconds: float, workspace: str,
                      title_hint: str | None, since_ms: int) -> tuple[str | None, str]:
     """Poll for the session. Returns `(session_id_or_None, why)`.
@@ -481,6 +531,7 @@ def main() -> None:
                 prompt_title(prompt_file.read_text(encoding='utf-8')), now - 2000)
             if not session_id:
                 raise SystemExit(f'queued {automation_id} but {why}')
+            link_task_project(str(workspace), session_id)
         else:
             why = 'scheduled, not waited for'
     else:
