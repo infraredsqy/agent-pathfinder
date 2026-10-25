@@ -36,10 +36,15 @@ Waiting, and what it buys
 -------------------------
 Writing the row proves nothing: the desktop claims it on its next poll, and if no window is open
 there is no host to dispatch to, so the row lands in `failed_to_dispatch` and retires without a
-session ever existing. So the default is to poll the same database for the `tasks` row whose
-`cron_automation_id` is ours, and to exit non-zero if it does not appear inside
-`--verify-seconds` (default 30, one poll interval plus room). That is what makes this spawner mean
-the same thing `dsh-spawn.ps1` means: a session exists now. `--no-verify` writes the row and leaves.
+session ever existing. So the default is to poll the same database for the `tasks` row the desktop
+created for it, and to exit non-zero if it does not appear inside `--verify-seconds` (default 30,
+one poll interval plus room). That row is matched on `cron_automation_id` where the desktop still
+projects it, and otherwise on its `title` -- the prompt's first line -- inside the workspace that
+queued the row, created no earlier than the queue moment: since v3.16 the host-side createTask
+writes neither the column nor a `cronAutomationId` into `meta_json`, so a matcher reading only the
+column reports "no session appeared" while the session runs headless -- and the caller's retry then
+boots a second one onto the same node. That is what makes this spawner mean the same thing
+`dsh-spawn.ps1` means: a session exists now. `--no-verify` writes the row and leaves.
 
 Output and failure
 ------------------
@@ -216,6 +221,50 @@ def connect() -> sqlite3.Connection:
     return con
 
 
+def prompt_title(prompt: str) -> str | None:
+    """The title the desktop gives a task created from this prompt: its first line.
+
+    That is what shows in the `tasks` row's `title` column for sessions the host creates (the
+    automation's own `title` is a different thing -- the GUI grouping label). Empty text and a
+    blank first line both read as "no hint".
+    """
+    lines = prompt.strip().splitlines()
+    if not lines:
+        return None
+    title = lines[0].strip()
+    return title or None
+
+
+def task_row(con: sqlite3.Connection, workspace: str, automation_id: str,
+             title_hint: str | None, since_ms: int | None = None) -> str | None:
+    """The task row the desktop created for an automation, by either matcher.
+
+    `cron_automation_id` is the identity the desktop used to project onto the row; since v3.16 the
+    host-side createTask writes neither it nor a `cronAutomationId` into `meta_json`, so a row whose
+    `title` is the prompt's first line counts too. `since_ms` bounds how recent the row must be --
+    the queue moment, when the caller can tell this dispatch's session from the node's history.
+    Without the bound every generation counts, which is what the claim-to-task seam wants: any
+    written row means the claim is not the sessionless race, and the freshness check re-asks the
+    age. Either matcher finding nothing means the session has not landed yet -- the only answer
+    "not found" is allowed to give, because the desktop writes the row after the session exists.
+    """
+    clauses = ['workspace_key=?']
+    params: list = [workspace]
+    if title_hint:
+        clauses.append('(cron_automation_id=? or title=?)')
+        params.extend((automation_id, title_hint))
+    else:
+        clauses.append('cron_automation_id=?')
+        params.append(automation_id)
+    if since_ms is not None:
+        clauses.append('created_at>=?')
+        params.append(since_ms)
+    row = con.execute(
+        'select task_id from tasks where %s order by created_at desc limit 1'
+        % ' and '.join(clauses), params).fetchone()
+    return row[0] if row else None
+
+
 def queue(workspace: Path, prompt_file: Path, next_run_at: int, title: str,
           mode: str = DEFAULT_MODE, model_selection: str = 'null',
           allow_existing: bool = False) -> str:
@@ -264,26 +313,40 @@ def queue(workspace: Path, prompt_file: Path, next_run_at: int, title: str,
                 f'boot two sessions onto one node; if that row is stale, delete it in the desktop '
                 f'and queue again (or pass --allow-existing).')
         claimed = con.execute(
-            'select a.automation_id from automations a '
+            'select a.automation_id, a.prompt, a.claimed_at from automations a '
             'where a.workspace_key=? and a.title=? '
             'and a.claimed_at is not null and a.claimed_at > ? '
             "and a.dispatch_status<>'failed_to_dispatch' "
-            'and not exists (select 1 from tasks t where t.cron_automation_id = a.automation_id) '
             'order by a.claimed_at desc limit 1',
             (str(workspace), title, now - SESSION_FRESH_MS)).fetchone()
-        if claimed and not allow_existing:
+        # The claim-to-task seam: a claimed row misses the pending check, and until the host writes
+        # its tasks row there is no session for the freshness check to see -- block only while no
+        # generation of this node's session has landed at all (any-age lookup on purpose; the age
+        # itself is the freshness beat's question).
+        if claimed and not allow_existing and not task_row(
+                con, str(workspace), claimed[0], prompt_title(claimed[1])):
             con.rollback()
             raise SystemExit(
                 f'a row for this node was just claimed: {claimed[0]} (claimed within the last '
                 f'{SESSION_FRESH_MS // 60000} min, its session not written yet). A second row '
                 f'would boot two sessions onto one node; wait for the session to appear, or pass '
                 f'--allow-existing if that claim is dead.')
+        stored = con.execute(
+            'select automation_id, prompt from automations where workspace_key=? and title=? '
+            'order by created_at desc limit 8', (str(workspace), title)).fetchall()
+        hints = {prompt_title(row[1]) for row in stored} | {prompt_title(prompt)}
+        hints.discard(None)
+        clauses, params = [], [str(workspace), now - SESSION_FRESH_MS]
+        if stored:
+            clauses.append('cron_automation_id in (%s)' % ','.join('?' * len(stored)))
+            params.extend(row[0] for row in stored)
+        if hints:
+            clauses.append('title in (%s)' % ','.join('?' * len(hints)))
+            params.extend(sorted(hints))
         fresh = con.execute(
-            'select t.task_id from tasks t join automations a '
-            'on t.cron_automation_id = a.automation_id '
-            'where a.workspace_key=? and a.title=? and t.created_at > ? '
-            'order by t.created_at desc limit 1',
-            (str(workspace), title, now - SESSION_FRESH_MS)).fetchone()
+            'select task_id from tasks where workspace_key=? and created_at>? '
+            'and (%s) order by created_at desc limit 1' % ' or '.join(clauses),
+            params).fetchone() if clauses else None
         if fresh and not allow_existing:
             con.rollback()
             raise SystemExit(
@@ -300,13 +363,16 @@ def queue(workspace: Path, prompt_file: Path, next_run_at: int, title: str,
     return automation_id
 
 
-def session_for(automation_id: str) -> str | None:
-    """The session the desktop created for this row, if it has got that far."""
+def session_for(automation_id: str, workspace: str, title_hint: str | None,
+                since_ms: int) -> str | None:
+    """The session the desktop created for this row, if it has got that far.
+
+    The task row is matched by either identity (see `task_row`): the cron column where the desktop
+    still projects it, else the prompt's first line as the task title inside this workspace.
+    """
     con = connect()
     try:
-        row = con.execute('select task_id from tasks where cron_automation_id=? '
-                          'order by created_at desc limit 1', (automation_id,)).fetchone()
-        return row[0] if row else None
+        return task_row(con, workspace, automation_id, title_hint, since_ms)
     except sqlite3.OperationalError:
         return None
     finally:
@@ -328,7 +394,8 @@ def automation_state(automation_id: str) -> dict:
         con.close()
 
 
-def wait_for_session(automation_id: str, seconds: float) -> tuple[str | None, str]:
+def wait_for_session(automation_id: str, seconds: float, workspace: str,
+                     title_hint: str | None, since_ms: int) -> tuple[str | None, str]:
     """Poll for the session. Returns `(session_id_or_None, why)`.
 
     The wait is the desktop's own poll interval plus room, and there is no event to hang it on: the
@@ -336,7 +403,7 @@ def wait_for_session(automation_id: str, seconds: float) -> tuple[str | None, st
     """
     deadline = time.monotonic() + max(0.0, seconds)
     while True:
-        session_id = session_for(automation_id)
+        session_id = session_for(automation_id, workspace, title_hint, since_ms)
         if session_id:
             return session_id, 'created'
         if time.monotonic() >= deadline:
@@ -409,7 +476,9 @@ def main() -> None:
     if args.verify:
         # A schedule for later cannot be verified now; only a row that is due can be waited on.
         if next_run_at <= now + 1000:
-            session_id, why = wait_for_session(automation_id, args.verify_seconds)
+            session_id, why = wait_for_session(
+                automation_id, args.verify_seconds, str(workspace),
+                prompt_title(prompt_file.read_text(encoding='utf-8')), now - 2000)
             if not session_id:
                 raise SystemExit(f'queued {automation_id} but {why}')
         else:

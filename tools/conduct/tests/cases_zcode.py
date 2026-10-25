@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cases_base import pipeline
 from harness import _child_env, run_argv  # noqa: E402
 
-__all__ = ['TestSpawnerChoice', 'TestQueueDedup']
+__all__ = ['TestSpawnerChoice', 'TestQueueDedup', 'TestSessionMatch']
 
 CONDUCT_DIR = Path(pipeline.__file__).resolve().parent
 DISPATCHER = CONDUCT_DIR / 'spawn' / 'zcode-dispatch.py'
@@ -135,6 +135,18 @@ def zcode_sandbox(test, node_id=None):
     env = dict(_child_env(), ZCODE_DATA_BASE_DIR=str(root / 'sandbox'),
                DSH_CONDUCT_SPAWN_AT='')
     return db, ws, prompt, env
+
+
+def dispatcher():
+    """The dispatcher, imported -- for the constants a test should *follow*, not pin.
+
+    The model lives behind a one-word switch (`MODEL_CHOICES` / `DEFAULT_MODEL`); a test that
+    hard-codes the active name would turn flipping that switch into a test edit.
+    """
+    spec = importlib_util.spec_from_file_location('zcode_dispatch', DISPATCHER)
+    module = importlib_util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class TestSpawnerChoice(unittest.TestCase):
@@ -293,17 +305,6 @@ class TestSpawnerChoice(unittest.TestCase):
 
     # ── that one row ─────────────────────────────────────────────────────────
 
-    def dispatcher(self):
-        """The dispatcher, imported -- for the constants a test should *follow*, not pin.
-
-        The model lives behind a one-word switch (`MODEL_CHOICES` / `DEFAULT_MODEL`); a test that
-        hard-codes the active name would turn flipping that switch into a test edit.
-        """
-        spec = importlib_util.spec_from_file_location('zcode_dispatch', DISPATCHER)
-        module = importlib_util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-
     def test_it_writes_one_row_that_means_one_session(self):
         db, ws, prompt, env = zcode_sandbox(self)
         proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
@@ -325,11 +326,11 @@ class TestSpawnerChoice(unittest.TestCase):
         # picker last pointed at" is not an answer a caller can budget. Which name it is comes from
         # the switch, and the row must carry exactly that -- including the `$level` the desktop
         # insists on.
-        dispatcher = self.dispatcher()
-        self.assertIn(dispatcher.DEFAULT_MODEL, dispatcher.MODEL_CHOICES.values(),
+        dispatch = dispatcher()
+        self.assertIn(dispatch.DEFAULT_MODEL, dispatch.MODEL_CHOICES.values(),
                       'the switch must point at a named choice, not a string typed inline')
         self.assertEqual(row['model_selection'],
-                         dispatcher.selection_json(dispatcher.DEFAULT_MODEL))
+                         dispatch.selection_json(dispatch.DEFAULT_MODEL))
         # Full access, and it is not a preference: a node that stops to ask before its first edit
         # has nobody to answer it.
         self.assertEqual(row['mode'], 'yolo')
@@ -572,6 +573,138 @@ class TestQueueDedup(unittest.TestCase):
         con.close()
         allowed = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
         self.assertEqual(allowed.returncode, 0, allowed.stderr)
+
+
+class TestSessionMatch(unittest.TestCase):
+    """The waiter's matcher, against the row shapes both desktop generations write.
+
+    Since v3.16 the host-side createTask carries no cron identity: `cron_automation_id` stays NULL
+    and `meta_json` has no `cronAutomationId`. A matcher reading only the column therefore reported
+    "no session appeared" while the session ran headless -- and the caller's retry booted a second
+    one onto the same node. These cases pin the two matchers and the dedup checks against the
+    column-less shape, without unpinning the column shape older desktops still write.
+    """
+
+    PROMPT_TITLE = '# /pf-conduct drill'  # zcode_sandbox writes this prompt
+
+    def queued(self):
+        """One queued row for QUEUED_NODE: (db, workspace, prompt, env, automation_id)."""
+        db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
+        proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return db, ws, prompt, env, proc.stdout.strip().splitlines()[0]
+
+    def insert_task(self, db, ws, task_id, created_at, title='', cron_id=None):
+        """A host-written tasks row, in either generation's shape (title-only, or cron column)."""
+        con = sqlite3.connect(str(db))
+        con.execute('insert into tasks (workspace_key, workspace_path, task_id, title, '
+                    'created_at, updated_at, cron_automation_id) values (?,?,?,?,?,?,?)',
+                    (str(ws), str(ws), task_id, title, created_at, created_at, cron_id))
+        con.commit()
+        con.close()
+
+    # ── the two matchers ─────────────────────────────────────────────────────
+
+    def sandbox_db(self, db):
+        """A connection to the sandbox database, for calling the matcher directly.
+
+        `task_row` takes the connection -- the one seam that does not read the module-level
+        `INDEX_PATH`, which (module loaded in this process) points at this host's real library.
+        """
+        return sqlite3.connect(str(db))
+
+    def test_a_row_without_the_cron_identity_is_found_by_its_title(self):
+        """The v3.16 shape: the column is NULL, the title is the prompt's first line."""
+        db, ws, prompt, env, automation_id = self.queued()
+        now = int(time.time() * 1000)
+        con = self.sandbox_db(db)
+        self.assertIsNone(
+            dispatcher().task_row(con, str(ws), automation_id, self.PROMPT_TITLE, now - 2000),
+            'nothing has landed yet')
+        self.insert_task(db, ws, 'session_new', now, title=self.PROMPT_TITLE)
+        self.assertEqual(
+            dispatcher().task_row(con, str(ws), automation_id, self.PROMPT_TITLE, now - 2000),
+            'session_new')
+        con.close()
+
+    def test_a_row_with_the_cron_identity_is_still_found_by_the_column(self):
+        """The pre-v3.16 shape: the column carries the id even when the title differs."""
+        db, ws, prompt, env, automation_id = self.queued()
+        now = int(time.time() * 1000)
+        self.insert_task(db, ws, 'sess_old', now - 30_000, title='something else',
+                         cron_id=automation_id)
+        con = self.sandbox_db(db)
+        self.assertEqual(
+            dispatcher().task_row(con, str(ws), automation_id, self.PROMPT_TITLE, now - 60_000),
+            'sess_old')
+        con.close()
+
+    def test_rows_created_before_the_queue_moment_do_not_count(self):
+        """The title matcher must not mistake an older session of the same node for this one."""
+        db, ws, prompt, env, automation_id = self.queued()
+        now = int(time.time() * 1000)
+        self.insert_task(db, ws, 'session_stale', now - 10 * 60_000, title=self.PROMPT_TITLE)
+        con = self.sandbox_db(db)
+        self.assertIsNone(
+            dispatcher().task_row(con, str(ws), automation_id, self.PROMPT_TITLE, now - 2000))
+        con.close()
+
+    def test_the_claim_beat_counts_any_generation_of_the_session(self):
+        """The claimed row's own question is "has a session been written at all", not "how recent":
+        a task row older than the claim (a retry of a dispatch whose session already existed) must
+        not read as the sessionless race."""
+        db, ws, prompt, env, automation_id = self.queued()
+        now = int(time.time() * 1000)
+        con = sqlite3.connect(str(db))
+        con.execute('update automations set claimed_at=?, run_count=1, dispatch_status=?',
+                    (now, 'dispatched'))
+        con.commit()
+        con.close()
+        self.insert_task(db, ws, 'session_old', now - 11 * 60_000, title=self.PROMPT_TITLE)
+        again = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        self.assertEqual(again.returncode, 0, again.stderr)
+
+    def test_a_title_matched_fresh_session_blocks_the_requeue(self):
+        """The end-to-end shape that booted duplicate sessions: the session landed (title match,
+        NULL column) and is fresh, so the claimed beat passes it and the freshness beat refuses."""
+        db, ws, prompt, env, automation_id = self.queued()
+        now = int(time.time() * 1000)
+        con = sqlite3.connect(str(db))
+        con.execute('update automations set claimed_at=?, run_count=1, dispatch_status=?',
+                    (now, 'dispatched'))
+        con.commit()
+        con.close()
+        self.insert_task(db, ws, 'session_new', now, title=self.PROMPT_TITLE)
+        second = run_dispatcher(['--prompt-file', prompt, '--workspace', ws, '--no-verify'], env)
+        self.assertNotEqual(second.returncode, 0)
+        self.assertIn('already exists', second.stderr)
+
+    # ── the wait the pipeline leans on ───────────────────────────────────────
+
+    def test_the_wait_sees_the_session_land_mid_poll(self):
+        """Row queued, tasks row written two seconds later with a NULL cron column: the wait
+        catches it and reports the session -- the beat whose silent failure doubled sessions."""
+        db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
+        proc = subprocess.Popen(
+            [sys.executable, '-X', 'utf8', str(DISPATCHER), '--prompt-file', str(prompt),
+             '--workspace', str(ws), '--verify-seconds', '20'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8',
+            errors='replace', env=env)
+        time.sleep(2.0)
+        self.insert_task(db, ws, 'session_mid', int(time.time() * 1000),
+                         title=self.PROMPT_TITLE)
+        out, err = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0, err)
+        self.assertIn('session: session_mid', out)
+
+    def test_the_wait_gives_up_loudly_when_nothing_lands(self):
+        db, ws, prompt, env = zcode_sandbox(self, QUEUED_NODE)
+        started = time.monotonic()
+        proc = run_dispatcher(['--prompt-file', prompt, '--workspace', ws,
+                               '--verify-seconds', '2'], env)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn('no session appeared', proc.stderr)
+        self.assertLess(time.monotonic() - started, 30, 'the wait must honour its own deadline')
 
 
 if __name__ == '__main__':

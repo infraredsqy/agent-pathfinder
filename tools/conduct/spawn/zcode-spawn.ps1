@@ -148,7 +148,9 @@ if (-not $automationId) {
     throw $detail
 }
 $sessionId = ''
-$sessionLine = ($lines | Where-Object { "$_" -match '^session:\s*sess_' } | Select-Object -Last 1)
+# `sess_` is the shape the desktop used to mint; since v3.16 host-created ids read `session_...`,
+# so the match stops after the shared prefix.
+$sessionLine = ($lines | Where-Object { "$_" -match '^session:\s*sess' } | Select-Object -Last 1)
 if ($sessionLine) { $sessionId = ("$sessionLine" -replace '^session:\s*', '').Trim() }
 
 # Dispatch succeeded: clear the degradation marker left by an earlier beat (marker present = the chain
