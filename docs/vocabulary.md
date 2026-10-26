@@ -108,7 +108,7 @@
 | 功能 | feature | 一个文件夹：声明 + 实现；文件夹名就是它的身份 |
 | 声明 | declaration | 功能文件夹里那份数据：占哪个时机、认哪些名字 |
 | 实现 | implementation | 功能文件夹里的代码：时机到了被叫一次 |
-| 技能卡 | skill card | 方法名点到的那份 `SKILL.md`，住在 `skills/` 树里 |
+| 技能卡 | skill card | 方法名点到的那份 `SKILL.md`；绑功能的卡住在功能的 `cards/<语言>/<方法名>/` 里，随它装、卸 |
 | 旋钮 | knob | 一个设置的名字 |
 | 旋钮的种类 | the knob's kind | 数值 / 整数 / 词 / 开关（`number` / `integer` / `word` / `switch`） |
 | 时机 | timing | 收尾 / 挑选 / 派发（`close` / `pick` / `dispatch`） |

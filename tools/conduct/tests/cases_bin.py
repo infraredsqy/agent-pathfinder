@@ -10,8 +10,9 @@ All three live in the pf layer, and what is measured is the rules of that layer:
   * the project root `doctor` reports is the same root the tools it forwards (`pf dag` / `pf issue`)
     read the ledger by: cwd is the root, the one exception being that a linked worktree goes back to
     the main tree. That the two readings agree is what these cases prove.
-  * `doctor`'s `features:` section: what the scan found, the dedupe tags and methods each feature
-    shows the outside, zero installed for an empty features directory, a declaration problem counted
+  * `doctor`'s `features:` section: what the scan found, how each one works (its own summary and the
+    knobs it declares), the dedupe tags and methods each feature shows the outside, zero installed for
+    an empty features directory, a declaration problem counted
     in the exit code, a declaration that claims a built-in setting's name (reported by the one door
     that sees both tables, with the built-in cell still in force), and an `impl.py` that cannot even
     compile (the doctor loads each installed one once, so a broken implementation is named here and
@@ -43,7 +44,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from harness import GIT, TOOLS_DIR, _child_env, _run_command, git, init_markers, run_argv
+from harness import (GIT, TOOLS_DIR, _child_env, _run_command, git, init_markers, run_argv,
+                     write_card)
 
 __all__ = ['TestPfCmdShim', 'TestDoctorRoot', 'TestDoctorFeatures', 'TestCommandList']
 
@@ -52,6 +54,11 @@ BIN = TOOLS_DIR / 'bin'
 PF = BIN / 'pf.py'
 SHIM = BIN / 'pf.cmd'
 CMD = os.environ.get('COMSPEC', 'cmd.exe')
+
+#: The method the default fixture declaration names, and the card folder the fixture writes beside it.
+#: A fixture writes its own card instead of borrowing the name of one this checkout happens to ship:
+#: the card lives in the feature folder, so the two are one thing to write.
+FIXTURE_METHOD = 'pf-fixture-card'
 
 #: A fake `pf.py`: every run appends one line to `runs.txt` (recording the argv it received) and then
 #: exits with `FAKE_PF_EXIT`. One fake is enough: these cases measure "how many times it ran, and
@@ -257,13 +264,13 @@ class TestDoctorFeatures(unittest.TestCase):
         return run_argv([PF, 'doctor'], cwd=self.project, env=env, check=False)
 
     def add_feature(self, name='auditor', declaration=None, impl=None):
-        """One feature folder under the temp features directory.
+        """One feature folder under the temp features directory, with the card its method names.
 
         `impl` replaces the trivial implementation a case does not care about: the doctor has to call
         every installed `impl.py` once, and load it once on top of that, so what a broken one looks
-        like is a case of its own. The method the default declaration names is one whose card exists
-        in the `skills/` tree: a card that is missing is a problem the doctor reports, and a fixture
-        that carried one would make every case here fail for a reason none of them is about.
+        like is a case of its own. The default declaration names a method the fixture's own folder
+        carries a card for -- a card lives in the feature folder, so a fixture without one would make
+        every case here fail for a reason none of them is about.
         """
         folder = self.features / name
         folder.mkdir()
@@ -271,12 +278,15 @@ class TestDoctorFeatures(unittest.TestCase):
             impl if impl is not None else 'def offer(ctx):\n    return None\n', encoding='utf-8')
         (folder / 'feature.json').write_text(json.dumps(declaration or {
             'name': name, 'timing': 'close', 'action': 'insert',
-            'knobs': {'audit_limit': {'kind': 'number'}},
+            'knobs': {'audit_limit': {'kind': 'number',
+                                      'summary': 'the audited minutes the line must read below'}},
             'readings': {'audit_minutes': {'source': 'ticket', 'when_knob': 'audit_limit',
                                            'ask': 'the minutes a full audit took'}},
             'metrics': {'audit_minutes': {'line': 'audit_limit', 'tag': 'audit:minutes',
-                                          'method': 'pf-test-audit', 'order': 0}},
+                                          'method': FIXTURE_METHOD, 'order': 0}},
         }), encoding='utf-8')
+        if declaration is None:
+            write_card(folder, FIXTURE_METHOD)
         return folder
 
     def pf(self, *args):
@@ -295,7 +305,9 @@ class TestDoctorFeatures(unittest.TestCase):
         self.assertIn('features: 1 installed', proc.stdout)
         self.assertIn('auditor', proc.stdout)
         self.assertIn('audit:minutes', proc.stdout, 'the dedupe tag the outside writes down')
-        self.assertIn('pf-test-audit', proc.stdout, 'the method name its nodes point at')
+        self.assertIn(FIXTURE_METHOD, proc.stdout, 'the method name its nodes point at')
+        self.assertIn('the audited minutes the line must read below', proc.stdout,
+                      'the knob it declares, in the declaration\'s own words')
 
     def test_an_empty_features_directory_reports_zero_installed(self):
         proc = self.doctor()
@@ -378,7 +390,8 @@ class TestDoctorFeatures(unittest.TestCase):
 
     def test_a_method_without_a_card_is_reported(self):
         """The doctor runs the validator's card check: a method a declaration names has to have its
-        `SKILL.md` in one of the language trees, or a generated node points a session at nothing."""
+        `SKILL.md` in a card folder some installed feature ships, or a generated node points a session
+        at nothing."""
         self.add_feature('cardless', {
             'name': 'cardless', 'timing': 'close', 'action': 'insert',
             'knobs': {'audit_limit': {'kind': 'number'}},

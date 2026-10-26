@@ -4,7 +4,7 @@ A feature is a folder under `features/` with two files in it: a declaration (`fe
 implementation (`impl.py`). The core knows the **kinds** only -- four knob kinds, three timings
 (`close` / `pick` / `dispatch`), two actions (`insert` / `block`) -- and every name comes from a
 declaration, merged and de-duplicated by the registry (`feature_registry.py`, loaded here by path);
-the method a metric names points at a card in the `skills/` tree, which this module never reads.
+the method a metric names points at a card in the feature's own folder, which this module never reads.
 
 Two questions are asked of a folder, and this module is the one place they are asked:
 

@@ -6,9 +6,14 @@
 #   pwsh -File install.ps1 -Uninstall       remove what this repository linked in
 #
 # The skills come in one language per install: what gets linked is `skills\<lang>\pf-*`, because a
-# method name has exactly one card (`~/.agents/skills/<method>/SKILL.md`). `-Lang` beats the choice
-# recorded in `~/.pf/lang.txt`, which beats the default; the record is what keeps a re-run -- the
-# repair -- from silently switching the language a user picked.
+# method name has exactly one card (`~/.agents/skills/<method>/SKILL.md`). A card bound to a feature is
+# not in the skills tree at all: it lives in the feature's own folder (`tools\conduct\features\<name>\
+# cards\<lang>\<method>`) and is linked from there, so removing the feature folder takes its card with
+# it. A method the chosen language has no card for is borrowed from another language's folder and the
+# run says which one; a method no language ships is said missing, never skipped in silence -- the link
+# is what a session reads, so a language choice may not quietly delete it.
+# `-Lang` beats the choice recorded in `~/.pf/lang.txt`, which beats the default; the record is
+# what keeps a re-run -- the repair -- from silently switching the language a user picked.
 #
 # Skills are linked as junctions: editing a file in this repository takes effect at once, with
 # nothing to sync. `pf` sits on PATH exactly once: a re-run first removes another checkout's
@@ -106,7 +111,130 @@ if (-not $Uninstall) {
     Set-Content -LiteralPath $langFile -Value $Lang -Encoding UTF8
 }
 
-# ── 2. shared/pf: `../shared/pf/…` in skill bodies has to land here ───────────
+# ── 2. feature cards: a card bound to a feature lives in the feature's own folder ──
+# `<feature>/cards/<lang>/<method>` is where a method's card is; this step is what turns one of those
+# folders into the `~/.agents/skills/<method>` path a session reads. The install's language is the
+# first pick, and a method it has no folder for is taken from another language's folder -- a card in
+# the wrong language is readable, a link that is not there is not -- with one line saying which
+# language it came from. A method no language ships at all is said missing for the same reason: the
+# run may not report success while a node's method has nothing to read. Removing a feature folder is
+# how its card goes away: the link is dead from that moment on, and the next run of this script takes
+# the dead link off -- that is all "installed and removed with it" means.
+$featuresRoot = Join-Path $repo 'tools\conduct\features'
+
+function Get-CardFolders([string]$featureDir) {
+    # Every card one feature ships: `cards\<lang>\<method>`, in language order. Which of them gets
+    # linked is decided below, not here: a filter here is what would silently turn a missing language
+    # into a missing link.
+    $root = Join-Path $featureDir 'cards'
+    $found = @()
+    if (-not (Test-Path -LiteralPath $root)) { return $found }
+    foreach ($langDir in Get-ChildItem -LiteralPath $root -Directory) {
+        if ($langDir.Name -like '.*' -or $langDir.Name -like '__*') { continue }
+        foreach ($method in Get-ChildItem -LiteralPath $langDir.FullName -Directory) {
+            $found += [pscustomobject]@{ Method = $method.Name; Folder = $method.FullName
+                                         Feature = (Split-Path -Leaf $featureDir)
+                                         Language = $langDir.Name }
+        }
+    }
+    return $found
+}
+
+function Get-DeclaredMethods([string]$featureDir) {
+    # The methods a declaration points a node at (`metrics.<key>.method`): the names the install owes a
+    # readable card. Only the caller says what to do when no card answers one.
+    $file = Join-Path $featureDir 'feature.json'
+    if (-not (Test-Path -LiteralPath $file)) { return @() }
+    try { $decl = Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return @() }
+    $found = @()
+    if ($decl.metrics) {
+        foreach ($metric in $decl.metrics.PSObject.Properties) {
+            $method = $metric.Value.method
+            if ($method -is [string] -and $method) { $found += $method }
+        }
+    }
+    return $found
+}
+
+function Test-UnderFeatures([string]$target) {
+    # A link this checkout made into a feature folder -- the only links this step reconciles. A
+    # junction to another checkout's features is that checkout's business.
+    if (-not $target) { return $false }
+    $root = $featuresRoot.TrimEnd('\') + '\'
+    return $target.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+$featureFolders = @()
+if (Test-Path -LiteralPath $featuresRoot) {
+    $featureFolders = @(Get-ChildItem -LiteralPath $featuresRoot -Directory | Where-Object {
+        $_.Name -notlike '.*' -and $_.Name -notlike '__*' })
+}
+$allCards = @()
+$declared = @()
+foreach ($feature in $featureFolders) {
+    $allCards += Get-CardFolders $feature.FullName
+    $declared += Get-DeclaredMethods $feature.FullName
+}
+
+$cards = @($allCards | Where-Object { $_.Language -eq $Lang })
+$spare = @{}
+foreach ($card in $allCards) {
+    if ($card.Language -eq $Lang) { continue }
+    $key = $card.Method.ToLowerInvariant()
+    if (-not $spare.ContainsKey($key)) { $spare[$key] = $card }
+}
+foreach ($key in @($spare.Keys | Sort-Object)) {
+    if (@($cards | Where-Object { $_.Method.ToLowerInvariant() -eq $key }).Count) { continue }
+    $borrowed = $spare[$key]
+    $cards += $borrowed
+    if (-not $Uninstall) {
+        Say 'borrowed' ("$($borrowed.Method)  from $($borrowed.Language)  (this install's language, $Lang, ships no card for it)")
+    }
+}
+$shipped = @{}
+foreach ($card in $allCards) { $shipped[$card.Method.ToLowerInvariant()] = $true }
+if (-not $Uninstall) {
+    foreach ($method in @($declared | Sort-Object -Unique)) {
+        if ($shipped.ContainsKey($method.ToLowerInvariant())) { continue }
+        Say 'missing' ("$method  (no language ships this card; a node naming it would land on nothing)")
+    }
+}
+
+$wanted = @{}
+foreach ($card in $cards) {
+    if (-not $wanted.ContainsKey($card.Method.ToLowerInvariant())) {
+        $wanted[$card.Method.ToLowerInvariant()] = $card
+    }
+}
+
+if (Test-Path -LiteralPath $skillsRoot) {
+    foreach ($link in Get-ChildItem -LiteralPath $skillsRoot -Directory -Force) {
+        if (-not (Test-Reparse $link.FullName)) { continue }
+        $target = (Get-Item -LiteralPath $link.FullName -Force).Target
+        if (-not (Test-UnderFeatures $target)) { continue }
+        if ($Uninstall) {
+            cmd /c rmdir "$($link.FullName)" | Out-Null
+            Say 'removed' $link.Name
+        } elseif (-not $wanted.ContainsKey($link.Name.ToLowerInvariant())) {
+            cmd /c rmdir "$($link.FullName)" | Out-Null
+            Say 'unlinked' "$($link.Name)  (its feature is gone, or this run installs another language)"
+        }
+    }
+}
+
+if (-not $Uninstall) {
+    foreach ($card in $cards) {
+        $key = $card.Method.ToLowerInvariant()
+        if ($wanted[$key].Folder -ne $card.Folder) {
+            Say 'skipped' "$($card.Method)  (a second feature, $($card.Feature), ships the same card)"
+            continue
+        }
+        New-Junction (Join-Path $skillsRoot $card.Method) $card.Folder
+        Say 'linked' "$($card.Method)  ->  $($card.Folder)"
+    }
+}
+
+# ── 3. shared/pf: `../shared/pf/…` in skill bodies has to land here ───────────
 if ($Uninstall) {
     if (Test-Reparse $sharedPf) { cmd /c rmdir "$sharedPf" | Out-Null; Say 'removed' 'shared/pf' }
 } elseif (Test-Reparse $sharedRoot) {
@@ -138,7 +266,7 @@ if (-not $Uninstall -and (Test-Path -LiteralPath $sharedRoot) -and -not (Test-Re
     Say 'linked' "shared/pf  ->  $repoSharedPf"
 }
 
-# ── 3. PATH ───────────────────────────────────────────────────────────────────
+# ── 4. PATH ───────────────────────────────────────────────────────────────────
 if ($Uninstall) {
     Say 'note' 'PATH is left for you to clean (something else may still be using it)'
 } elseif (-not $SkipPath) {
@@ -158,7 +286,7 @@ if ($Uninstall) {
     Set-Content -LiteralPath $markerFile -Value $binDir -Encoding UTF8
 }
 
-# ── 4. self-check ───────────────────────────────────────────────────────────
+# ── 5. self-check ───────────────────────────────────────────────────────────
 # Whether the install holds is judged on two sides: this script's half (skill junctions, PATH)
 # and the tool tree's half (tool files, the Python version, the ledger, the merge driver). `pf
 # doctor` answers for the tool half, so it is asked once here; its red verdict is this script's
@@ -167,8 +295,13 @@ if ($Uninstall) {
 $verdict = 0
 Write-Host ''
 Say 'note' "skill language: $Lang"
-Say 'note' ("pf skills visible here: " + ((Get-ChildItem -LiteralPath $skillsRoot -Directory | Where-Object { $_.Name -like 'pf-*' } | Measure-Object).Count))
-if (Test-Path -LiteralPath $sharedPf) { Say 'note' 'shared/pf is in place' } else { Say 'warning' 'shared/pf is not in place yet (section 2)' }
+Say 'note' ("pf skills visible here: " + (@(Get-ChildItem -LiteralPath $skillsRoot -Directory | Where-Object {
+    $_.Name -like 'pf-*' -and -not (Test-UnderFeatures (Get-Item -LiteralPath $_.FullName -Force).Target) }).Count))
+$cardLinks = @(Get-ChildItem -LiteralPath $skillsRoot -Directory -Force -ErrorAction SilentlyContinue | Where-Object {
+    (Test-Reparse $_.FullName) -and (Test-Path -LiteralPath (Join-Path $_.FullName 'SKILL.md')) -and
+    (Test-UnderFeatures (Get-Item -LiteralPath $_.FullName -Force).Target) })
+Say 'note' ("feature cards visible here: " + $cardLinks.Count)
+if (Test-Path -LiteralPath $sharedPf) { Say 'note' 'shared/pf is in place' } else { Say 'warning' 'shared/pf is not in place yet (its own section above)' }
 if (-not $Uninstall) {
     Write-Host ''
     Push-Location -LiteralPath $repo

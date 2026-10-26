@@ -21,7 +21,7 @@ One question first: **were the spec's node goals met, one by one**. Take the spe
 down the implementation and the evidence one at a time: what is met is marked OK, and what is not
 met, or met in a way that cannot be argued, is reported critical.
 
-When the node is a **debt-clearing** one (the spec carries `method: pf-issue-repair`), the goal is
+When the node is a **debt-clearing** one (the spec carries a `method: ` line), the goal is
 the one standard the spec writes: this batch of issues reaches a terminal status, or that reading
 comes back under the line. Check it against the tools of
 [`../../shared/pf/pool.md`](../../shared/pf/pool.md), not just against a diff.

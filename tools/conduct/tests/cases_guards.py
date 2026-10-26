@@ -1,4 +1,4 @@
-"""Three guards over the sources: the rules that only a red case keeps.
+"""Four guards over the sources: the rules that only a red case keeps.
 
 Each of them pins one sentence that otherwise lives in prose, and each is written against the
 sources rather than against a snapshot, so a rename that keeps the behaviour keeps the guard green
@@ -13,6 +13,9 @@ and a behaviour put back the old way turns it red.
      own name, its knob keys, its readings, its dedupe tags and its method names -- may not appear in
      any module of this tool outside `features/`. They are read off the installed declarations, never
      restated here.
+  2b. **The skills name no installed feature either.** The same five groups may not appear in a card
+     under `skills/`: a card bound to a feature lives in that feature's folder, and what a skill says
+     instead is "run the command that lists what is installed".
   3. **Every self-entry has a real door.** A word a tool's own parser registers is either a word `pf`
      routes to it or a door another shipped module really calls (`plan` / `apply` / `record`). An
      entry that only a case drives is red: that is the shape of an exit grown to prove itself.
@@ -38,7 +41,12 @@ from harness import (CONDUCT_DIR, DAG_MANAGE, HANDOFF_PY, SIGNAL_PY, STATE_MANAG
                      TOOLS_DIR, _fresh_module, patched, shipped_sources)
 
 __all__ = ['TestTheApprovalHasTwoHumanDoors', 'TestTheCoreNamesNoFeature',
-           'TestEverySelfEntryHasARealDoor']
+           'TestTheSkillsNameNoFeature', 'TestEverySelfEntryHasARealDoor']
+
+#: The skill trees this checkout ships, one directory per language. A card bound to a feature is not
+#: here -- it lives in the feature's own folder -- so everything under this root is a card that has to
+#: work with no feature installed.
+SKILLS_ROOT = TOOLS_DIR.parent / 'skills'
 
 #: The node cell a human's "continue" at a checkpoint gate lands in. Named once: everything below
 #: asks about this one cell, and `dag-manage.py`'s `approve_delivery` is its one write site.
@@ -242,8 +250,55 @@ class TestTheCoreNamesNoFeature(Base):
         self.assertEqual([], hits, f'the core names a feature: {hits}')
 
 
-# ── 3. every self-entry has a real door ─────────────────────────────────────
+# ── 2b. the skills name no feature ──────────────────────────────────────────
 
+class TestTheSkillsNameNoFeature(Base):
+    """No skill card under `skills/` spells a name an installed declaration owns.
+
+    The same five name groups the core guard watches -- the feature's name, its knob keys, its
+    readings, its dedupe tags and its method names -- read off the declarations, so a rename inside a
+    feature folder follows with no edit here and a skill that starts carrying one turns this red. A
+    skill may say "run the command that lists what is installed"; the listing is the declarations'
+    own words.
+
+    A card bound to a feature is out of scope by construction: it lives in that feature's own folder
+    (`features/<name>/cards/`), where naming the feature it binds is the point, and where it is
+    installed and removed with that feature.
+    """
+
+    def outside_names(self) -> set:
+        """The five name groups a declaration owns: name, knobs, readings, tags, methods."""
+        names = set()
+        for feature in pipeline.registry().load_all():
+            names.add(feature['name'])
+            decl = feature.get('decl')
+            if not isinstance(decl, dict):
+                continue
+            for group in ('knobs', 'readings'):
+                cells = decl.get(group)
+                if isinstance(cells, dict):
+                    names |= set(cells)
+            for cell in (decl.get('metrics') or {}).values():
+                if isinstance(cell, dict):
+                    names |= {cell.get('tag'), cell.get('method')}
+        return {name for name in names if isinstance(name, str) and name.strip()}
+
+    def test_the_skills_name_no_installed_feature(self):
+        names = self.outside_names()
+        if not names:
+            self.skipTest('no feature is installed: there is no name for a skill to carry')
+        skills = SKILLS_ROOT
+        self.assertTrue(skills.is_dir(), f'{skills} is not there')
+
+        hits = [f'{path.relative_to(SKILLS_ROOT).as_posix()}: {name}'
+                for path in sorted(skills.rglob('*.md'))
+                for name in sorted(names)
+                if name.lower() in path.read_text(encoding='utf-8').lower()]
+
+        self.assertEqual([], hits, f'a skill carries a feature\'s name: {hits}')
+
+
+# ── 3. every self-entry has a real door ─────────────────────────────────────
 #: The tool entries whose own parser registers command words. `handoff.py` and `signal.py` register
 #: none -- one command each, which is the tool's whole door -- and are still asked, so a word added
 #: to one of them is caught the day it appears.

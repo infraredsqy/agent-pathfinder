@@ -64,8 +64,8 @@ pf next --spawn
 | `pf-instruct` | 记录一条约束，供后续会话遵循 |
 | `pf-issue-scan` | 扫描代码中尚未入库的技术债 |
 | `pf-issue-discuss` | 与人工逐批确认 issue 池中的条目 |
-| `pf-issue-repair` | 将 issue 池的加权和修复至阈值以下 |
-| `pf-test-audit` | 审计测试套件：没验真东西的删掉，拖慢快档的挪出去或拆开 |
+
+功能也可以自带一张技能卡：卡放在该功能自己的文件夹里（`tools/conduct/features/<name>/cards/`），随功能一起装、卸，所以本仓库装了哪几张，以 `pf doctor` 列出来的为准。没有哪个技能会点它的名——提到它时只说「跑 `pf doctor`」。
 
 ## 开发
 

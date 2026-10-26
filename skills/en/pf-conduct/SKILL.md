@@ -106,7 +106,7 @@ runs this run follows that card.
   subagents, it is a conductor method — **run it yourself**, do not push it onto Execute; when it
   says it does not dispatch, it is an executor method, and the "Look at the weight first" column
   decides
-- **The order: the method line outranks weight.** Maintenance nodes and debt-clearing nodes carry
+- **The order: the method line outranks weight.** Debt nodes and debt-clearing nodes carry
   no weight (= standard), and the "standard dispatches Execute" road does not hold for them
 - The layer a method card dispatches still may not dispatch any further down
 
@@ -120,7 +120,7 @@ into the spec; to change it, use `pf config set test_tier <value>`.
 | | `full`, the whole suite | `minimal`, everything pared down |
 |---|---|---|
 | Are tests written | new logic needs tests, and **only invariants get locked** — none that lock a formula, a snapshot or an implementation detail | **none by default**; only "it would fail silently without this" gets one, and say first which silent failure it blocks |
-| What stays | the whole set; when it runs over, the maintenance channel inserts a prune node | only numeric / precision cross-checks, cross-source structural agreement, and the paths only luck reaches |
+| What stays | the whole set; when it runs over, the debt channel inserts a prune node | only numeric / precision cross-checks, cross-source structural agreement, and the paths only luck reaches |
 | Each round's verification | the fast lane = the cases of the files touched | the few checks the project itself names / probes / one run |
 | The review on "missing tests" | one that should be there and is not = an issue | missing tests pass; a missing "silent-failure kind of verification" is recorded as an issue |
 
@@ -128,15 +128,19 @@ into the spec; to change it, use `pf config set test_tier <value>`.
 are taken from the project docs (the `slow` marker, the two entries, and with no tier named, the
 full run — projects differ in shape), so do not copy another project's wording; the `minimal`
 tier is exactly the few checks that project names, and **no suite gets built for it**; when the
-fast lane gets too slow to bear, that is a matter of tiers or compression and belongs to
-`/pf-test-audit` — do not dodge it by running the full run more often or less. Reports carry the
+fast lane gets too slow to bear, that is a matter of tiers or compression and belongs to the
+test-hygiene path (run `pf doctor`: the listing says which installed feature watches this metric, and
+which method card that feature names) — do not dodge it by running the full run more often or less. Reports carry the
 actual commands and counts, and the `full` tier also carries **the suite's actual measured
 seconds**; without the evidence it counts as never run.
 
 When neither the spec nor the project docs names a verification command, stop and ask the user to
-fill it in through pf-route — that is pf-route's debt. When the project says `minimal` and this
-line has a `test_seconds_limit` set, report the contradiction to the user, together with
-`cycle policy <cycle> test_seconds_limit off`.
+fill it in through pf-route — that is pf-route's debt. When the project says `minimal` and this line
+carries a reading that asks for the full suite's wall clock, report the contradiction to the user,
+together with the command that turns it off (`pf cycle policy <cycle> <that key> off` — the key is a
+**knob name**, read off `pf doctor`'s feature listing: under the feature that owns the reading it
+prints the knobs that feature declares, one per line, each with its own summary sentence — the
+reading's slot name is not a key and is rejected).
 
 ### Node tags
 
@@ -156,12 +160,12 @@ never changes them.
 
 ## What lives on which layer
 
-- **The workspace**: the dependency graph and the maintenance-node judgement on it, how code
+- **The workspace**: the dependency graph and the judgement that inserts debt nodes on it, how code
   converges (each node's worktree and merge-back), and write exclusion on the state files — the
   tool owns all of it; you just follow the few commands in this book, and add nothing for
   concurrency
 - **The line (cycle)**: `tags` (who it picks), `when_shelved`, `parallel` (how many nodes it
-  holds and how many sessions it opens), and the two maintenance thresholds; write them with
+  holds and how many sessions it opens), and the two debt thresholds; write them with
   `cycle policy`, read them from the `Policy:` line of `cycle current`. Lines are coupled in no
   other way: two lines run side by side, each holding its own few nodes
 - **The node**: mode, weight, tags, spec, report set, FORK record — they travel with the graph and
@@ -268,7 +272,7 @@ pf instruction list --project <absolute path to the project root>
   fresh each time, rather than a session settling it on the entry's behalf. Only the user can
   archive an instruction, and only the user can put it back; a session does not touch that
   record.
-- **This line's own policies** (`when_shelved`, the two maintenance lines, `spawner`) are on
+- **This line's own policies** (`when_shelved`, the two debt lines, `spawner`) are on
   the `Policy:` line of `pf cycle current`; write them with
   `cycle policy <cycle> <key> <value>`, and cancel a numeric one with `off`.
 
@@ -582,7 +586,7 @@ run and the words to say:
   dispatch when the line is not in service, so put the line back in service before re-sending
 - `insert_node`: a node has just been put into the graph, **nothing was pinned** and there is no
   prompt — commit and push as usual, then run `pf next --cycle <cycle> --spawn --json` and let the
-  picking rules dispatch it (this is where a maintenance node comes from, see "Maintenance nodes"
+  picking rules dispatch it (this is where a debt node comes from, see "Debt nodes"
   below)
 - `stop_pipeline`: say `reason` to the user as it stands (read `attention` out too when it has
   content), then stop — it does not stop this line while other nodes are still in flight, and
@@ -618,13 +622,14 @@ Commit and push still come before spawning the next node, not a byte skipped. Th
 the node finishing and your answer coming back may be long, and by then that node and its record
 have settled — a session change along the way does not matter, the record is on disk.
 
-**Maintenance nodes**: when the close went over this line's maintenance threshold, the action
+**Debt nodes**: when the close went over this line's debt threshold, the action
 `next --after` returns is `insert_node`: it carries `spec` (where the new node's own spec landed)
 and `note`, **no prompt, and nothing was pinned** — the line's holding does not move. Commit and
 push as usual, then run `pf next --cycle <cycle> --spawn --json` and let the picking rules dispatch
 it; from there it walks like any other node. It goes when it is done, and stopping to
-wait for someone's answer is not among its options. **Its spec carries a `method: ` line** (the
-pool-clearing kind names `pf-issue-repair`): when prepare reads it, run that card yourself —
+wait for someone's answer is not among its options. **Its spec carries a `method: ` line** (which
+method it names is the declaration's to write, and `pf doctor` prints it): when prepare reads it, run
+that card yourself —
 batching, dispatching and settling are all in your hands, and the loop is still this flow's
 "Execute" section; the scope is set by the spec that inserted it, so do not widen it to everything
 yourself. Close out as usual when it is done, then go on to the next.
@@ -721,11 +726,11 @@ quotes, so a backslash needs one more layer of escaping.
   close.
 - `acceptance` carries 1~3 items, written at the level of "what would be missing had this node not
   run".
-- `test_seconds` is reported only when this line has a `test_seconds_limit` set: fill in this
-  run's measured seconds for the full verification (measured with the set of commands the project
-  docs name). **A reading you did not measure has its key deleted whole** — a missing number
-  reads as "not known this run", and a 0 reads as "already measured at zero", which makes a real
-  debt look paid off.
+- A reading is reported only when `pf handoff --form` prints its slot, and it carries what that
+  slot's own question asks for (the suite's wall clock: this run's measured seconds, taken with the
+  set of commands the project docs name). **A reading you did not measure has its key deleted whole**
+  — a missing number reads as "not known this run", and a 0 reads as "already measured at zero",
+  which makes a real debt look paid off.
 - The pool's weighted sum is computed by the tool itself and does not go into the note (you do not
   fill it in); for a live reading or the conventions, see
   [`../shared/pf/pool.md`](../shared/pf/pool.md).

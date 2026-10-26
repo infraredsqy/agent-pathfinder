@@ -1,6 +1,7 @@
 # The pool (the issue store)
 
-> `pf-issue-scan` / `pf-issue-repair` / `pf-issue-discuss` share this one. For command detail go by
+> The cards on the pool's own branch share this one: scanning, ruling with the user, and the
+> debt-clearing card that ships with a feature and leaves with it. For command detail go by
 > `--help`; this writes the conventions only.
 
 The pool lives in the project's `.pf/issues/` and is one unified to-do list. `source` only says

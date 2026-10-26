@@ -9,7 +9,9 @@ development discipline (the dispatch path is live ammunition).
   filtering (read before changing conduct's behaviour)
 - skills/ — one skill tree per language, `skills/<lang>/`: the `pf-*` skills plus one copy of the
   `shared/pf/` common cards each; `install.ps1 -Lang` picks a tree and links it into
-  `~/.agents/skills` by junction (a method name has exactly one card, so an install picks one).
+  `~/.agents/skills` by junction. A card bound to a feature is not here: it lives in that feature's
+  own folder (`tools/conduct/features/<name>/cards/<lang>/<method>/`) and is linked too, so it is
+  installed and removed with the feature.
   Common cards are named after themselves (`subagents.md`, `pool.md`, `toolcraft.md`, …) —
   `AGENTS.md` / `CLAUDE.md` are host-reserved names, case-insensitive: whichever directory one
   falls into, the host injects it as instructions into every session that starts work there

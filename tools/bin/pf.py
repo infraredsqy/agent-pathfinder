@@ -227,12 +227,37 @@ def _knob_shadows() -> list:
     return store.knob_shadows()
 
 
+def _knob_line(name: str, spec: dict) -> str:
+    """One declared knob as the listing prints it: its name, its kind, its starting value and its own
+    one-sentence summary.
+
+    The sentence is the declaration's, read through the registry -- the doctor restates none of it.
+    Everything here is data a declaration owns, which is why a listing can answer "how does this
+    feature work" without running it.
+    """
+    kind = spec.get('kind') or '?'
+    details = []
+    values = spec.get('values')
+    if values:
+        details.append('one of ' + ' / '.join(values))
+    default = spec.get('default')
+    if default is not None and default != '':
+        details.append(f'default {default}')
+    cell = f' ({kind}' + (f': {", ".join(details)}' if details else '') + ')'
+    summary = spec.get('summary') or ''
+    return f'{name}{cell}' + (f' — {summary}' if summary else '')
+
+
 def _report_features() -> int:
-    """Say which features are installed (with the tags and methods the outside writes down), print
-    every problem the validator found, and count those problems for the doctor's exit code.
+    """Say which features are installed and how each one works -- its own summary, the knobs it
+    declares, the tags and methods the outside writes down -- print every problem the validator
+    found, and count those problems for the doctor's exit code.
 
     Zero feature folders is a legal project and is reported as such: the core is whole without any
     feature, and that sentence is what makes it visible.
+
+    This is the door a skill points at when it has to say "go look at what is installed": the listing
+    is the declarations' own words, so no skill has to carry a feature's name, its tags or its method.
 
     The questions are the validator's (`feature_registry.verify()`), which is also what the test
     suite asks: the declarations against the core's closed sets, the method cards each one names, and
@@ -247,15 +272,24 @@ def _report_features() -> int:
               f'feature is where one would come from)')
     else:
         print(f'features: {len(features)} installed')
+        knobs = registry.knob_specs()
         for feature in features:
-            parts = [f'  · {feature["name"]}']
+            decl = feature.get('decl')
+            decl = decl if isinstance(decl, dict) else {}
+            summary = decl.get('summary')
+            summary = summary.strip() if isinstance(summary, str) else ''
+            print(f'  · {feature["name"]}' + (f' — {summary}' if summary else ''))
+            mine = [(name, spec) for name, spec in knobs.items()
+                    if spec.get('feature') == feature['name']]
+            for index, (name, spec) in enumerate(mine):
+                lead = '      knobs: ' if index == 0 else '             '
+                print(lead + _knob_line(name, spec))
             tags = registry.tags_of(feature)
             methods = registry.methods_of(feature)
             if tags:
-                parts.append('tags: ' + ', '.join(tags))
+                print('      tags: ' + ', '.join(tags))
             if methods:
-                parts.append('methods: ' + ', '.join(methods))
-            print('  '.join(parts))
+                print('      methods: ' + ', '.join(methods))
     problems = registry.verify()
     try:
         shadows = _knob_shadows()

@@ -3,10 +3,11 @@
 `pipeline/feature_registry.py` answers two kinds of question. `validate()` reads the declaration
 alone -- is the timing one the core knows, the action, the knob kinds, do two features keep off each
 other's names. `verify()` is the validator and asks the other side as well: is there a card for every
-method the metrics name, and does the implementation answer the way its declaration says it will --
-one real call against a stand-in project, which may answer (an offer, a reason) or "not known this
-pass", may never raise, and may not carry a command-shaped list in a key the core reads (the edit has
-one implementation, and it is the core's).
+method the metrics name (a card lives in the feature folder that binds it, under `cards/<lang>/`),
+and does the implementation answer the way its declaration says it will -- one real call against a
+stand-in project, which may answer (an offer, a reason) or "not known this pass", may never raise, and
+may not carry a command-shaped list in a key the core reads (the edit has one implementation, and it
+is the core's).
 
 What this file pins, in the order the criteria are stated:
 
@@ -15,7 +16,8 @@ What this file pins, in the order the criteria are stated:
     sentence names the feature (which is the half a human acts on);
   * two features may not claim one name (a knob, a reading, a dedupe tag) -- and they may share a
     method, because one card can serve two debts;
-  * a method needs its `SKILL.md` in at least one language tree, and one that has it is silent;
+  * a method needs its `SKILL.md` in a card folder some installed feature ships, one that has it is
+    silent, and a card folder whose method nothing names is a problem in the other direction;
   * an implementation that raises at its door, or that answers with a command-shaped list in a key
     the core reads, is named -- and the stand-in project starts no child process;
   * and the pipeline's route never asks any of it: the two callers are this suite and `pf doctor`.
@@ -35,9 +37,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import Base, pipeline  # noqa: E402
 from harness import (CONDUCT_DIR, features_dir, requires_feature, shipped_sources,  # noqa: E402
-                     write_feature)
+                     write_card, write_feature)
 
 __all__ = ['TestTheValidator']
+
+#: The method name every fixture's card is written under. A case that needs a method with a card asks
+#: the fixture for one instead of reading a name off the shipped tree: the card lives in the feature
+#: folder beside the declaration, so the fixture writes both.
+CARDED = 'pf-card-fixture'
 
 #: A minimal, valid declaration: one metric, one line, one tag. A case changes the one cell it is
 #: about, so the case's subject is the only thing that differs between a green and a red run.
@@ -67,33 +74,34 @@ class TestTheValidator(Base):
     """One temp features directory per case, and the validator asked about it in this process."""
 
     def features(self):
-        """A throwaway features directory, entered for the case's whole life."""
-        tmp = tempfile.TemporaryDirectory(prefix='conduct-checks-')
-        self.addCleanup(tmp.cleanup)
-        stack = ExitStack()
-        self.addCleanup(stack.close)
-        stack.enter_context(features_dir(tmp.name))
-        return Path(tmp.name)
+        """A throwaway features directory, entered for the case's whole life.
 
-    def shipped_method(self) -> str:
-        """A method name that really has a card, read off the `skills/` tree itself.
-
-        The tree is the authority on what a card is called, so no case here writes a card's name
-        down: the positive half of the card check follows a rename with no edit of its own.
+        One per case: a second call hands the same directory back, so a case that writes a second
+        fixture (or a second card) after calling `one()` is still writing into the tree the scan is
+        pointed at.
         """
-        skills = pipeline.registry().SKILLS
-        for tree in sorted(path for path in skills.iterdir() if path.is_dir()):
-            for folder in sorted(path for path in tree.iterdir() if path.is_dir()):
-                if (folder / pipeline.registry().CARD).is_file():
-                    return folder.name
-        self.skipTest(f'no method card under {skills}')
+        root = getattr(self, '_features_root', None)
+        if root is None:
+            tmp = tempfile.TemporaryDirectory(prefix='conduct-checks-')
+            self.addCleanup(tmp.cleanup)
+            stack = ExitStack()
+            self.addCleanup(stack.close)
+            stack.enter_context(features_dir(tmp.name))
+            root = self._features_root = Path(tmp.name)
+        return root
 
-    def one(self, method=None, impl=QUIET_IMPL, **over):
-        """One feature folder named after the declaration's own name, and the validator's answer."""
+    def one(self, method=None, impl=QUIET_IMPL, card=True, **over):
+        """One feature folder named after the declaration's own name, and the validator's answer.
+
+        `card` writes the card the method names into the same folder: the feature folder is a card's
+        one home, so "the method is backed" is the fixture writing both halves.
+        """
         root = self.features()
         name = over.pop('name', 'probe')
-        write_feature(root, name, declaration(method or self.shipped_method(), name=name, **over),
-                      impl)
+        method = method or CARDED
+        folder = write_feature(root, name, declaration(method, name=name, **over), impl)
+        if card:
+            write_card(folder, method)
         return pipeline.registry().verify()
 
     # ── the installed tree ──────────────────────────────────────────────────
@@ -116,10 +124,12 @@ class TestTheValidator(Base):
         declared = {(feature['decl']['timing'], feature['decl']['action'])
                     for feature in registry.load_all() if isinstance(feature.get('decl'), dict)}
         self.assertTrue(declared <= set(registry.CELLS), declared - set(registry.CELLS))
+        cards = registry.cards()
         for method in registry.methods():
-            self.assertTrue(any((tree / method / registry.CARD).is_file()
-                                for tree in registry.SKILLS.iterdir() if tree.is_dir()),
-                            f'{method} has no card')
+            self.assertIn(method, cards, f'{method} has no card in any installed feature folder')
+            self.assertTrue(any((folder / registry.CARD).is_file()
+                                for _owner, folder in cards[method]),
+                            f'{method} has no {registry.CARD}')
 
     # ── (a) the closed sets, and the name in the sentence ───────────────────
     def test_a_timing_or_a_kind_outside_the_closed_sets_names_the_feature(self):
@@ -151,9 +161,10 @@ class TestTheValidator(Base):
         their method on purpose and the only complaints are the three real collisions.
         """
         root = self.features()
-        method = self.shipped_method()
+        method = CARDED
         write_feature(root, 'one', declaration(method, name='one'), QUIET_IMPL)
         write_feature(root, 'two', declaration(method, name='two'), QUIET_IMPL)
+        write_card(root / 'one', method)
 
         problems = pipeline.registry().verify()
         text = '\n'.join(problems)
@@ -167,18 +178,33 @@ class TestTheValidator(Base):
 
     # ── (c) the method card ─────────────────────────────────────────────────
     def test_a_method_without_a_card_names_the_feature(self):
-        """A method whose card no language tree has: the generated node would point a session at
+        """A method whose card no feature folder carries: the generated node would point a session at
         nothing, so the validator says which method and which feature.
         """
-        problems = self.one(method='pf-no-such-card')
+        problems = self.one(method='pf-no-such-card', card=False)
 
         text = '\n'.join(problems)
         self.assertIn("feature 'probe'", text)
         self.assertIn("method 'pf-no-such-card' has no card", text)
 
     def test_a_method_that_has_a_card_is_silent(self):
-        """The other half: a method the tree carries a card for is no problem at all."""
-        self.assertEqual([], self.one(method=self.shipped_method()))
+        """The other half: a method the folder beside it carries a card for is no problem at all."""
+        self.assertEqual([], self.one())
+
+    def test_a_card_no_declaration_names_names_the_feature(self):
+        """The other direction: a card folder under `cards/<lang>/` whose method nothing names is a
+        card no session can be pointed at, so it is a problem, and the sentence names the feature
+        whose folder carries it.
+        """
+        root = self.features()
+        self.assertEqual([], self.one())
+        write_card(root / 'probe', 'pf-orphan-card')
+
+        text = '\n'.join(pipeline.registry().verify())
+
+        self.assertIn("feature 'probe'", text)
+        self.assertIn("the card 'pf-orphan-card'", text)
+        self.assertIn('no installed declaration names', text)
 
     # ── (d) the implementation, really called ───────────────────────────────
     def test_an_implementation_that_raises_names_the_feature(self):
@@ -236,12 +262,13 @@ class TestTheValidator(Base):
         """
         root = self.features()
         marker = root / 'a-child-process-ran'
-        write_feature(root, 'probe', declaration(self.shipped_method()), (
+        folder = write_feature(root, 'probe', declaration(CARDED), (
             'import sys\n\n\n'
             'def offer(ctx):\n'
             f'    ctx.run([sys.executable, "-c", "open({str(marker)!r}, \'w\').write(\'x\')"])\n'
             f'    ctx.capture([sys.executable, "-c", "open({str(marker)!r}, \'w\').write(\'x\')"])\n'
             '    return None\n'))
+        write_card(folder, CARDED)
 
         self.assertEqual([], pipeline.registry().verify())
         self.assertFalse(marker.exists(), 'the validator ran a command through the context')

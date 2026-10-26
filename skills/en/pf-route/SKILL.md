@@ -250,15 +250,16 @@ completion rule. When any one of them is not satisfied, change the node or split
 write it down only after the user nods.
 
 **Four: whose run this work's running is.** To clear debt (a batch of issues in the pool), **do
-not write debt-clearing steps yourself**: write one line, `method: pf-issue-repair`, into the spec
-— that line means "this node is run by the conductor from that card itself", and the order
-outranks `weight` (see "Method" in [`../pf-conduct/SKILL.md`](../pf-conduct/SKILL.md)). In the
+not write debt-clearing steps yourself**: run `pf doctor` once and read off which features are
+installed, and the dedupe tag and method name each one declares — copy those two strings in. One
+line, `method: <that method>`, means "this node is run by the conductor from that card itself", and
+the order outranks `weight` (see "Method" in [`../pf-conduct/SKILL.md`](../pf-conduct/SKILL.md)); the
+node carries the metric's dedupe tag, plus this line's tag or the picking step cannot see it. In the
 same spec, write the scope and the criterion out clearly: the scope = one metric or one batch of
 same-domain debt, the criterion = that reading coming back under the line (or that batch of issues
-reaching a terminal status). A node of this kind also has to carry the tag of the metric it
-clears, like `coding,maint:issue_pool_weight` — only with `maint:` does it enter the maintenance
-channel's dedup (otherwise the close inserts another node clearing the same metric automatically),
-and only with a line tag can it be picked. A plain node carries no `method`.
+reaching a terminal status). **When the listing names no feature that watches this debt, or that
+feature is not installed**: there is no such road — write an ordinary node, and do not invent a method
+name. A plain node carries no `method`.
 
 ### Step 4: landing
 
@@ -292,7 +293,8 @@ carries the judgements and the conventions only.
 4. Writing it down: the tool prints the spec path for you, and that file does not exist yet —
    write it directly, do not read it first. Check yourself once: the goal in one sentence, the
    size in one "yes", a completion rule in one section (an executable command / script / probe);
-   the debt-clearing kind adds one `method: pf-issue-repair` line and its scope; anything with
+   the debt-clearing kind adds one `method: ` line (the name comes from `pf doctor`) and its
+   scope; anything with
    function names, file paths or line counts written in gets deleted
 5. The session a node is born in is not yours to write: the tool records it itself when the node
    is built (`pf dag info`'s `sessions.discussion`, or `pf session show <node>`). To trace it back
@@ -351,11 +353,12 @@ Distil the key information into the answer; do not dump the raw JSON.
   yourself
 - **pf-conduct**: running the graph, doing the nodes. Picking a node from the graph, opening a
   cycle, one node from prepare to close; building no nodes
-- **pf-issue-scan / -repair / -discuss**: the pool's own branch — scanning into the pool,
-  repairing debt back under the line, ruling with the user on external (the conventions are in
-  [`../shared/pf/pool.md`](../shared/pf/pool.md)). To clear one round of debt on the graph, build
-  a node carrying `method: pf-issue-repair` (see the fourth of "The four questions to ask before
-  writing it down")
+- **pf-issue-scan / pf-issue-discuss**: the pool's own branch — scanning into the pool, ruling with
+  the user on external (the conventions are in [`../shared/pf/pool.md`](../shared/pf/pool.md)). The
+  card that repairs debt is not in the skills tree: it ships with the feature that watches that debt,
+  and `pf doctor` prints its method name. To clear one round of debt on the graph, build a node
+  carrying `method: <that method>` (see the fourth of "The four questions to ask before writing it
+  down")
 
 When the user wants to talk a node's implementation through at length → suggest moving to
 `/pf-conduct` (at prepare it aligns the request with the code); when it is only a rough

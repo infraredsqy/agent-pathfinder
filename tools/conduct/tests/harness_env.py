@@ -29,7 +29,7 @@ __all__ = [
     'TERMINAL_ACTIONS', 'TOOLS_DIR',
     '_child_env', '_decode', '_fresh_module', '_run_command', 'chdir', 'features_dir', 'git',
     'git_env', 'init_markers', 'load_pipeline', 'patched', 'requires_feature', 'run_argv',
-    'shared_loader', 'shipped_sources', 'spawn_dry_run', 'write_feature',
+    'shared_loader', 'shipped_sources', 'spawn_dry_run', 'write_card', 'write_feature',
 ]
 
 
@@ -347,4 +347,17 @@ def write_feature(root, name: str, decl: dict | None = None, impl: str = '', *,
         (folder / 'impl.py').write_text(impl, encoding='utf-8')
     for filename, text in (files or {}).items():
         (folder / filename).write_text(text, encoding='utf-8')
+    return folder
+
+
+def write_card(feature_folder, method: str, lang: str = 'en', text: str | None = None) -> Path:
+    """One card inside a feature folder: `<feature>/cards/<lang>/<method>/SKILL.md`.
+
+    A card a metric names by its `method` lives in the feature's own folder, so a case that needs the
+    method to be backed writes it here -- one language is enough, which is the same rule the registry
+    applies. Returns the card folder.
+    """
+    folder = Path(feature_folder) / 'cards' / lang / method
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / 'SKILL.md').write_text(text if text is not None else f'# {method}\n', encoding='utf-8')
     return folder

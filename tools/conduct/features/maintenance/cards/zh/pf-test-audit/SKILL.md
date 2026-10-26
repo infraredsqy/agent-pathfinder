@@ -6,6 +6,7 @@ disable-model-invocation: true
 
 # pf-test-audit
 
+> 绑哪个功能：`maintenance` —— 这张卡随那个功能一起装、一起卸；功能不在，这张卡也不在
 > 谁跑我：用户（`/pf-test-audit`，敲下去自己跑到底）／指挥者（节点 spec 的 `method: ` 行点名，维护通道那个节点就是这么来的）
 > 我解决什么：把测试套件过一次——没验真东西的删掉，拖慢快档的挪出去或拆开，缺分档就自己建一个
 > 我派不派 subagent：派，一层（scan / removal）——被派来的执行者读到这份，停手回报

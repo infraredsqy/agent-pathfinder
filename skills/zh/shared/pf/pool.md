@@ -1,6 +1,6 @@
 # 池子（issue 库）
 
-> `pf-issue-scan` / `pf-issue-repair` / `pf-issue-discuss` 三家共用这一份。命令细节以 `--help` 为准，这里只写口径。
+> 池子这一支的几张卡共用这一份：扫描、和用户裁定，外加那张跟着功能装、卸的清债卡。命令细节以 `--help` 为准，这里只写口径。
 
 池子住在项目的 `.pf/issues/`，是统一的 to-do list。`source` 只说这条是怎么来的：`scan`（扫描入池）、`manual`（用户随手记的）、`conduct`（干活会话撞见的）。
 

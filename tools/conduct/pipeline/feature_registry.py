@@ -5,8 +5,9 @@ A feature is a folder under the features directory, and the folder is its identi
 the feature is gone, with no second place remembering it. The folder carries two files -- a
 declaration (`feature.json`: the data, which timing it takes, which names it claims, which action it
 produces, and per metric the dedupe tag and the method whose card a session reads) and an
-implementation (`impl.py`: the code, called once at the timing it claimed). The names the outside
-writes down to name one of its debts live in that declaration, never here.
+implementation (`impl.py`: the code, called once at the timing it claimed) -- and, when a method it
+names has a card, the card itself under `cards/<lang>/<method>/`. The names the outside writes down
+to name one of its debts live in that declaration, never here.
 
 This module is the core's whole knowledge of features: the four knob kinds, the three timings, the
 two actions, and the rules a declaration has to satisfy. No installed feature's name appears here:
@@ -68,11 +69,14 @@ SOURCES = ('ticket', 'pool')
 #: they are the closed set a declaration's `layers` cell may narrow its own knob to.
 LAYERS = ('node', 'cycle', 'project', 'global')
 
-#: Where a method's card lives: `skills/<lang>/<method>/SKILL.md`, one tree per language, and one of
-#: them is enough. The root is computed from this file's own place -- a checkout keeps `skills/` one
-#: level above `tools/` -- which is also the installed layout (`~/.agents/skills` beside
-#: `~/.agents/tools`), so a tree that moves carries its cards with it.
-SKILLS = Path(__file__).resolve().parents[3] / 'skills'
+#: Where a method's card lives: in the folder of the feature that binds it, as
+#: `<feature>/cards/<lang>/<method>/SKILL.md`. One language is enough: the install links the folder
+#: of the language the chosen one lacks and says which language it borrowed, so a card in another
+#: language still reads. The card moves with the folder -- removing a feature removes the card, which
+#: is what "installed and removed with it" means for a card. The install is what turns one of those
+#: folders into the `~/.agents/skills/<method>` path a session reads; nothing here depends on that
+#: layout.
+CARDS = 'cards'
 CARD = 'SKILL.md'
 
 #: The environment variable that points the scan somewhere else (a sandbox, a drill copy): the
@@ -80,8 +84,9 @@ CARD = 'SKILL.md'
 FEATURES_ENV = 'PF_FEATURES_DIR'
 
 #: The two files a feature folder holds that this module reads: the declaration, and the implementation
-#: the timing calls. There is no third file in the folder -- the skill card a metric names by its
-#: `method` lives in the `skills/` tree, and the declaration only carries its name.
+#: the timing calls. A card a metric names by its `method` is the folder's third kind of thing, and it
+#: lives under `CARDS` in the same folder: the declaration carries the name, the folder carries the
+#: card, and the two move together.
 DECLARATION = 'feature.json'
 IMPLEMENTATION = 'impl.py'
 
@@ -433,25 +438,72 @@ def _cell_value(cell: dict):
     return 'on'
 
 
-def _card_problems(features: list) -> list:
-    """Every method name whose card no language tree under `SKILLS` has.
+def card_folders(feature: dict) -> list:
+    """The card folders one feature ships: `(language, method, folder)`, in folder order.
 
-    One tree is enough: a method has exactly one card, so an install picks one language and the card
-    it needs is the one that came with it. A skills root that is not there at all is one problem of
-    its own -- otherwise every method would be reported, and the sentence about the tree is the one a
-    human can act on.
+    The layout is the feature's own: `<feature>/cards/<lang>/<method>/`. A card is the third kind of
+    thing a feature folder carries beside the declaration and the implementation, and it is the thing
+    a `method` name points a session at -- so it lives where the feature lives, and removing the
+    folder removes both. A dotted or underscored directory is not a card (the same cut the feature
+    scan makes); a folder whose name no declaration names is `_card_problems`' business.
     """
-    trees = sorted(path for path in (SKILLS.iterdir() if SKILLS.is_dir() else [])
-                   if path.is_dir() and not path.name.startswith(('.', '__')))
-    if not trees:
-        return [f'the skills tree is not there ({SKILLS}): no method card can be found, so every '
-                f'method an installed declaration names is unbacked']
+    root = Path(feature['folder']) / CARDS
+    out = []
+    if not root.is_dir():
+        return out
+    for lang in sorted(path for path in root.iterdir()
+                       if path.is_dir() and not path.name.startswith(('.', '__'))):
+        for method in sorted(path for path in lang.iterdir()
+                             if path.is_dir() and not path.name.startswith(('.', '__'))):
+            out.append((lang.name, method.name, method))
+    return out
+
+
+def cards() -> dict:
+    """Every card the installed features ship, by method name: `{method: [(feature, folder), ...]}`.
+
+    Two features may name one method, and the card is one card either way -- so the question "is this
+    method backed" is asked of the whole installed set, not of one declaration. The folders are the
+    raw answer; `_card_problems` compares them with the declarations in both directions.
+    """
+    out = {}
+    for feature in load_all():
+        for _lang, method, folder in card_folders(feature):
+            out.setdefault(method, []).append((feature['name'], folder))
+    return out
+
+
+def _card_problems(features: list) -> list:
+    """The two ways a card and a declaration disagree.
+
+    A method a declaration names needs `SKILL.md` in a card folder some installed feature ships -- any
+    one of them is enough, because two features may name one method and one card serving both is what
+    sharing it means. The other direction is a problem too: a card folder whose name no declaration
+    names is a card nothing will ever read, and `CARDS/<lang>/<method>` is a fixed enough shape to say
+    which folder it is.
+
+    There is no skills tree to be missing here any more: the card belongs to the feature, so a project
+    with no feature has no card and nothing to report.
+    """
+    shipped = {}
+    for feature in features:
+        for lang, method, folder in card_folders(feature):
+            shipped.setdefault(method, []).append((feature['name'], lang, folder))
+    backed = {method for method, entries in shipped.items()
+              if any((folder / CARD).is_file() for _owner, _lang, folder in entries)}
+    named = set()
     out = []
     for feature in features:
         for method in methods_of(feature):
-            if not any((tree / method / CARD).is_file() for tree in trees):
-                out.append(f'feature {feature["name"]!r}: method {method!r} has no card (none of the '
-                           f'language trees under {SKILLS} has {method}/{CARD})')
+            named.add(method)
+            if method not in backed:
+                out.append(f'feature {feature["name"]!r}: method {method!r} has no card (no installed '
+                           f'feature ships {CARDS}/<lang>/{method}/{CARD})')
+    for feature in features:
+        for lang, method, _folder in card_folders(feature):
+            if method not in named:
+                out.append(f'feature {feature["name"]!r}: the card {method!r} under '
+                           f'{CARDS}/{lang} is a method no installed declaration names')
     return out
 
 
@@ -546,8 +598,9 @@ def verify() -> list:
 
       * **is the declaration inside the core's closed sets, and do two features keep off each other's
         names?** -- `validate()`'s own list, unchanged;
-      * **does the method its metrics name have a card?** -- `skills/<lang>/<method>/SKILL.md`, in at
-        least one language tree (`_card_problems`);
+      * **does the method its metrics name have a card?** -- `cards/<lang>/<method>/SKILL.md` in an
+        installed feature's own folder, and no card folder whose method nothing names
+        (`_card_problems`);
       * **does the implementation keep its side of the bargain?** -- one real call against a stand-in
         project: it must answer (an offer, a reason) or "not known this pass", it must never raise,
         and it may not carry a command-shaped list in a key the core reads (`_live_call_problems`).
