@@ -13,6 +13,10 @@ What this file pins, in the order the criteria are stated:
   * **a fake second plugin**: a hand-written folder plugs in through `PF_PLUGINS_DIR` with the core
     untouched -- and an ill-formed or duplicated declaration is reported by `validate()` while the
     runtime skips it;
+  * **a source a plugin claims**: a reading may draw on a source its own declaration claims, whose
+    number the implementation function it names computes -- the implementation reaches that number
+    through the reading door, the note's value is not consulted, and the core names no third source;
+    a source nobody claims, and one the core already serves, are the validator's to report;
   * **the command face**: a folder may carry words instead of a timing -- `commands()` is where they
     are merged for `pf`, a declaration that cannot be read contributes none of them, a folder whose
     code will not start keeps its word there (the word is the declaration's, and the failure is named
@@ -51,11 +55,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import Base, NODE, NODE2, pipeline, normalise  # noqa: E402
 from harness import (HANDOFF_PY, STATE_MANAGE, TOOLS_DIR, _run_proc, plugins_dir,  # noqa: E402
-                     patched, requires_plugin, shipped_sources, write_plugin)
+                     patched, requires_plugin, shipped_sources, write_plugin, write_skill)
 
-__all__ = ['TestTheRegistry', 'TestTheDeletedFeatureFolder', 'TestTheDispatchGate',
-           'TestThePickTiming', 'TestABrokenOfferIsContained', 'TestTheOffersFields',
-           'TestADoorMayNotEndTheProcess']
+#: The shipped `pf` entry: one real doctor run is the door this file checks the claimed source on.
+PF = TOOLS_DIR / 'bin' / 'pf.py'
+
+__all__ = ['TestTheRegistry', 'TestASourceAPluginClaims', 'TestTheDeletedFeatureFolder',
+           'TestTheDispatchGate', 'TestThePickTiming', 'TestABrokenOfferIsContained',
+           'TestTheOffersFields', 'TestADoorMayNotEndTheProcess']
 
 #: The tag an insertion fixture's node carries, and what its offer uses to stay one at a time.
 FIXTURE_TAG = 'fixture:plugin'
@@ -216,6 +223,82 @@ def offer(ctx):
 
 def insert_impl(tag=FIXTURE_TAG):
     return INSERT_IMPL % {'tag': tag}
+
+
+#: A source a declaration claims, and the function in the same folder it names. The spellings are
+#: distinctive on purpose: the guard in `TestASourceAPluginClaims` greps the whole shipped tree for
+#: both of them, so a core file that named the fixture's source would be caught.
+CLAIMED_SOURCE = 'fixture-feed'
+CLAIMED_BY = 'fixture_feed'
+
+#: An `insert` plugin measuring with a source of its own: `offer` asks the reading door for the
+#: number, and the core answers by calling the function the declaration names (`CLAIMED_BY`).
+CLAIMED_SOURCE_IMPL = '''
+TAG = 'feed:open'
+
+
+def %(by)s(ctx):
+    return 5.0
+
+
+def offer(ctx):
+    score = ctx.reading('feed_score')
+    line = ctx.knob('feed_limit')
+    if score is None or line is None or score < line or ctx.nodes_with_tag(TAG):
+        return None
+    tags = [tag for tag in ((ctx.cycle or {}).get('tags') or []) if isinstance(tag, str)]
+    return {
+        'title': f'Inserted by the fixture: feed {score:g}',
+        'tags': [TAG, *tags],
+        'spec_of': lambda node_id: f'# fixture\\n\\nfeed {score:g} for {node_id}\\n',
+        'fields': {'metric': 'feed_score', 'reading': score, 'line': line},
+    }
+'''
+
+#: A source whose computation answers a decision and nothing else -- the shape the reading door types
+#: away. The offer below only speaks when the door really handed it a number.
+DECISION_SOURCE_IMPL = '''
+def %(by)s(ctx):
+    return True
+
+
+def offer(ctx):
+    return None if ctx.reading('feed_score') is None else {'title': 'a number arrived'}
+'''
+
+#: A source whose computation is down: one `WARNING:` line, this number stays unknown, and the pass
+#: goes on as if the plugin had said nothing.
+BROKEN_SOURCE_IMPL = '''
+def %(by)s(ctx):
+    raise RuntimeError('the fixture tool is down')
+
+
+def offer(ctx):
+    return None if ctx.reading('feed_score') is None else {'title': 'a number arrived'}
+'''
+
+
+def claimed_impl(by=CLAIMED_BY):
+    return CLAIMED_SOURCE_IMPL % {'by': by}
+
+
+def claimed_decl(name='feed', source=CLAIMED_SOURCE, by=CLAIMED_BY, **extra):
+    """A plugin measuring with a source it claims: a line, one reading on that source, one metric.
+
+    The method it names is backed by the skill the case writes into the folder (`one()`), which is
+    what makes the whole declaration pass the validator rather than only `validate()`.
+    """
+    decl = {
+        'name': name, 'summary': f'{name}, a fixture that measures with its own source',
+        'timing': 'close', 'action': 'insert',
+        'knobs': {'feed_limit': {'kind': 'number', 'default': 3}},
+        'sources': {source: {'by': by}},
+        'readings': {'feed_score': {'source': source}},
+        'metrics': {'feed_score': {'line': 'feed_limit', 'tag': 'feed:open',
+                                   'method': 'pf-feed'}},
+    }
+    decl.update(extra)
+    return decl
 
 
 def insert_decl(name='fixture', timing='close', **extra):
@@ -631,6 +714,193 @@ class TestTheRegistry(FeatureBase):
         self.assertEqual([('probe-cmd', 'a-one')],
                          [(entry['name'], entry['plugin']) for entry in registry.commands()],
                          'two folders claiming one word reached the router twice')
+
+
+class TestASourceAPluginClaims(FeatureBase):
+    """A reading's number may come from a source the plugin claims, and the core passes it through.
+
+    The criteria in order: a declared source of the plugin's own passes the doctor and reaches the
+    implementation at the close; a source nobody claims is named by the doctor and skipped at runtime;
+    two plugins may not claim one name; the core names no third source. The numbers the cases build
+    with are deliberately not the note's: what proves the door is that the plugin's own function is
+    where the answer came from.
+    """
+
+    def one(self, decl=None, impl=None, name='feed', skill=True):
+        """The fixture installed, and the folder it landed in (its skill lives in the same folder)."""
+        root = self.plugins()
+        folder = write_plugin(root, name, decl if decl is not None else claimed_decl(name=name),
+                              impl if impl is not None else claimed_impl())
+        if skill:
+            write_skill(folder, 'pf-feed')
+        return folder, root
+
+    def test_a_claimed_source_passes_the_doctor_and_reaches_the_close(self):
+        """A source of the plugin's own, end to end: the validator has nothing to say, the merged table
+        carries the name beside the core's two, the session is never asked for that number -- and the
+        close hands the implementation the number its own function computes, not the one the note
+        happens to carry for that key."""
+        self.one()
+        registry = pipeline.registry()
+
+        self.assertEqual([], registry.validate(), 'a claimed source was read as a declaration problem')
+        self.assertEqual([], registry.verify())
+        self.assertEqual([{'plugin': 'feed', 'name': CLAIMED_SOURCE, 'by': CLAIMED_BY}],
+                         registry.sources())
+        self.assertEqual([*registry.SOURCES, CLAIMED_SOURCE], registry.source_names())
+
+        sb = self.finished_head(reading={'feed_score': 99})    # a note value that must not win
+
+        self.assertEqual([], pipeline.ticket_readings(sb.root, sb.cycle()),
+                         'the session was asked for a number it never measures')
+
+        action = sb.close_round(NODE)
+
+        self.assertEqual('insert_node', action['action'], action)
+        made = action['node_id']
+        self.assertIn('feed 5', sb.dag()['nodes'][made]['title'],
+                      f'the number came from somewhere else: {sb.dag()["nodes"][made]["title"]}')
+        spec = (sb.root / '.pf' / 'nodes' / made / 'spec.md').read_text(encoding='utf-8')
+        self.assertIn('feed 5', spec, 'the generated spec missed the number its source computed')
+
+    def test_pf_doctor_lists_the_claim_and_passes(self):
+        """The doctor's own door: the claimed source is on its listing beside the function that
+        computes it, and this checkout has nothing to report about the fixture."""
+        self.one()
+        sb = self.finished_head()
+        (sb.root / '.pf' / 'AGENTS.md').write_text('# fixture\n', encoding='utf-8')
+
+        proc = _run_proc(sb.root, [PF, 'doctor'], check=False)
+
+        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+        self.assertIn('sources:', proc.stdout)
+        self.assertIn(f'{CLAIMED_SOURCE} (computed by {CLAIMED_BY}())', proc.stdout)
+        self.assertIn('every health check passed.', proc.stdout)
+
+    def test_a_source_no_plugin_claims_is_named_and_the_step_still_runs(self):
+        """A reading on a source outside the merged set: the doctor says which plugin and which name
+        (and what it does claim), that cell is not in the merged table, and the close carries on as
+        the ordinary one it is."""
+        self.one(decl=claimed_decl(sources={}))
+        registry = pipeline.registry()
+
+        problems = '\n'.join(registry.validate())
+        self.assertIn("plugin 'feed'", problems)
+        self.assertIn(f"reading 'feed_score' has source {CLAIMED_SOURCE!r}", problems)
+        self.assertIn("neither one of the core's", problems)
+        self.assertEqual([], registry.readings(), 'a cell the doctor rejects reached the merged table')
+
+        sb = self.finished_head()
+
+        action = sb.close_round(NODE)
+
+        self.assertEqual('dispatch', action['action'], action)
+        self.assertEqual(2, len(sb.dag()['nodes']), 'a plugin the doctor rejects was asked anyway')
+        self.assertEqual([NODE2], sb.holding_ids())
+
+    def test_a_source_the_core_serves_cannot_be_claimed(self):
+        """The core's two names are its own statement of where a number comes from: a claim on one of
+        them is a second home for that meaning, and the doctor names it."""
+        self.one(decl=claimed_decl(source='pool'))
+
+        problems = '\n'.join(pipeline.registry().validate())
+
+        self.assertIn("plugin 'feed'", problems)
+        self.assertIn("source 'pool' is one of the core's own", problems)
+
+    def test_a_reading_cannot_draw_on_another_plugins_source(self):
+        """A source name belongs to the plugin that claimed it: another plugin's reading on that name
+        is the same problem as one nobody claims -- the doctor names the reader, and no number crosses
+        from one folder into the other."""
+        root = self.plugins()
+        write_plugin(root, 'a-one', {'name': 'a-one', 'summary': 'a fixture', 'timing': 'close',
+                                     'action': 'insert',
+                                     'sources': {CLAIMED_SOURCE: {'by': CLAIMED_BY}}},
+                     claimed_impl())
+        write_plugin(root, 'b-two', {'name': 'b-two', 'summary': 'a fixture', 'timing': 'close',
+                                     'action': 'insert',
+                                     'readings': {'feed_score': {'source': CLAIMED_SOURCE}}},
+                     claimed_impl())
+
+        problems = '\n'.join(pipeline.registry().validate())
+
+        self.assertIn("plugin 'b-two'", problems)
+        self.assertIn(f"reading 'feed_score' has source {CLAIMED_SOURCE!r}", problems)
+        self.assertEqual(1, len(pipeline.registry().sources()), 'the claim was not the first one kept')
+
+    def test_two_plugins_may_not_claim_one_source(self):
+        """A source name has one owner: the doctor names both claimants, and the merge keeps the first
+        folder in order, the way a knob's first claim does."""
+        root = self.plugins()
+        decl = {'summary': 'a fixture', 'timing': 'close', 'action': 'insert',
+                'sources': {CLAIMED_SOURCE: {'by': CLAIMED_BY}}}
+        for name in ('a-one', 'b-two'):
+            write_plugin(root, name, {'name': name, **decl}, claimed_impl())
+
+        problems = '\n'.join(pipeline.registry().validate())
+
+        self.assertIn(f"source {CLAIMED_SOURCE!r} is claimed by both 'a-one' and 'b-two'", problems)
+        self.assertEqual(['a-one'], [claim['plugin'] for claim in pipeline.registry().sources()])
+
+    def test_the_core_names_no_third_source(self):
+        """The core serves its own two and merges the rest from the declarations: the fixture's source
+        and the function it names appear in no shipped file."""
+        self.one()
+        registry = pipeline.registry()
+
+        self.assertEqual(('ticket', 'pool'), registry.SOURCES,
+                         "the core's own sources grew a third name")
+        self.assertEqual(['ticket', 'pool', CLAIMED_SOURCE], registry.source_names())
+        spelled = [path.relative_to(TOOLS_DIR).as_posix() for path in shipped_sources()
+                   if CLAIMED_SOURCE in (text := path.read_text(encoding='utf-8'))
+                   or CLAIMED_BY in text]
+        self.assertEqual([], spelled, f'the core spells the fixture\'s source: {spelled}')
+
+    def test_a_claim_whose_function_is_missing_is_named_by_the_validator(self):
+        """The declaration alone is sound -- the claim and the reading agree -- and the half only the
+        implementation can show is missing: the validator looks the function up and names it."""
+        self.one(decl={'name': 'feed', 'summary': 'a fixture', 'timing': 'close', 'action': 'insert',
+                       'sources': {CLAIMED_SOURCE: {'by': CLAIMED_BY}},
+                       'readings': {'feed_score': {'source': CLAIMED_SOURCE}}},
+                 impl='def offer(ctx):\n    return None\n', skill=False)
+        registry = pipeline.registry()
+
+        self.assertEqual([], registry.validate())
+
+        problems = '\n'.join(registry.verify())
+        self.assertIn(f"source {CLAIMED_SOURCE!r}", problems)
+        self.assertIn(f'{CLAIMED_BY}()', problems)
+
+    def test_the_note_is_not_the_source_and_a_decision_is_not_a_number(self):
+        """The door answers from the claimed source only, and types the answer like every other
+        reading: a value the note carries for that key is not consulted, a bool is not a measurement,
+        and a ticket reading still reads the note (the door kept its other half)."""
+        self.one(decl=claimed_decl(readings={'feed_score': {'source': CLAIMED_SOURCE},
+                                             'note_score': {'source': 'ticket'}},
+                                   metrics={'feed_score': {'line': 'feed_limit', 'tag': 'feed:open',
+                                                           'method': 'pf-feed'}}),
+                 impl=DECISION_SOURCE_IMPL % {'by': CLAIMED_BY})
+        sb = self.finished_head(reading={'feed_score': 99, 'note_score': 7})
+        ctx = pipeline.Context(sb.root, cycle=sb.cycle(), node_id=NODE,
+                               sig=sb.read_signal('cyc', NODE), dag=sb.dag())
+
+        self.assertIsNone(ctx.reading('feed_score'))
+        self.assertEqual(7.0, ctx.reading('note_score'))
+
+    def test_a_source_that_raises_costs_its_number_and_nothing_else(self):
+        """A computation that is down: one `WARNING:` line names the plugin, the implementation is
+        handed "not known this pass" (so it says nothing), and the close answers as the ordinary one."""
+        self.one(impl=BROKEN_SOURCE_IMPL % {'by': CLAIMED_BY})
+        sb = self.finished_head()
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            action = sb.close_round(NODE)
+
+        self.assertEqual('dispatch', action['action'], action)
+        self.assertEqual(2, len(sb.dag()['nodes']), 'a failing source still inserted a node')
+        self.assertIn("WARNING: plugin feed failed to compute 'feed_score'", err.getvalue())
+        self.assertIn('the fixture tool is down', err.getvalue())
 
 
 class TestTheDeletedFeatureFolder(FeatureBase):

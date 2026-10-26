@@ -24,8 +24,9 @@ guesses.
 **What a plugin may look at is this module's `Context`, and nothing else.** It is handed the cycle,
 the node, the ticket and the graph the caller already read -- never a path to the ledger and never
 `load_dag`, so a plugin cannot read the project behind the pipeline's back. The doors it is given are
-the ones a judgement needs: a knob's effective value (`knob`), a number off the ticket (`reading`), the
-open nodes carrying a tag (`nodes_with_tag`), and the two ways to a child process (`capture` / `run`).
+the ones a judgement needs: a knob's effective value (`knob`), a number one of its declared readings
+answers (`reading`: the ticket's, or the one a source it claimed computes for it), the open nodes
+carrying a tag (`nodes_with_tag`), and the two ways to a child process (`capture` / `run`).
 `spec_path` is the sixth, and it is the tree's own layout (which only `nodes.py` spells), handed over
 so a plugin's generated text can name where it will land.
 
@@ -113,13 +114,35 @@ def warn(name: str, what: str, error) -> None:
 
 # ── what a plugin is allowed to see ────────────────────────────────────────
 
+def _number(value):
+    """One reading as a number, or `None`: a number is a number and nothing else.
+
+    A bool is the JSON spelling of a decision, never 1, and a string is not parsed -- guessing a
+    number out of a worker's or a tool's prose is how a threshold fires on the wrong evidence. The one
+    rule both roads to a number come through (`reading`'s note lookup and a source's own function).
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _from_note(sig, key: str):
+    """The number one ticket reported under `outputs.reading.<key>`, or `None` (see `_number`)."""
+    outputs = (sig or {}).get('outputs') or {}
+    reading = outputs.get('reading') if isinstance(outputs, dict) else None
+    if not isinstance(reading, dict):
+        return None
+    return _number(reading.get(key))
+
+
 class Context:
     """Everything a plugin is handed at one timing: the state, and the few doors to it.
 
     The caller passes what it already read -- the cycle, the node it is judging, that node's ticket,
     the graph and the node the close had picked. Nothing here reads the project: the pipeline hands
     the graph down so a close reads it once, and a plugin cannot read it a second time behind its
-    back.
+    back. The one thing this class goes and asks for is the declaration behind a reading key: where a
+    number comes from is the declaration's statement, and the door reads it rather than restating it.
     """
 
     def __init__(self, project, cycle: dict | None = None, node_id: str | None = None,
@@ -130,6 +153,11 @@ class Context:
         self.sig = sig
         self.dag = dag
         self.target = target
+        # `reading`'s two memories: which declaration cell stands behind a key, and the number a
+        # source's own function answered this pass -- so a plugin that asks twice is computed once.
+        self._cells: dict = {}
+        self._numbers: dict = {}
+        self._computing: set = set()
 
     def knob(self, name: str):
         """One knob's effective value, from the whole chain (node -> line -> project -> global ->
@@ -139,20 +167,76 @@ class Context:
         return store.resolve_knob(self.project, name, cycle=self.cycle, node=self.node_id)
 
     def reading(self, key: str) -> float | None:
-        """The number one ticket reported under `outputs.reading.<key>`; `None` when absent.
+        """One declared reading's number, or `None` when there is none this pass.
 
-        A number is a number and nothing else: a bool is a decision, not a measurement, and a string
-        is not parsed -- guessing a number out of a worker's prose is how a threshold fires on the
-        wrong evidence.
+        Two kinds of source, one door. A `ticket` reading -- and any key no declaration names, which
+        the note may carry all the same -- is the number the worker wrote under
+        `outputs.reading.<key>`. A reading drawn on a source its own declaration claims is the number
+        that source computes: the declaration names the implementation function (`by`), this calls it
+        with this context, and the answer is handed on untouched. The core reads neither number's
+        meaning -- a number is a number and nothing else: a bool is a decision, not a measurement, and
+        a string is not parsed, because guessing a number out of a tool's prose is how a threshold
+        fires on the wrong evidence.
+
+        A core source the core does not compute (`pool`: a tool's own number the plugin fetches with
+        `capture`) has no answer here -- it is not the ticket's, and no function was named for it.
         """
-        outputs = (self.sig or {}).get('outputs') or {}
-        reading = outputs.get('reading') if isinstance(outputs, dict) else None
-        if not isinstance(reading, dict):
+        if not key:
             return None
-        value = reading.get(key)
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
+        cell = self._cell(key)
+        if cell is None or cell.get('source') == 'ticket':
+            return _from_note(self.sig, key)
+        return self._computed(key, cell)
+
+    def _cell(self, key: str):
+        """The declaration cell behind one reading key, or `None` (undeclared, or no registry)."""
+        if key in self._cells:
+            return self._cells[key]
+        found = _registry_or_none()
+        cell = None
+        if found is not None:
+            try:
+                cell = next((entry for entry in found.readings() if entry.get('key') == key), None)
+            except Exception as e:               # noqa: BLE001 -- a broken registry is not fatal
+                warn('<registry>', 'could not be read', e)
+        self._cells[key] = cell
+        return cell
+
+    def _computed(self, key: str, cell: dict):
+        """The number the source's own implementation computes, or `None` (one `WARNING:` at most).
+
+        The function the claim names is called with this context -- it needs the project and the two
+        ways to a child process, exactly like the timing's own door -- once per key per pass. A
+        function that is missing, one that raises, and one that answers something that is not a number
+        all cost this number only, the same containment every other door of a plugin gets; a function
+        that asks for the number it is computing is refused the same way rather than recursing.
+        """
+        if key in self._numbers:
+            return self._numbers[key]
+        by = cell.get('by') or ''
+        name = cell.get('plugin') or '?'
+        value = None
+        if not by:
+            self._numbers[key] = None
             return None
-        return float(value)
+        if key in self._computing:
+            warn(name, f'asked for {key!r} while computing it', 'the number stays unknown this pass')
+        else:
+            self._computing.add(key)
+            try:
+                impl = _impl_of({'name': name})
+                call = getattr(impl, by, None) if impl is not None else None
+                if impl is not None and not callable(call):
+                    warn(name, f'has no {by}()', f'its source for {key!r} cannot be computed')
+                elif callable(call):
+                    value = _number(call(self))
+            except (Exception, SystemExit) as e:     # noqa: BLE001 -- tolerant here, strict in doctor
+                warn(name, f'failed to compute {key!r}', e)
+                value = None
+            finally:
+                self._computing.discard(key)
+        self._numbers[key] = value
+        return value
 
     def nodes_with_tag(self, tag: str) -> list:
         """The ids of the still-open (`todo`) nodes carrying one tag, sorted.

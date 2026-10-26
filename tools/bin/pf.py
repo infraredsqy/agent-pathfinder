@@ -409,8 +409,9 @@ def _knob_line(name: str, spec: dict) -> str:
 
 def _report_features() -> int:
     """Say which plugins are installed and how each one works -- its own summary, the knobs it
-    declares, the tags and methods the outside writes down, the commands it contributes -- print
-    every problem the validator found, and count those problems for the doctor's exit code.
+    declares, the tags and methods the outside writes down, the reading sources it computes itself,
+    the commands it contributes -- print every problem the validator found, and count those problems
+    for the doctor's exit code.
 
     Zero plugin folders is a legal project and is reported as such: the core is whole without any
     plugin, and that sentence is what makes it visible.
@@ -448,11 +449,15 @@ def _report_features() -> int:
                 print(lead + _knob_line(name, spec))
             tags = registry.tags_of(plugin)
             methods = registry.methods_of(plugin)
+            claimed = registry.sources_of(plugin)
             words = registry.commands_of(plugin)
             if tags:
                 print('      tags: ' + ', '.join(tags))
             if methods:
                 print('      methods: ' + ', '.join(methods))
+            if claimed:
+                print('      sources: ' + ', '.join(
+                    f'{cell["name"]} (computed by {cell["by"]}())' for cell in claimed))
             if words:
                 print('      commands: ' + ', '.join(words))
     problems = registry.verify()

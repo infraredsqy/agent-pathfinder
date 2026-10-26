@@ -4,14 +4,16 @@
 A plugin is a folder under the plugins directory, and the folder is its identity: remove it and
 the plugin is gone, with no second place remembering it. The folder carries two files -- a
 declaration (`plugin.json`: the data, which timing it takes, which names it claims, which action it
-produces, per metric the dedupe tag and the method whose skill a session reads, and the commands
-`pf` itself hands to it) and an implementation (`impl.py`: the code, called once at the timing it
-claimed, or run as a script by one of those commands) -- and, when a method it names has a skill, the
-skill itself under `skills/<lang>/<method>/`. The names the outside writes down to name one of its
-debts, and the words `pf` routes to it, live in that declaration, never here.
+produces, per metric the dedupe tag and the method whose skill a session reads, the reading sources it
+claims for itself, and the commands `pf` itself hands to it) and an implementation (`impl.py`: the
+code, called once at the timing it claimed, or run as a script by one of those commands) -- and, when
+a method it names has a skill, the skill itself under `skills/<lang>/<method>/`. The names the outside
+writes down to name one of its debts, and the words `pf` routes to it, live in that declaration, never
+here.
 
 This module is the core's whole knowledge of plugins: the four knob kinds, the three timings, the
-two actions, the shape of a declared command, and the rules a declaration has to satisfy. No installed
+two actions, the shape of a declared command, the two reading sources the core serves itself plus the
+ones a declaration claims for its own, and the rules a declaration has to satisfy. No installed
 plugin's name appears here: names arrive from the declarations and are merged here for every reader
 (the writing side's validation, the candidates `--help` shows, the words `pf` routes, the ticket form,
 the doctor).
@@ -27,10 +29,11 @@ so a plugin put back or taken away shows up at the next call, and a plugins dire
 in it returns nothing from every door here (that is what "the folder was deleted" looks like).
 
 `validate()` asks the declaration alone; `verify()` is the validator and asks both sides: the same
-declaration problems, plus the method skills the declarations name, plus one real call of every
-implementation against a stand-in project (`_StandIn`). The suite and `pf doctor` are its two
-callers, and nothing on the pipeline's route is: a project in the middle of its pipeline must not be
-stopped by a plugin that is broken.
+declaration problems, plus the method skills the declarations name, plus the implementation function
+each claimed source says computes its number, plus one real call of every implementation against a
+stand-in project (`_StandIn`). The suite and `pf doctor` are its two callers, and nothing on the
+pipeline's route is: a project in the middle of its pipeline must not be stopped by a plugin that is
+broken.
 
 Standalone on purpose: this file imports the standard library and fetches `tools/shared/loader.py`
 by path, and it carries no package-relative import, because it is loaded by path from two packages.
@@ -64,8 +67,23 @@ ACTIONS = ('insert', 'block')
 #: pass a plain membership check and then never run -- a closed set that lies -- so it is a problem.
 CELLS = (('close', 'insert'), ('pick', 'insert'), ('dispatch', 'block'))
 
-#: Where a reading's number comes from: the worker's ticket, or the pool a tool computes itself.
+#: The two reading sources the core serves itself: the number the worker reports in its ticket, and
+#: the pool a tool computes. A declaration may draw on either, and on nothing else it does not claim
+#: for itself (`SOURCES_GROUP`): the set of sources is these two plus the names the installed plugins
+#: claim, merged here for every reader.
 SOURCES = ('ticket', 'pool')
+
+#: The group a declaration claims reading sources of its own in: `{name: {by}}`. A claimed
+#: source is the claimant's: the number is computed by the implementation function `by` names, and the
+#: core only hands it on to the plugin that asked for it -- it does not read what the number means.
+#: The two names in `SOURCES` are the core's own and cannot be claimed (that would be a second home
+#: for the meaning the core already fixed); a name two plugins claim is `_conflicts`' problem.
+SOURCES_GROUP = 'sources'
+
+#: The cell a claimed source must state: the implementation function that computes the number. "Who
+#: computes it" is the whole of what a claim adds over a bare name, and it is data -- answerable
+#: without executing anything, which is why it lives in the declaration and not in the implementation.
+SOURCE_BY = 'by'
 
 #: The name group a declaration claims when it brings words of its own: `pf <word>` hands the rest of
 #: the line to the folder's implementation, run as a script. A command is not a timing -- it happens
@@ -232,18 +250,48 @@ def _names(decl: dict) -> dict:
         value = decl.get(key)
         return value if isinstance(value, dict) else {}
     return {'knobs': group('knobs'), 'readings': group('readings'), 'metrics': group('metrics'),
-            'commands': group(COMMANDS)}
+            'commands': group(COMMANDS), SOURCES_GROUP: group(SOURCES_GROUP)}
 
 
-def _command_word(key) -> bool:
-    """Whether one declared key is a word `pf` could be handed as its first argv.
+def _one_word(value) -> bool:
+    """Whether one declared value is a single token -- a command's word, or a source's name.
 
-    One token, no blanks -- `pf` matches its first argv against the word as it stands, so anything a
-    shell would split is not one -- and it does not open with a dash: that spelling is an option, and
-    the table the word joins says nothing about options.
+    One token, no blanks: `pf` matches a command word against its first argv as it stands, and a
+    source's name is a word of the same kind (a reading names it back verbatim), so anything a shell
+    would split is not one. It also does not open with a dash: that spelling is an option, and neither
+    table says anything about options.
     """
-    return (isinstance(key, str) and bool(key) and not any(ch.isspace() for ch in key)
-            and not key.startswith('-'))
+    return (isinstance(value, str) and bool(value) and not any(ch.isspace() for ch in value)
+            and not value.startswith('-'))
+
+
+def _source_cells(decl: dict) -> dict:
+    """One declaration's usable source claims: `{name: {by}}`, in declaration order.
+
+    A cell is usable when its name is one token, the name is not one of the core's own two, and it
+    states `by` as one word. Everything else is a declaration problem (`_declaration_problems`) and is
+    not a source any reading may draw on -- a broken claim is named by the doctor and skipped by the
+    merge, the same way a broken knob cell is.
+    """
+    out = {}
+    for key, cell in _names(decl)[SOURCES_GROUP].items():
+        if not isinstance(cell, dict) or not _one_word(key) or key in SOURCES:
+            continue
+        by = cell.get(SOURCE_BY)
+        if not _one_word(by):
+            continue
+        out[key] = {'by': by}
+    return out
+
+
+def _served(decl: dict) -> tuple:
+    """What one declaration's readings may draw on: the core's own two, then the names it claims.
+
+    One declaration only. A source another plugin claims is not in this tuple: a claimed name is the
+    claimant's, not a pool every reading may reach into, so B's reading on A's source stays a
+    declaration problem (the same answer as a name nobody claims).
+    """
+    return (*SOURCES, *_source_cells(decl))
 
 
 def _declaration_problems(plugin: dict) -> list:
@@ -283,7 +331,8 @@ def _declaration_problems(plugin: dict) -> list:
 
     groups = _names(decl)
     knobs, readings, metrics = groups['knobs'], groups['readings'], groups['metrics']
-    commands = groups['commands']
+    commands, sources = groups['commands'], groups[SOURCES_GROUP]
+    served = _served(decl)                        # what this declaration's readings may draw on
     for key, cell in knobs.items():
         if not isinstance(cell, dict):
             out.append(f'plugin {name!r}: knob {key!r} must be an object '
@@ -317,9 +366,10 @@ def _declaration_problems(plugin: dict) -> list:
             out.append(f'plugin {name!r}: reading {key!r} must be an object (source, ask, ...)')
             continue
         source = cell.get('source')
-        if source not in SOURCES:
-            out.append(f'plugin {name!r}: reading {key!r} has source {source!r}, which is not one '
-                       f'of {list(SOURCES)}')
+        if source not in served:
+            out.append(f'plugin {name!r}: reading {key!r} has source {source!r}, which is neither '
+                       f'one of the core\'s ({list(SOURCES)}) nor a source this plugin claims '
+                       f'(its {SOURCES_GROUP}: {list(_source_cells(decl))})')
         when = cell.get('when_knob')
         if when and when not in knobs:
             out.append(f'plugin {name!r}: reading {key!r} is narrowed by {when!r}, which the '
@@ -342,12 +392,28 @@ def _declaration_problems(plugin: dict) -> list:
                 out.append(f'plugin {name!r}: metric {key!r} needs a {field} (the string the '
                            f'outside writes down to name this debt)')
 
+    for key, cell in sources.items():
+        if not isinstance(cell, dict):
+            out.append(f'plugin {name!r}: source {key!r} must be an object ({SOURCE_BY})')
+            continue
+        if not _one_word(key):
+            out.append(f'plugin {name!r}: source {key!r} is not a name (one word, no blanks, not '
+                       f'opening with a dash)')
+        if key in SOURCES:
+            out.append(f'plugin {name!r}: source {key!r} is one of the core\'s own ({list(SOURCES)}) '
+                       f'and cannot be claimed: a second home for that meaning is what this cell '
+                       f'exists to avoid')
+        by = cell.get(SOURCE_BY)
+        if not _one_word(by):
+            out.append(f'plugin {name!r}: source {key!r} needs a {SOURCE_BY} (the implementation '
+                       f'function that computes the number)')
+
     for key, cell in commands.items():
         if not isinstance(cell, dict):
             out.append(f'plugin {name!r}: command {key!r} must be an object '
                        f'({COMMAND_SUMMARY}, {COMMAND_KEEP_NAME})')
             continue
-        if not _command_word(key):
+        if not _one_word(key):
             out.append(f'plugin {name!r}: command {key!r} is not a word `pf` could be given (one '
                        f'word, no blanks, not opening with a dash)')
         summary = cell.get(COMMAND_SUMMARY)
@@ -388,12 +454,14 @@ def _problems_of(plugin: dict) -> list:
 
 
 def _conflicts(plugins: list) -> list:
-    """The names two plugins may not share: plugin names, knobs, readings, dedupe tags, commands."""
+    """The names two plugins may not share: plugin names, knobs, readings, sources, dedupe tags,
+    commands."""
     out = []
     for label, values in (
         ('plugin name', [(plugin['name'], plugin['name']) for plugin in plugins]),
         ('knob', _declared(plugins, 'knobs')),
         ('reading', _declared(plugins, 'readings')),
+        ('source', _declared(plugins, SOURCES_GROUP)),
         ('dedupe tag', _declared(plugins, 'metrics', 'tag')),
         ('command', _declared(plugins, COMMANDS)),
     ):
@@ -432,10 +500,11 @@ def _first_claim(label: str, values: list):
 def validate() -> list:
     """Every problem the installed plugins have: the doctor's list, and nothing that raises.
 
-    Covered: the plugins directory itself, each declaration's own shape and references, the names two
-    plugins may not share, an implementation file that is missing, and an implementation that failed
-    to load at runtime. An unknown timing or action is stated here rather than silently dropped: the
-    runtime skips that cell, and this is where a human reads why.
+    Covered: the plugins directory itself, each declaration's own shape and references (a reading's
+    source is one of the core's two or one its own declaration claims; a claim names the function that
+    computes the number), the names two plugins may not share, an implementation file that is missing,
+    and an implementation that failed to load at runtime. An unknown timing or action is stated here
+    rather than silently dropped: the runtime skips that cell, and this is where a human reads why.
     """
     plugins = load_all()
     problems = list(scan_problems())
@@ -456,7 +525,10 @@ class _StandIn:
     The doors are the core `Context`'s (`plugin_host.Context`), answered the way a project that
     configured its knobs but holds nothing yet would: a declared knob reads the first value its cell
     allows (a `number` / `integer` as 1, a `word` as its first declared word, a `switch` as `on`), a
-    declared ticket reading reads 1, the line is in service with no tags, and the graph is empty.
+    declared reading the core hands a number for reads 1 -- the ticket's, and one drawn on a source
+    this declaration claims -- the line is in service with no tags, and the graph is empty. A core
+    source the implementation measures itself (`pool`) reads nothing here, exactly as no door answers
+    for it: the stand-in says what the real context would say.
 
     The line carries no tags on purpose: which line a plugin judges is its own business, read off
     the cycle it is handed, and the core guessing a tag on its behalf would be the core naming a
@@ -477,8 +549,9 @@ class _StandIn:
         self.target = {}
         self._knobs = {key: _cell_value(cell) for key, cell in _names(decl)['knobs'].items()
                        if isinstance(cell, dict)}
+        served = ('ticket', *_source_cells(decl))    # what a real context hands a number for
         self._readings = {key: 1.0 for key, cell in _names(decl)['readings'].items()
-                          if isinstance(cell, dict) and cell.get('source') == 'ticket'}
+                          if isinstance(cell, dict) and cell.get('source') in served}
 
     def knob(self, name: str):
         return self._knobs.get(name)
@@ -669,23 +742,54 @@ def _live_call_problems(plugin: dict, decl: dict) -> list:
     return _edit_problems(name, answer)
 
 
+def _source_problems(plugins: list) -> list:
+    """Every claimed source whose computation the implementation cannot show.
+
+    A claim names, in `by`, the implementation function that computes the number; the doctor is the
+    one door that may load the implementation and find out whether that function is there. Both faces
+    are answered without running it: the function is looked up, never called -- a number a tool prints
+    is the runtime's to fetch, on the pass that needs it. A load failure and a broken declaration are
+    skipped here: `validate()` already names both, and a second sentence for one fault is noise.
+    """
+    out = []
+    for plugin in plugins:
+        decl = _decl_of(plugin)
+        if decl is None:
+            continue
+        name = plugin['name']
+        for source, cell in _source_cells(decl).items():
+            if not (plugin['folder'] / IMPLEMENTATION).is_file():
+                continue
+            impl = impl_of(name)
+            if impl is None:
+                continue
+            if not callable(getattr(impl, cell['by'], None)):
+                out.append(f'plugin {name!r}: source {source!r} says its number is computed by '
+                           f'{cell["by"]}() in {IMPLEMENTATION}, and there is no such function')
+    return out
+
+
 def verify() -> list:
     """The validator: everything `validate()` answers, plus the half only the implementation can show.
 
-    Three questions, and every sentence that comes back names the plugin:
+    Four questions, and every sentence that comes back names the plugin:
 
       * **is the declaration inside the core's closed sets, and do two plugins keep off each other's
         names?** -- `validate()`'s own list, unchanged;
       * **does the method its metrics name have a skill?** -- `skills/<lang>/<method>/SKILL.md` in an
         installed plugin's own folder, and no skill folder whose method nothing names
         (`_skill_problems`);
+      * **does every claimed source name a function the implementation has?** -- the `by` cell, looked
+        up and not called (`_source_problems`): a claim whose computation is missing would answer
+        nothing at every close, silently;
       * **does the implementation keep its side of the bargain?** -- one real call against a stand-in
         project: it must answer (an offer, a reason) or "not known this pass", it must never raise,
         and it may not carry a command-shaped list in a key the core reads (`_live_call_problems`).
 
     The commands a declaration claims have no door of their own here: their shape is `validate()`'s
     (a word, a line, whether the word goes along) and their routing is `pf`'s. Running one to see
-    whether it answers would mean starting a child process, which this file never does.
+    whether it answers would mean starting a child process, which this file never does -- and so is a
+    claimed source's `by`, for the same reason.
 
     Nothing here raises on a broken plugin -- a broken plugin is a sentence, not an exception. The
     two callers are the test suite and `pf doctor`; the pipeline's route never asks: somebody's
@@ -700,6 +804,7 @@ def verify() -> list:
             impl_of(plugin['name'])
     problems = validate()
     problems.extend(_skill_problems(plugins))
+    problems.extend(_source_problems(plugins))
     for plugin in plugins:
         decl = _decl_of(plugin)
         if decl is not None:
@@ -760,28 +865,76 @@ def _layer_cell(value):
 
 
 def readings() -> list:
-    """Every reading the installed plugins declare: `{plugin, key, source, ask, when_knob}`.
+    """Every reading the installed plugins declare: `{plugin, key, source, by, ask, when_knob}`.
 
     Declaration order inside one plugin, plugins in folder order -- the order the declarations were
     written in, which is the order a form or a judgement should walk them in. A reading whose source
-    is not one of the two sources is dropped (the doctor reports it).
+    is neither one of the core's two nor a source its own declaration claims is dropped (the doctor
+    reports it). `by` is the implementation function that computes the number for a claimed source,
+    and `''` for the core's own two -- the door that hands the number over reads it from here.
     """
     out = []
     for plugin in load_all():
         decl = _decl_of(plugin)
         if decl is None:
             continue
+        claims = _source_cells(decl)
+        served = _served(decl)
         for key, cell in _names(decl)['readings'].items():
-            if not isinstance(cell, dict) or cell.get('source') not in SOURCES:
+            if not isinstance(cell, dict) or cell.get('source') not in served:
                 continue
             out.append({
                 'plugin': plugin['name'],
                 'key': key,
                 'source': cell['source'],
+                'by': claims.get(cell['source'], {}).get('by', ''),
                 'ask': cell.get('ask') if isinstance(cell.get('ask'), str) else '',
                 'when_knob': cell.get('when_knob') if isinstance(cell.get('when_knob'), str) else '',
             })
     return out
+
+
+def sources_of(plugin: dict) -> list:
+    """The source names one plugin's declaration claims, as `{name, by}`, in declaration order.
+
+    The usable claims only (`_source_cells`): a cell the doctor reports is not a source here either.
+    This is the declaration's own words, which is what `pf doctor` lists and what a reader goes
+    looking for when it wants to know where one number comes from.
+    """
+    return [{'name': name, **cell} for name, cell in _source_cells(_decl_of(plugin) or {}).items()]
+
+
+def sources() -> list:
+    """Every source the installed plugins claim: `{plugin, name, by}`, merged for the readers.
+
+    Folder order then declaration order, the same order every other merged table has. A name two
+    plugins claim is `_conflicts`' problem and the first folder keeps it, exactly like a knob's or a
+    command's first claim. The core's own two are not here: `SOURCES` is their one home, and a claim
+    that named one of them is a declaration problem.
+    """
+    out = []
+    seen = set()
+    for plugin in load_all():
+        decl = _decl_of(plugin)
+        if decl is None or _declaration_problems(plugin):
+            continue
+        for name, cell in _source_cells(decl).items():
+            if name in seen:
+                continue
+            seen.add(name)
+            out.append({'plugin': plugin['name'], 'name': name, **cell})
+    return out
+
+
+def source_names() -> list:
+    """Every reading source in play right now: the core's own two, then the names the plugins claim.
+
+    The whole set, for whoever asserts that the core names no third one -- not the set a reading is
+    judged against: that one is per declaration (`_served`, the core's two plus the names that
+    declaration itself claims), so a name one plugin claims is never handed to another plugin's
+    reading.
+    """
+    return [*SOURCES, *[claim['name'] for claim in sources()]]
 
 
 def tags_of(plugin: dict) -> list:
@@ -823,7 +976,7 @@ def commands_of(plugin: dict) -> list:
     decl = _decl_of(plugin) or {}
     out = []
     for key, cell in _names(decl)['commands'].items():
-        if isinstance(cell, dict) and _command_word(key) and _command_summary(cell) and key not in out:
+        if isinstance(cell, dict) and _one_word(key) and _command_summary(cell) and key not in out:
             out.append(key)
     return out
 

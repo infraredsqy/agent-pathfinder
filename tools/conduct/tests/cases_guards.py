@@ -212,14 +212,14 @@ def _called_names(expr) -> set:
 class TestTheCoreNamesNoFeature(Base):
     """No module of this tool outside `plugins/` spells a name an installed declaration owns.
 
-    The five groups are read off the declarations, so renaming a knob, a tag or a method inside a
-    plugin folder keeps this green with no edit here -- and a core that starts branching on one of
-    them turns it red. `plugins/` itself is where those names belong, so it is out of scope; the
-    test suite is not shipped code and is out of scope the same way.
+    The seven groups are read off the declarations, so renaming a knob, a tag, a source name or a
+    method inside a plugin folder keeps this green with no edit here -- and a core that starts
+    branching on one of them turns it red. `plugins/` itself is where those names belong, so it is
+    out of scope; the test suite is not shipped code and is out of scope the same way.
     """
 
     def installed_names(self) -> set:
-        """The six name groups every installed declaration owns, as one set of strings."""
+        """The seven name groups every installed declaration owns, as one set of strings."""
         registry = pipeline.registry()
         names = set()
         for plugin in registry.load_all():
@@ -227,7 +227,7 @@ class TestTheCoreNamesNoFeature(Base):
             decl = plugin.get('decl')
             if not isinstance(decl, dict):
                 continue
-            for group in ('knobs', 'readings', 'commands'):
+            for group in ('knobs', 'readings', 'commands', 'sources'):
                 cells = decl.get(group)
                 if isinstance(cells, dict):
                     names |= set(cells)
@@ -255,11 +255,11 @@ class TestTheCoreNamesNoFeature(Base):
 class TestTheSkillsNameNoFeature(Base):
     """No skill skill under `skills/` spells a name an installed declaration owns.
 
-    The same five name groups the core guard watches -- the plugin's name, its knob keys, its
-    readings, its dedupe tags and its method names -- read off the declarations, so a rename inside a
-    plugin folder follows with no edit here and a skill that starts carrying one turns this red. A
-    skill may say "run the command that lists what is installed"; the listing is the declarations'
-    own words.
+    The same seven name groups the core guard watches -- the plugin's name, its knob keys, its
+    readings, its commands, its claimed source names, its dedupe tags and its method names -- read
+    off the declarations, so a rename inside a plugin folder follows with no edit here and a skill
+    that starts carrying one turns this red. A skill may say "run the command that lists what is
+    installed"; the listing is the declarations' own words.
 
     A skill bound to a plugin is out of scope by construction: it lives in that plugin's own folder
     (`plugins/<name>/skills/`), where naming the plugin it binds is the point, and where it is
@@ -267,14 +267,15 @@ class TestTheSkillsNameNoFeature(Base):
     """
 
     def outside_names(self) -> set:
-        """The six name groups a declaration owns: name, knobs, readings, commands, tags, methods."""
+        """The seven name groups a declaration owns: name, knobs, readings, commands, sources, tags,
+        methods."""
         names = set()
         for plugin in pipeline.registry().load_all():
             names.add(plugin['name'])
             decl = plugin.get('decl')
             if not isinstance(decl, dict):
                 continue
-            for group in ('knobs', 'readings', 'commands'):
+            for group in ('knobs', 'readings', 'commands', 'sources'):
                 cells = decl.get(group)
                 if isinstance(cells, dict):
                     names |= set(cells)

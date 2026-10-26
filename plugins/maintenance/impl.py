@@ -5,7 +5,8 @@ this plugin's declaration). It therefore imports nothing from the pipeline packa
 may touch arrives in the `ctx` it is handed (`plugin_host.Context`) --
 
     ctx.knob(name)            the effective value of one knob, from the whole resolution chain
-    ctx.reading(key)          the number this ticket reported for one declared reading, or None
+    ctx.reading(key)          the number one declared reading answers: the ticket's, or the one a
+                              source the plugin claims computes (this plugin claims none)
     ctx.nodes_with_tag(tag)   the ids of the still-open nodes carrying one tag
     ctx.capture(argv)         run one command, hand back its stdout
     ctx.run(argv)             run one command
