@@ -38,8 +38,7 @@ the pool.
 **Symptom**: entries that are not on the liveness list are resolved in bulk; or the scan does not
 find the code for some entry and rules it already fixed (when really the code just moved); or the
 check is run right after a scan has pooled something, and a new entry is cleared by mistake for
-"not being on the list" — absence on the list records the moment of the scan and has nothing to do
-with the code's present state, so running the check after an add necessarily mismatches.
+"not being on the list".
 
 **Correction signal**: over one check, one of the settled entries went through no entry-by-entry
 confirmation.

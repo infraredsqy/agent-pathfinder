@@ -271,12 +271,11 @@ things belong to this road:
 
 - **Docs and design notes catching up with the state**: go through `doc-update` and write only
   what is already implemented — docs/ holding ground truth only is this system's foundation
-- **A non-behavioural small change**: comments, docstrings, formatting, docs only — the kind where
-  not a byte changes when it runs
+- **A non-behavioural small change**: comments, docstrings, formatting, docs only
 - **A one-off feasibility probe**: run a script, read a piece of code, and answer "can this be
   done"; it changes no file and leaves no node
 
-A behavioural change always enters the graph. When these pieces are a node's prerequisites, wait
+When these pieces are a node's prerequisites, wait
 for them to come back before writing the spec.
 
 Commands, options and values follow `pf dag --help` (already read once in step 1); this section

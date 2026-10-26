@@ -38,12 +38,7 @@ spots two rounds running.
 
 **Symptom**: one node's session works out a budget or a cap, and writes it into a document in the
 same wording as the user's own requirement; the nodes after it copy the reference, and it becomes
-a hard constraint nobody can touch. Further on, an agent reading the upstream docs cannot tell
-which line the user asked for and which one some earlier node's session settled in passing, so it
-takes them all as real and keeps adding on top. Two layers, three layers, and in the end you
-cannot say whose rules you are keeping — a conflict comes and you cannot tell which one should
-give, so you can only stop and ask the user, and the user has to clean up the constraints the
-agent piled up itself.
+a hard constraint nobody can touch.
 
 **Instance**: a project's goal doc (`goals.md`) does not contain a word of "chapter / segment /
 slot", and its design constraints all sit at the experience level (a reader is never left
@@ -59,11 +54,7 @@ anywhere in the user's own words or the goal docs.
 ## `conduct-hand-edits-ledger-or-resolves-conflicts` — hand-editing `.pf/` or ruling a conflict
 
 **Symptom**: to line the two sides' graphs up, you read and edit a record file under `.pf/`
-yourself; or a pull stops on a conflict and you splice the two JSON files together line by line —
-those files are rewritten whole, their key order is fixed, their statuses are partially ordered,
-paths are appended, and the holding relation is the cross-machine claim marker, so editing by hand
-and splicing by line scatter those invariants, and more often than not you produce JSON that
-neither side can read.
+yourself; or a pull stops on a conflict and you splice the two JSON files together line by line.
 
 **Correction signal**: a hand-edited record file in the workspace, or a stretch of JSON spliced
 together line by line.

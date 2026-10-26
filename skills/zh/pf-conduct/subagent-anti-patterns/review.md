@@ -10,7 +10,7 @@
 
 ## `conduct-review-only-rechecks-last-issues` · 仅复核上一轮 issue 即报 PASS
 
-**症状**：第二、第三轮只查上一轮的 critical / minor 修好没有，确认完直接报 PASS——修复本身会引入新问题，只做针对性确认等于默认修复没有副作用。
+**症状**：第二、第三轮只查上一轮的 critical / minor 修好没有，确认完直接报 PASS。
 
 **纠正信号**：这一轮的清单里只有上一轮那几条。
 

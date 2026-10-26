@@ -2,7 +2,7 @@
 
 > This file is for a subagent scanning tests; the conductor does not read it.
 
-## The 6 Garbage Test patterns
+## The Garbage Test patterns
 
 | # | Pattern | Language-agnostic description | Typical example (Catch2 / Jest / pytest) |
 |---|---|---|---|

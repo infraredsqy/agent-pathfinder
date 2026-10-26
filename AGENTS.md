@@ -31,6 +31,8 @@ development discipline (the dispatch path is live ammunition).
 - **Docs do not copy code**: field names, commands and flags, constants, file lists, word lists
   live in exactly one place, the code (or `--help`); a doc carries the design intent, the criteria
   and the "why it is set this way". The same thing is not stated twice in one doc either.
+- A call line a doc or skill quotes is taken from the tool's own mouth — `--help` or the code — at
+  writing time, never from memory; a line the tool would reject does not go in.
 - References name the file and the section, never a section number or a line number — and not one
   code comment points at a doc.
 - **A skill's docs and its anti-patterns connect through one door only**: the docs under `skills/`

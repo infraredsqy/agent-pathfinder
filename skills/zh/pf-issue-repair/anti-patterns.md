@@ -24,7 +24,7 @@
 
 ## `issue-repair-acknowledge-or-external-as-exit` · 误用 acknowledge 或 external 充当 repair 的出口
 
-**症状**：修不动就 `acknowledge`——押后是池子人机面（`pf-issue-discuss`）的动作，repair 这一侧不做它；同族的另一种错法是把「已经给过解法、解法又成立」的条目改判成 `external`。
+**症状**：修不动就 `acknowledge`；把「已经给过解法、解法又成立」的条目改判成 `external`。
 
 **纠正信号**：落定表里出现 `acknowledge`，或一条已给解法的条目被转成 `external`。
 

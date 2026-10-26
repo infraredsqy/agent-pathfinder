@@ -1,6 +1,6 @@
 # Subagents: how many to dispatch at a time
 
-> The value is not here. Before dispatching work, run `pf config max_agents` to read it: the
+> The value is not here. Before dispatching work, run `pf config get max_agents` to read it: the
 > global copy is in `~/.pf/config.json`, the project copy in `<project>/.pf/config.json`, and the
 > factory default is written in the tool. `pf config list` prints that number together with the
 > layer it came from. This file writes only how to use it.

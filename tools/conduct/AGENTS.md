@@ -15,8 +15,7 @@
   re-registration; when `pf` is not on PATH the absolute form is recorded first, and once PATH is
   fixed, one `pf register` re-run swaps it back.
 - Entries reference each other by HERE-relative paths: moving a file moves the cluster and syncs
-  these references; afterwards run `python -m unittest discover -s conduct/tests -t .`
-  (cwd `tools/`).
+  these references; afterwards run the conduct suite (see `README.md`, Development).
 
 ## How tests are written
 
@@ -25,8 +24,8 @@
 - **Call in-process whenever you can**: load `conduct_pipeline.py` by path with importlib and call
   `apply()` / `record()` directly; only a case whose subject is the CLI itself really invokes
   `state-manage.py`; the DAG and the `state.json` skeleton are built by writing files.
-- The red line is judged on a single case (≤5 s, see the root `AGENTS.md`'s time discipline); the
-  full suite's measured time is still reported as usual.
+- The red line is judged on a single case (≤5 s); the full suite's measured time is still reported
+  as usual.
 
 ## The dispatch path is live ammunition
 

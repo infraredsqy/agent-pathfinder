@@ -36,13 +36,13 @@ them in `run.md`'s "Facts checked".
 
 | Setting | Values | Read from | Which step it changes |
 |---|---|---|---|
-| The `.pf/` flavour | commit / local | step 0: `git ls-files .pf` with output = the commit flavour; for the local one, also check whether `.pf/.git` is there (whether it has a ledger repo of its own) | how many pulls step 0 does, and where the close's merge-back and commit-push go (see "Close out") |
+| The `.pf/` flavour | commit / local | judged at step 0's sync | how many pulls step 0 does, and where the close's merge-back and commit-push go (see "Close out") |
 | Mode | `manual` / `checkpoint` / `auto` | `info` | whether it stops, and whether it asks a human (see "Mode") |
 | Look at the weight first | `light` / absent = `standard` | `info`'s `weight` | who does the work at the execute step (see "Look at the weight first") |
 | Method | the `method: <skill name>` line in the spec; absent = none | read `spec.md` | who runs this node this run, and under which card (see "Method") |
-| Test tier and verification | `full` / `minimal` | `pf config test_tier` | what each step verifies, and whether tests get written (see "Test tier and verification") |
-| worktree mode | `off` / `fork` / `reuse` | `pf config worktree_mode` | the two steps, prepare's fork and the close's merge-back (see "Parallel: worktree") |
-| The subagent cap | a positive integer | `pf config max_agents` | how the dispatched work is batched (see [`../shared/pf/subagents.md`](../shared/pf/subagents.md)) |
+| Test tier and verification | `full` / `minimal` | `pf config get test_tier` | what each step verifies, and whether tests get written (see "Test tier and verification") |
+| worktree mode | `off` / `fork` / `reuse` | `pf config get worktree_mode` | the two steps, prepare's fork and the close's merge-back (see "Parallel: worktree") |
+| The subagent cap | a positive integer | `pf config get max_agents` | how the dispatched work is batched (see [`../shared/pf/subagents.md`](../shared/pf/subagents.md)) |
 | Parallel setting | how many nodes this line itself opened | the `Policy:` line of `pf cycle current` | how many nodes this run runs at once (see "Parallel: worktree") |
 | Node tag | `writing` / `coding` / `art` | on the graph, written down by pf-route | it only affects who this line picks (this flow only reads it) |
 
@@ -113,7 +113,7 @@ runs this run follows that card.
 
 ### Test tier and verification
 
-`pf config test_tier` prints how this project is verified (`full` / `minimal`, factory default
+`pf config get test_tier` prints how this project is verified (`full` / `minimal`, factory default
 `full`): read it at prepare step 2 and pass it on to Execute / Review / Fix in the dispatch
 supplement; on a light node you follow it yourself. It is a project-level setting and does not go
 into the spec; to change it, use `pf config set test_tier <value>`.
@@ -170,7 +170,7 @@ never changes them.
 
 The concurrency cap has three layers, outside in: the graph's dependency edges (who blocks whom)
 decide which nodes **may** sit side by side; this line's `parallel` (the `Policy:` line of
-`pf cycle current`) decides how many nodes the line **holds** at once; `pf config max_agents`
+`pf cycle current`) decides how many nodes the line **holds** at once; `pf config get max_agents`
 (see [`../shared/pf/subagents.md`](../shared/pf/subagents.md)) decides how many subagents this
 session has **in flight** at once. The third layer is the outermost: every node you hold may have
 its own children open at the same time, and together they may not cross it.
@@ -286,7 +286,7 @@ pf instruction list --project <absolute path to the project root>
 5. read the files named under the spec's "References" and "Up- and downstream" sections (those are
    this node's real inputs)
 6. read the project's CLAUDE.md and the docs under docs/ that bear on this node
-7. read `pf config test_tier`, `pf config worktree_mode` and `pf config max_agents`, and record
+7. read `pf config get test_tier`, `pf config get worktree_mode` and `pf config get max_agents`, and record
    them in `run.md`'s "Facts checked"; which nodes this line holds at once, and what `parallel`
    is, are in the readings of `pf cycle current` (one `Node:` line per node, `parallel` on the
    `Policy:` line)
@@ -631,7 +631,7 @@ into `-s` in full, and nothing hangs waiting. That status makes the close mark t
 
 ## Parallel: worktree
 
-**worktree follows the mode, read from `pf config worktree_mode`** (for the default and each
+**worktree follows the mode, read from `pf config get worktree_mode`** (for the default and each
 mode's design, see `docs/conduct-state.md` "the two ways in"; to change it,
 `pf config set worktree_mode <value>`):
 

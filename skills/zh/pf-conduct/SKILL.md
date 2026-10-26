@@ -28,13 +28,13 @@ disable-model-invocation: true
 
 | 配置项 | 取值 | 从哪读 | 改哪一步 |
 |---|---|---|---|
-| `.pf/` 档 | 提交 / 本地 | 第 0 步：`git ls-files .pf` 非空＝提交档；本地档再看 `.pf/.git` 在不在（它有没有自己那份记录仓库） | 第 0 步拉几次、收尾的合回与提交推送到哪（见「收尾」） |
+| `.pf/` 档 | 提交 / 本地 | 第 0 步同步时判定 | 第 0 步拉几次、收尾的合回与提交推送到哪（见「收尾」） |
 | 模式 | `manual` / `checkpoint` / `auto` | `info` | 停不停、问不问人（见「模式」） |
 | 先看重量 | `light` / 没写＝`standard` | `info` 的 `weight` | 执行那一步的活谁干（见「先看重量」） |
 | 方法 | spec 里的 `method: <技能名>` 一行；没写＝没有 | read `spec.md` | 这个节点这一趟谁跑、按哪份卡跑（见「方法」） |
-| 测试档与验证 | `full` / `minimal` | `pf config test_tier` | 每步验什么、写不写测试（见「测试档与验证」） |
-| worktree 档 | `off` / `fork` / `reuse` | `pf config worktree_mode` | 准备的 fork 与收尾的合回这两个步骤（见「并行：worktree」） |
-| 子 agent 上限 | 正整数 | `pf config max_agents` | 派活的批怎么分（见 [`../shared/pf/subagents.md`](../shared/pf/subagents.md)） |
+| 测试档与验证 | `full` / `minimal` | `pf config get test_tier` | 每步验什么、写不写测试（见「测试档与验证」） |
+| worktree 档 | `off` / `fork` / `reuse` | `pf config get worktree_mode` | 准备的 fork 与收尾的合回这两个步骤（见「并行：worktree」） |
+| 子 agent 上限 | 正整数 | `pf config get max_agents` | 派活的批怎么分（见 [`../shared/pf/subagents.md`](../shared/pf/subagents.md)） |
 | 并行档 | 这是哪条线自己开的几个节点 | `pf cycle current` 的 `Policy:` 行 | 这一趟同时跑几个节点（见「并行：worktree」） |
 | 节点 tag | `writing` / `coding` / `art` | 图上，pf-route 落的笔 | 只影响这条线挑谁（本流程只读） |
 
@@ -78,7 +78,7 @@ spec 里有 `method: <技能名>` 一行时，read `~/.agents/skills/<名>/SKILL
 
 ### 测试档与验证
 
-`pf config test_tier` 印这个项目怎么验（`full` / `minimal`，出厂默认 `full`）：准备第 2 步读出来，随 dispatch 补充传给 Execute / Review / Fix；light 节点上你自己照着走。它是项目级的设置，不进 spec；要改它用 `pf config set test_tier <值>`。
+`pf config get test_tier` 印这个项目怎么验（`full` / `minimal`，出厂默认 `full`）：准备第 2 步读出来，随 dispatch 补充传给 Execute / Review / Fix；light 节点上你自己照着走。它是项目级的设置，不进 spec；要改它用 `pf config set test_tier <值>`。
 
 | | `full` 完整套装 | `minimal` 一切从简 |
 |---|---|---|
@@ -105,7 +105,7 @@ tag 说清一个节点属于哪条线：`writing`（文案）、`coding`（代�
 - **线（cycle）**：`tags`（挑谁）、`when_shelved`、`parallel`（同时握几个节点、开几个会话）、两条维护阈值；写它们用 `cycle policy`，读它们用 `cycle current` 的 `Policy:` 行。线之间没有别的耦合：两条线并排跑，各自握各自的那几个节点
 - **节点**：mode、weight、tags、spec、报告集、FORK 记录——随图与节点目录走，一个节点一处
 
-并发上限从外到内分三层：图上的依赖边（谁挡着谁）决定哪些节点**可以**并排；这条线的 `parallel`（`pf cycle current` 的 `Policy:` 行）决定这条线同时**握**几个节点；`pf config max_agents`（见 [`../shared/pf/subagents.md`](../shared/pf/subagents.md)）决定这个会话同时**进行中**几个子 agent。第三层在最外面：握着的每一个节点都可能同时开着自己的孩子，它们加起来不许越过它。
+并发上限从外到内分三层：图上的依赖边（谁挡着谁）决定哪些节点**可以**并排；这条线的 `parallel`（`pf cycle current` 的 `Policy:` 行）决定这条线同时**握**几个节点；`pf config get max_agents`（见 [`../shared/pf/subagents.md`](../shared/pf/subagents.md)）决定这个会话同时**进行中**几个子 agent。第三层在最外面：握着的每一个节点都可能同时开着自己的孩子，它们加起来不许越过它。
 
 ## 开局
 
@@ -169,7 +169,7 @@ pf instruction list --project <项目根绝对路径>
 4. spec 里有 `method: <技能名>` 一行 → read `~/.agents/skills/<名>/SKILL.md`，按「方法」那一节定这个节点谁跑
 5. 读 spec 里「参考」「上下游」两节点名的文件（那是这个节点真正的输入）
 6. 读项目 CLAUDE.md、docs/ 里与本节点相关的文档
-7. 读 `pf config test_tier`、`pf config worktree_mode`、`pf config max_agents`，记进 `run.md` 的「已核事实」；这条线同时握着哪几个节点、`parallel` 是多少，在 `pf cycle current` 的读数里（每个节点一行 `Node:`，`Policy:` 行有 `parallel`）
+7. 读 `pf config get test_tier`、`pf config get worktree_mode`、`pf config get max_agents`，记进 `run.md` 的「已核事实」；这条线同时握着哪几个节点、`parallel` 是多少，在 `pf cycle current` 的读数里（每个节点一行 `Node:`，`Policy:` 行有 `parallel`）
 
 **3｜过 spec**，这一关没过完，本节点打不开：
 
@@ -350,7 +350,7 @@ pf next --spawn --json
 
 ## 并行：worktree
 
-**worktree 按档位走，档位从 `pf config worktree_mode` 读**（默认值与各档的设计口径见 `docs/conduct-state.md`「两个入口」；改它用 `pf config set worktree_mode <值>`）：
+**worktree 按档位走，档位从 `pf config get worktree_mode` 读**（默认值与各档的设计口径见 `docs/conduct-state.md`「两个入口」；改它用 `pf config set worktree_mode <值>`）：
 
 | 档 | 行为 |
 |---|---|

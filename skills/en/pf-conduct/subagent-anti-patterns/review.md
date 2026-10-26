@@ -14,8 +14,7 @@ done.
 ## `conduct-review-only-rechecks-last-issues` — rechecking only the last round, then PASS
 
 **Symptom**: the second and third rounds only check whether the previous round's critical / minor
-issues are fixed, and report PASS as soon as they are — the fix itself brings in new problems, so
-a targeted confirmation alone assumes the fix had no side effects.
+issues are fixed, and report PASS as soon as they are.
 
 **Correction signal**: this round's list holds only the previous round's few items.
 

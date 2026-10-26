@@ -31,10 +31,8 @@ piece together which entries this batch changed or which commit it took.
 
 ## `issue-repair-acknowledge-or-external-as-exit` — acknowledge or external as repair's exit
 
-**Symptom**: when it cannot be fixed, it gets `acknowledge` — putting an entry off is the pool
-human face's (`pf-issue-discuss`) action, and the repair side does not do it; the other mistake of
-the same family is re-ruling an entry that has already been given a solution, and whose solution
-still holds, as `external`.
+**Symptom**: when it cannot be fixed, it gets `acknowledge`; an entry that has been given a
+solution, and whose solution still holds, gets re-ruled `external`.
 
 **Correction signal**: `acknowledge` shows up in the settling table, or an entry given a solution
 is turned into `external`.

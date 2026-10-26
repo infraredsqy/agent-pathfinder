@@ -32,11 +32,11 @@ structure of `tests/`, dispatch a subagent.
 
 The two criteria read the same file and come out in one scan — splitting them wastes a pass.
 
-- **Quality**: does it verify anything real. The criterion is in `./garbage-patterns.md` (6
-  garbage patterns, the safety exceptions).
+- **Quality**: does it verify anything real. The criterion is in `./garbage-patterns.md` (the
+  garbage patterns and the safety exceptions).
 - **Compression**: does it take up the fast lane's road. The criterion is in
-  `./compression-criteria.md` (what counts as slowing it down, how a splittable one is split, the
-  two ways to move a test).
+  `./compression-criteria.md` (what counts as slowing it down, how a splittable one is split, how
+  to move a test).
 
 The action follows from the two together, and **deletion shows up in the "worthless" column
 only**:
@@ -77,7 +77,7 @@ switch). When the docs are not enough, dispatch a subagent to sound it out.
 The number of scan subagents follows the number of files: 1 covering everything by default, split
 only when there are so many files that one list cannot be scanned by one. **The cap is not here**
 — before dispatching, count what is in flight against
-[`../shared/pf/subagents.md`](../shared/pf/subagents.md) (`pf config max_agents`), and when it
+[`../shared/pf/subagents.md`](../shared/pf/subagents.md) (`pf config get max_agents`), and when it
 cannot be crossed, merge or batch by that card.
 
 Every scan subagent's prompt has to carry:

@@ -34,7 +34,7 @@ to land in a file), and each surface watches one copy only. The dimensions: repe
 responsibility crossing its line / a structural problem. When there are only one or two modules,
 use your own judgement on whether to merge the dimensions.
 
-Once the surfaces are cut, take them in batches by the in-flight cap: `pf config max_agents` is
+Once the surfaces are cut, take them in batches by the in-flight cap: `pf config get max_agents` is
 the cap, and **one subagent can carry several surfaces** — for how to merge them and when to
 batch, see [`../shared/pf/subagents.md`](../shared/pf/subagents.md).
 

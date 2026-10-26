@@ -21,8 +21,8 @@ force right now, and only then start. Do not read `instructions.json`; run the c
   test or commit — that is left to the one serial integration verification.
 - Go by the project's **test tier** (it is in the conductor's supplement, `full` / `minimal`,
   absent = `full`): the `full` tier adds tests for new logic, and **only invariants get locked** —
-  none that lock a formula, a UI snapshot or an implementation detail, since those have to be
-  changed along with every code change; the `minimal` tier writes none by default, only "it would
+  none that lock a formula, a UI snapshot or an implementation detail; the `minimal` tier writes
+  none by default, only "it would
   fail silently without this" gets one, and the report says which silent failure it blocks.
 - Verify at the tier the spec's completion rule names: run **this project's fast lane command**
   (take it from the project docs, do not copy another project's), plus the cases of the files this
