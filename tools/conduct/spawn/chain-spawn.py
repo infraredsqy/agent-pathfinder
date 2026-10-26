@@ -16,6 +16,15 @@ answer to "which one" (`spawn/host.py`'s `default_spawner`, honoring `DSH_CONDUC
 `spawner` policy is read by `resolve_spawner` inside that door when the caller names a cycle this
 project records).
 
+**The dispatch gate is asked here, before anything starts.** A feature may declare `block` at the
+`dispatch` timing -- the question "may a session open now?" -- and this lever opens a real session, so
+it is one more mouth the gate has to cover: the gate is asked with the workspace as the project and
+the line's own record when `--cycle-id` names one this project knows (the record is empty otherwise:
+the chain's name need not be a line, and a gate over a project-level setting is answerable either
+way). Any reason the gate hands back refuses the start with one stderr line and a non-zero exit, and
+no session -- the same answer `next` and `dispatch` give. `--dry-run` asks too: what it prints is the
+session that *would* open, and a gate about to say no is part of that answer.
+
 One guarantee does NOT come with it, and stating it beats assuming it: the spawn claim. A claim is
 taken only for a prompt that sits in the launch directory it belongs to
 (`meta/launch/<cycle>/<node_id>/prompt.txt`), and a skill-run chain keeps its prompt next to itself
@@ -26,8 +35,8 @@ placed the prompt itself.
 Exit codes
 ----------
 0   spawned (with --dry-run: printed the argv that would have run)
-1   nothing started: the spawner refused or died; its words are on stderr, the marker -- if the
-    spawner got far enough to write one -- is on disk
+1   nothing started: the dispatch gate said not now, or the spawner refused or died; its words are on
+    stderr, the marker -- if the spawner got far enough to write one -- is on disk
 """
 from __future__ import annotations
 
@@ -72,6 +81,21 @@ def _start(workspace: Path, cycle_id: str, prompt_file: Path, dry_run: bool) -> 
     return pipeline.spawn_session(workspace, cycle_id, str(prompt_file), dry_run=dry_run)
 
 
+def _dispatch_gate(workspace: Path, cycle_id: str) -> list:
+    """The dispatch gate's answer for this start: one reason string per feature saying "not now".
+
+    The gate lives at the moment a session opens (a `block` feature at the `dispatch` timing), and
+    this file opens sessions, so it is asked here -- with the workspace as the project and the line's
+    own record when this project records it. `--cycle-id` names the chain's degradation marker and
+    need not be a line at all: with no such record the gate is asked over the project anyway (an
+    empty record stated as such), so a gate keyed off a project- or machine-level knob still gets its
+    question. An empty list is a green light.
+    """
+    pipeline = _loaded(CONDUCT / 'conduct_pipeline.py', 'conduct_pipeline')
+    cycle = pipeline.find_cycle(pipeline.load_state(workspace), cycle_id) or {}
+    return pipeline.gates('dispatch', pipeline.Context(workspace, cycle=cycle))
+
+
 def main(argv=None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, 'reconfigure'):
@@ -97,6 +121,13 @@ def main(argv=None) -> int:
     workspace = Path(args.workspace).resolve()
     cycle_id = args.cycle_id or prompt_file.stem
     try:
+        # The gate first: "may a session open now?" is answered before anything is started, and a
+        # refusal leaves the prompt, the marker and the line exactly as they were.
+        held = _dispatch_gate(workspace, cycle_id)
+        if held:
+            print('not started: the dispatch gate says not now -- ' + '; '.join(held),
+                  file=sys.stderr)
+            return 1
         # The pipeline's one door: a session starts at exactly one mouth (`writer.spawn_session`).
         # Its last tier answers which spawner (the host counting itself as something the entry
         # worked out), and the session note along with the marker's write and clear all live inside

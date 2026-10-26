@@ -8,7 +8,15 @@
   `conduct_pipeline.py` / `handoff.py` / `signal.py`) and four machine directories: `state/` (the
   write side: cycle records, standing instructions, settings, init), `pipeline/` (advancing and
   closing nodes out), `spawn/` (the machine chain that opens sessions), `ledger_merge/` (the merge
-  driver's body).
+  driver's body) — plus `features/`, which holds plugins and no core machinery.
+- A **feature** is a folder under `features/` with two files in it — its declaration (`feature.json`)
+  and its implementation (`impl.py`) — with the folder's name as its identity.
+  `pipeline/feature_registry.py` is the core's whole knowledge of them — four knob kinds, three
+  timings, two actions, and the rules a declaration has to satisfy — and it is loaded by path from
+  both packages (`feature_host.py` asks it for actions, `state/knobs.py` merges the knobs they
+  declare), one copy per process. A feature's names live in its declaration only: adding or removing
+  one is a folder move, and no core file names one. The declaration names, per metric, the method the
+  generated node's session reads; that card lives in the `skills/` tree.
 - `ledger-merge.py` must stay at the conduct root: `pf`'s `merge-ledger` forwarding finds it by
   this relative path. A project registers through `pf register`, which records
   `pf merge-ledger %O %A %B %P` — independent of where the checkout lives, so moving it needs no

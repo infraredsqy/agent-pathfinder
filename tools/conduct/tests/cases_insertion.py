@@ -2,14 +2,18 @@
 
 Two things are pinned here, and they are the two halves of one claim:
 
-  * **it works for a source that is not the maintenance channel** -- the fixture below declares its
-    own node (title, tags, spec, place) and gets the three steps without re-implementing any of them;
+  * **it works for a source that is not the shipped feature** -- the fixture below is a hand-written
+    feature folder (a declaration plus an implementation) plugged in through `PF_FEATURES_DIR`, and
+    it gets the graph edit without re-implementing any of it: the uuid, the `spec.md` and the two
+    edges all come out of `insertion.py`;
   * **there is only one implementation of each step** -- a second one reads perfectly well on its
-    own, which is exactly why the guard exists.
+    own, which is exactly why the guard exists. `insertion.py` is the one file allowed to spell the
+    placeholder, read the uuid off `add`, build the edge edits or write the text; no feature folder
+    may carry a second copy either.
 
 What an insertion deliberately does NOT do (open no session, write no prompt, move no hand) is a
-property of the action, and the case that pins it is the one that drives a close:
-`cases_maintenance.py`.
+property of the action, and the cases that pin it drive a close or a pick:
+`cases_maintenance.py` and `cases_feature.py`.
 """
 
 from __future__ import annotations
@@ -20,9 +24,41 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import Base, NODE, NODE2, pipeline  # noqa: E402
-from harness import CONDUCT_DIR, _dag_hook  # noqa: E402
+from harness import CONDUCT_DIR, features_dir, write_feature  # noqa: E402
 
 __all__ = ['TestTheInsertionMechanism']
+
+#: The second source's own implementation: an offer and nothing else. It declares what it wants
+#: inserted and where -- the place, the uuid, the text file and the edges are the core's.
+SECOND_SOURCE_IMPL = '''
+TAG = 'second-source'
+
+
+def offer(ctx):
+    """One node in front of whatever this close picked, until one of ours is already open."""
+    if ctx.nodes_with_tag(TAG):
+        return None
+    return {
+        'title': 'Inserted by a second source',
+        'tags': ['coding', TAG],
+        'spec_of': lambda node_id: f'# Inserted by a second source\\n\\nwritten for {node_id}\\n',
+        'fields': {'metric': 'second_source'},
+        'note': 'a hand-written feature folder asked for this node',
+    }
+'''
+
+
+def second_source_decl(name='second'):
+    """A close-timing insertion declaration: the smallest one that is a legal feature."""
+    return {
+        'name': name,
+        'summary': 'a hand-written second insertion source (the fixture)',
+        'timing': 'close',
+        'action': 'insert',
+        'knobs': {},
+        'readings': {},
+        'metrics': {},
+    }
 
 
 class TestTheInsertionMechanism(Base):
@@ -38,34 +74,28 @@ class TestTheInsertionMechanism(Base):
         sb.add_node(NODE2, 'Write code B', tags=['coding'], deps=[NODE])
         return sb
 
-    def second_source(self, sb) -> str:
-        """A second insertion source, standing in for any future insertion action.
-
-        It states what it wants inserted and where -- and that is the whole of its code: the uuid,
-        the `spec.md` and the two edges come from `insertion.py`, through the same `mint` the
-        maintenance channel's action goes through in `writer.apply`.
-        """
-        with _dag_hook(sb.root):
-            edit = pipeline.insertion.insert(
-                sb.root,
-                title='Inserted by a second source',
-                tags=['coding', 'second-source'],
-                spec_of=lambda node_id: f'# Inserted by a second source\n\nwritten for {node_id}\n',
-                after=NODE, before=NODE2,
-            )
-            node_id, commands = pipeline.insertion.mint(
-                sb.root, edit['add_command'], edit['spec_of'], edit['commands'])
-            for command in commands:
-                pipeline.seam.run(command, sb.root)
-        return node_id
-
     def test_a_second_source_gets_the_same_mint_spec_and_edges(self):
-        """The declaration is the source's; all three steps come out of the one mechanism."""
+        """The declaration is the source's; all three steps come out of the one mechanism.
+
+        The source is a folder with a `feature.json` and an `impl.py` and nothing else: it is plugged
+        in by pointing the scan at it, so the core is untouched (the same move the shipped feature
+        makes), and what lands is the core's own graph edit.
+        """
         sb = self.a_pair()
+        sb.start_cycle(tags=['coding'])
+        sb.set_policy('cyc', 'parallel', 1)
+        sb.next()                                  # the dispatch for NODE
+        sb.write_signal('cyc', NODE, 'completed', 'done', {'deliverable': 'x'})
 
-        made = self.second_source(sb)
+        with features_dir(sb.root / 'features'):
+            write_feature(sb.root / 'features', 'second', second_source_decl(),
+                          SECOND_SOURCE_IMPL)
+            action = sb.close_round(NODE)
 
+        self.assertEqual(action['action'], 'insert_node', action)
+        made = action['node_id']
         nodes = sb.dag()['nodes']
+        self.assertEqual(len(nodes), 3, f'nothing was inserted: {action}')
         self.assertRegex(made, r'^[0-9a-fA-F-]{36}$', 'the id is not the uuid the tool minted')
         self.assertEqual(nodes[made]['title'], 'Inserted by a second source')
         self.assertEqual(nodes[made]['tags'], ['coding', 'second-source'])
@@ -76,26 +106,32 @@ class TestTheInsertionMechanism(Base):
         landed = Path(pipeline.nodes.node_spec_path(sb.root, made))
         self.assertTrue(landed.is_file(), f'the spec did not land at {landed}')
         self.assertIn(made, landed.read_text(encoding='utf-8'))
+        self.assertEqual(sb.holding_ids(), [], 'the insertion pinned a node')
 
     def test_the_three_steps_have_one_implementation(self):
         """Minting the uuid, writing the spec and wiring the edges exist in `insertion.py` only.
 
         A second copy of any of them reads perfectly well on its own -- and that is the reason this
-        guard is here: two copies drift, and the drifted one is whichever the next source copies.
+        guard is here: two copies drift, and the drifted one is whichever the next source copies. A
+        feature folder is where such a copy would appear first, so it is scanned too: a feature
+        declares, it never re-implements.
         """
         impl = CONDUCT_DIR / 'pipeline'
+        needles = {
+            '%DUID%': 'the new node\'s placeholder',
+            'Node created': 'the uuid `add` prints',
+            "'undepend'": 'the edge edit',
+            "'--on'": 'a dependency',
+            'def write_spec': 'the spec writer',
+        }
 
-        def files_with(needle: str) -> list:
-            return sorted(path.name for path in impl.glob('*.py')
-                          if needle in path.read_text(encoding='utf-8'))
+        def files_with(needle: str, folder: Path) -> list:
+            return sorted(path.relative_to(CONDUCT_DIR).as_posix()
+                          for path in folder.rglob('*.py')
+                          if path.parent.name != 'tests' and needle in path.read_text(encoding='utf-8'))
 
-        self.assertEqual(['insertion.py'], files_with('%DUID%'),
-                         'the new node\'s placeholder is spelled somewhere else')
-        self.assertEqual(['insertion.py'], files_with('Node created'),
-                         'something else reads the uuid off `dag-manage add` as well')
-        self.assertEqual(['insertion.py'], files_with("'undepend'"),
-                         'the edge edit is built somewhere else')
-        self.assertEqual(['insertion.py'], files_with("'--on'"),
-                         'a dependency is wired somewhere else')
-        self.assertEqual(['insertion.py'], files_with('def write_spec'),
-                         'the spec is written somewhere else')
+        for needle, what in needles.items():
+            self.assertEqual(['pipeline/insertion.py'], files_with(needle, impl),
+                             f'{what} is spelled somewhere else in the package')
+            self.assertEqual([], files_with(needle, CONDUCT_DIR / 'features'),
+                             f'a feature folder carries its own copy of {what}')

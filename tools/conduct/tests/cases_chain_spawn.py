@@ -5,12 +5,18 @@ the dry-run path never reaches a spawner at all. Which spawner a host picks is `
 tested territory; here the choice is pinned through `DSH_CONDUCT_SPAWNER` -- the override
 `default_spawner` answers first.
 
+The dispatch gate is asked before anything starts (a chain-run session is a real session), so a
+throwaway features directory holding a `block`-at-dispatch folder is the fixture for the refusal
+case: `PF_FEATURES_DIR` points the feature scan at it, and `PF_HOME_DIR` keeps the machine's own
+settings file out of the run.
+
     python -m unittest cases_chain_spawn            # from this directory
 """
 from __future__ import annotations
 
 import contextlib
 import importlib.util
+import json
 import os
 import shutil
 import sys
@@ -69,10 +75,20 @@ class ChainCase(unittest.TestCase):
             extra = (*extra, '--workspace', str(self.project))
         out, err = StringIO(), StringIO()
         door = contextlib.nullcontext() if real_door else patched(chain_spawn, '_start', start)
-        with door, mock.patch.dict(os.environ, {'DSH_CONDUCT_SPAWNER': FAKE_SPAWNER}), \
+        env = {'DSH_CONDUCT_SPAWNER': FAKE_SPAWNER, 'PF_HOME_DIR': str(self.root / 'home')}
+        with door, mock.patch.dict(os.environ, env), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = chain_spawn.main(['--prompt-file', str(self.prompt), *extra])
         return code, calls, out.getvalue(), err.getvalue()
+
+    def features(self, declaration, impl):
+        """A throwaway features directory holding one feature folder, entered for one call."""
+        root = self.root / 'features'
+        folder = root / 'gate'
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / 'feature.json').write_text(json.dumps(declaration), encoding='utf-8')
+        (folder / 'impl.py').write_text(impl, encoding='utf-8')
+        return mock.patch.dict(os.environ, {'PF_FEATURES_DIR': str(root)})
 
 
 class TestSpawn(ChainCase):
@@ -113,6 +129,33 @@ class TestFailure(ChainCase):
         self.assertIn('CONDUCT-CALLBACK-FAILED-next-r5.json', err,
                       'the by-hand takeover entry must be named')
         self.assertIn(str(self.prompt), err)
+
+    def test_a_blocking_dispatch_gate_stops_the_start(self):
+        """The gate is asked here too: this lever opens a real session, so it is one more mouth the
+        `block`-at-dispatch question has to cover. A refusal names the reason on stderr, exits
+        non-zero, and the door that starts sessions is never reached -- a dry run asks the same
+        question first, which is what makes this case observable without a session."""
+        declaration = {'name': 'gate', 'timing': 'dispatch', 'action': 'block',
+                       'knobs': {}, 'readings': {}, 'metrics': {}}
+        impl = "def check(ctx):\n    return 'the fixture gate says not now'\n"
+
+        with self.features(declaration, impl):
+            code, calls, out, err = self.run_tool('--dry-run')
+
+        self.assertEqual(1, code, (out, err))
+        self.assertEqual([], calls, 'a session was started behind a refusing gate')
+        self.assertIn('the dispatch gate says not now', err)
+        self.assertIn('the fixture gate says not now', err, 'the gate\'s own words must come through')
+
+    def test_an_empty_features_directory_leaves_the_start_alone(self):
+        """With no feature installed the gate has nothing to say, and the chain starts as always."""
+        empty = self.root / 'empty-features'
+        empty.mkdir()
+        with mock.patch.dict(os.environ, {'PF_FEATURES_DIR': str(empty)}):
+            code, calls, out, _ = self.run_tool('--dry-run', real_door=True)
+
+        self.assertEqual(0, code, out)
+        self.assertIn('dry-run: pwsh', out)
 
 
 if __name__ == '__main__':

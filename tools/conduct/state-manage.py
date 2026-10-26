@@ -106,9 +106,19 @@ class _NextHelp(argparse.Action):
         parser.exit()
 
 
-def _layer(args) -> str:
-    """Which layer `--global` names: without it, the project layer."""
-    return 'global' if args.global_ else 'project'
+def _target_layer(args) -> str:
+    """Which layer a write names: `--global` / `--cycle` / `--node`, and the project layer otherwise.
+
+    `set` and `unset` write exactly one layer, so the three flags are mutually exclusive on the
+    parser: two of them at once would leave "which layer did I just write" without an answer.
+    """
+    if getattr(args, 'global_', False):
+        return 'global'
+    if getattr(args, 'cycle', None):
+        return 'cycle'
+    if getattr(args, 'node', None):
+        return 'node'
+    return 'project'
 
 
 #: The one routing table: a parsed args object becomes one call, all of it here. The key is
@@ -149,10 +159,12 @@ _ROUTES = {
     ('instruction', 'rm'): lambda a: cmd_instruction_rm(a.ins_id, a.project),
     ('instruction', 'revive'): lambda a: cmd_instruction_revive(a.ins_id, a.project),
 
-    ('config', 'list'): lambda a: cmd_config_list(a.project),
-    ('config', 'get'): lambda a: cmd_config_get(a.key, a.project),
-    ('config', 'set'): lambda a: cmd_config_set(a.key, a.value, _layer(a), a.project),
-    ('config', 'unset'): lambda a: cmd_config_unset(a.key, _layer(a), a.project),
+    ('config', 'list'): lambda a: cmd_config_list(a.project, a.cycle, a.node),
+    ('config', 'get'): lambda a: cmd_config_get(a.key, a.project, a.cycle, a.node),
+    ('config', 'set'): lambda a: cmd_config_set(a.key, a.value, _target_layer(a), a.project,
+                                                a.cycle, a.node),
+    ('config', 'unset'): lambda a: cmd_config_unset(a.key, _target_layer(a), a.project,
+                                                    a.cycle, a.node),
 
     ('session', 'show'): lambda a: cmd_session_show(a.node, a.project, a.json),
     ('session', 'list'): lambda a: cmd_session_list(a.project, a.json),
@@ -246,27 +258,43 @@ def main(argv=None) -> None:
     p_cstt.add_argument('status', choices=sorted(CYCLE_VALID_STATUSES))
 
     p_cpo = cyc_sub.add_parser('policy',
-                               help="Write one of a line's own policies (the effective set is echoed "
-                                    "back)")
+                               help="Write one policy on this line's own record (the effective set "
+                                    "is echoed back; a core setting is `pf config set`'s, not this "
+                                    "line's)")
     p_cpo.add_argument('id')
     p_cpo.add_argument('key', choices=list(POLICY_KEYS))
+    # The value help is built from the same table the writing side judges with: what `--help` prints
+    # and what is accepted cannot drift apart. That table is `state/cycles.py`'s (`POLICY_SPECS`): the
+    # line's own three policies, plus every knob a declaration brings that takes the cycle layer. A
+    # policy is this line's own thing, so it is not the settings table `pf config` prints.
+    knob_table = POLICY_SPECS
+    policy_parts = []
+    for key in (*POLICY_VALUES, *POLICY_COUNTS, *POLICY_NUMBERS, *POLICY_WORDS):
+        spec = knob_table[key]
+        if spec['kind'] == 'word' and spec.get('values'):
+            shape = ' | '.join(spec['values'])
+        elif spec['kind'] == 'number':
+            shape = 'a positive number'
+        elif spec['kind'] == 'integer':
+            shape = 'a positive integer'
+        else:
+            shape = 'a word'
+        part = f'{key}: {shape}'
+        if spec.get('summary'):
+            part += f' -- {spec["summary"]}'
+        if spec.get('default') is not None:
+            part += f' (default: {spec["default"]})'
+        policy_parts.append(part)
     p_cpo.add_argument('value',
-                       help='when_shelved: ' + ' | '.join(POLICY_VALUES['when_shelved'])
-                            + ' (stop = a node that came back not delivered stops this line and '
-                              'waits for a human; continue = mark it shelved and carry on with the '
-                              'next node). Default: ' + POLICY_DEFAULTS['when_shelved']
-                            + '. ' + ' | '.join(POLICY_COUNTS)
-                            + ': a positive integer (how many nodes this line holds and runs at '
-                              'once; default ' + str(POLICY_DEFAULTS['parallel']) + '), or `off`'
-                            + '. ' + ' | '.join(POLICY_NUMBERS)
-                            + ': a positive number (the last acceptable reading; the close of a '
-                              'coding-tagged cycle inserts a maintenance node once a ticket '
-                              'reaches it), or `off` to clear it'
-                            + '. ' + ' | '.join(POLICY_WORDS)
-                            + ': ' + ' | '.join(POLICY_WORD_CHOICES['spawner'])
-                            + ' (which spawner opens this line\'s sessions; overrides the host '
-                              'probe and DSH_CONDUCT_SPAWNER, loses to a per-call --spawner), '
-                              'or `off` to clear it')
+                       help='The value, in the key\'s own kind -- ' + '; '.join(policy_parts)
+                            + '. Every knob a feature declares rides on this line too. A core '
+                              'setting does not: it takes the project and global layers only, and '
+                              '`pf config set` is its door. `off` drops this line\'s entry for a '
+                              'number / integer / word, so the next layer of the chain shows '
+                              'through; on a switch it is a value -- a switch is turned off by '
+                              'writing `off`, and dropping its entry is `pf config unset --cycle`. '
+                              'Numbers and integers take a positive value only: a line of 0 fails '
+                              'every reading')
 
     cyc_sub.add_parser('list', help='Show all cycles (state.json)')
     cyc_sub.add_parser('current', help='Show the active cycle and the node it holds')
@@ -407,38 +435,73 @@ def main(argv=None) -> None:
 
     p_cfg = sub.add_parser(
         'config',
-        help="This machine's and this project's settings: built-in defaults, then the global and "
-             "project overrides, the last one written winning",
-        description='Four keys. max_agents: how many subagents one session may have in flight at '
-                    'once. test_tier: full (the whole suite) or minimal (the project\'s own few '
-                    'checks). worktree_mode: off / fork / reuse (whether a node\'s work gets its '
-                    'own worktree). issue_repair: on / off (whether a line that crosses its own '
-                    'maintenance threshold gets a repair node inserted for it; on unless a project '
-                    'says otherwise). A value lives in one of two override layers: '
-                    '`~/.pf/config.json` (global, travels with the person and the machine, never '
-                    'generated for you) and `<project>/.pf/config.json` (travels with the project; '
-                    '`init` puts an empty `{}` there). A layer with no file reads as "never '
-                    'changed the default". `list` prints every effective value and the layer it '
-                    'came from; `get` prints the value alone, which is what a skill reads. '
-                    '`set` / `unset` write the project layer unless --global says otherwise.',
+        help="One setting on one chain: factory default, then global, project, this line and this "
+             "node -- the narrowest layer that states it wins (the line's own `parallel` / "
+             "`when_shelved` / `spawner` are not settings: `pf cycle policy` writes them)",
+        description='Every setting is a knob with a kind, and one chain: this node -> this line -> '
+                    'this project -> this machine -> factory default. Narrower layers cover wider '
+                    'ones, and the same name may be stated on several layers at once: the '
+                    'resolution is deterministic, and `list` / `get` always say which layer the '
+                    'value in force came from. The table is the built-in settings plus every knob the '
+                    'installed features declare -- `list` prints it, and a name nobody declares is '
+                    'refused. Not every knob takes every layer: a core setting takes the project and '
+                    'global layers, a feature\'s knob takes all four (`set` names the layers a knob '
+                    'takes when it refuses one). The line\'s own policies -- `parallel`, '
+                    '`when_shelved`, `spawner` -- are not settings and are not here: they live on '
+                    'the line record, written by `pf cycle policy`. '
+                    'The two file layers are `~/.pf/config.json` (global: travels with the '
+                    'person and the machine, never generated for you) and `<project>/.pf/'
+                    'config.json` (travels with the project; `init` puts an empty `{}` there); the '
+                    'two narrow ones ride on the cycle record and on one node\'s own '
+                    '`config.json`. `set` stores a value and `unset` drops that one layer\'s entry '
+                    '-- a switch is turned off by setting `off`, while dropping its entry is '
+                    '`unset` (the same split `pf cycle policy` explains). `set` / `unset` write '
+                    'exactly one layer: the project layer unless --global / --cycle / --node says '
+                    'otherwise.',
         formatter_class=argparse.RawDescriptionHelpFormatter)
     cfg_sub = p_cfg.add_subparsers(dest='config_command')
-    p_cfg_list = cfg_sub.add_parser('list', help='Every effective value, and the layer it came from')
+    knob_choices = sorted(knobs.specs())
+    p_cfg_list = cfg_sub.add_parser('list',
+                                    help='Every knob\'s effective value, and the layer it came from')
     p_cfg_list.add_argument('--project', default=None, help='Project root (default: current directory)')
+    p_cfg_list.add_argument('--cycle', default=None,
+                            help='Read this line\'s layer too (a cycle id): what that line sees')
+    p_cfg_list.add_argument('--node', default=None,
+                            help='Read this node\'s layer too (a node id): what that node\'s run '
+                                 'sees')
     p_cfg_get = cfg_sub.add_parser('get', help='Print one effective value, and nothing else')
-    p_cfg_get.add_argument('key', choices=sorted(CONFIG_SPEC))
+    p_cfg_get.add_argument('key', choices=knob_choices)
     p_cfg_get.add_argument('--project', default=None, help='Project root (default: current directory)')
-    p_cfg_set = cfg_sub.add_parser('set', help='Write one override (the project layer by default)')
-    p_cfg_set.add_argument('key', choices=sorted(CONFIG_SPEC))
+    p_cfg_get.add_argument('--cycle', default=None,
+                           help='Read this line\'s layer too (a cycle id)')
+    p_cfg_get.add_argument('--node', default=None,
+                           help='Read this node\'s layer too (a node id)')
+    p_cfg_set = cfg_sub.add_parser('set',
+                                   help='Write one value into exactly one layer (the project layer '
+                                        'by default)')
+    p_cfg_set.add_argument('key', choices=knob_choices)
     p_cfg_set.add_argument('value')
-    p_cfg_set.add_argument('--global', dest='global_', action='store_true',
+    set_layer = p_cfg_set.add_mutually_exclusive_group()
+    set_layer.add_argument('--global', dest='global_', action='store_true',
                            help='Write the global layer (~/.pf/config.json) instead of the project one')
+    set_layer.add_argument('--cycle', default=None,
+                           help='Write this line\'s layer instead (a cycle id): the value rides on '
+                                'the cycle record, whose one writer takes it')
+    set_layer.add_argument('--node', default=None,
+                           help='Write this node\'s layer instead (a node id): '
+                                '`.pf/nodes/<id>/config.json`')
     p_cfg_set.add_argument('--project', default=None, help='Project root (default: current directory)')
     p_cfg_unset = cfg_sub.add_parser('unset',
-                                     help='Drop one override, letting the default take over again')
-    p_cfg_unset.add_argument('key', choices=sorted(CONFIG_SPEC))
-    p_cfg_unset.add_argument('--global', dest='global_', action='store_true',
+                                     help='Drop one override, letting the next wider layer take over '
+                                          'again')
+    p_cfg_unset.add_argument('key', choices=knob_choices)
+    unset_layer = p_cfg_unset.add_mutually_exclusive_group()
+    unset_layer.add_argument('--global', dest='global_', action='store_true',
                              help='Drop it from the global layer instead of the project one')
+    unset_layer.add_argument('--cycle', default=None,
+                             help='Drop it from this line\'s layer instead (a cycle id)')
+    unset_layer.add_argument('--node', default=None,
+                             help='Drop it from this node\'s layer instead (a node id)')
     p_cfg_unset.add_argument('--project', default=None, help='Project root (default: current directory)')
 
     p_sess = sub.add_parser(

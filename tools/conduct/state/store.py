@@ -170,8 +170,6 @@ VALID_NODE_RESULTS = {'completed', 'failed', 'stopped'}
 #: not. Why it stopped is not kept in the status -- the reason at the moment it stopped is that
 #: sentence, and whether a line should start work again is a human's call.
 CYCLE_VALID_STATUSES = {'active', 'inactive'}
-#: How many nodes one line may hold at once -- the `parallel` policy's default: no parallelism is 1.
-PARALLEL_DEFAULT = 1
 #: The moment shape state.json / a note / the standing instructions / the FORK record use: seconds.
 #: Its one source is `ISO_FMT_SECONDS` in `tools/shared/clock.py`; `ISO_FMT` is the name this file
 #: and the cases that read it have always used, and it still means this one shape.

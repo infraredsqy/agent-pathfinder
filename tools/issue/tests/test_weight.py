@@ -1,7 +1,7 @@
 """`weight`: how heavy the pool is, one number, for the pipeline to read.
 
-pf-conduct compares it with the line's own `issue_pool_weight_limit` when a node closes out. Two
-things fix the number: only actionable entries count (the same reading as `status`), and
+pf-conduct compares it with a threshold the pipeline configures for the line when a node closes out.
+Two things fix the number: only actionable entries count (the same reading as `status`), and
 `decision: external` ones stay out -- the call is the human's, so counting them would be a floor
 nobody can move and the threshold could never come back under the line.
 

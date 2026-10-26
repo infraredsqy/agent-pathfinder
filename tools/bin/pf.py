@@ -32,6 +32,9 @@ LEDGER_MERGE = CONDUCT / 'ledger-merge.py'
 #: Shared plumbing, and every writer treats a missing session note as best effort -- which is exactly
 #: why the doctor has to check it by name.
 SESSION_NOTE = TOOLS / 'shared' / 'session-note.py'
+#: The one scan of installed features: the pipeline entry never names it (each feature's timing goes
+#: through it), so it is checked here by name like the other unrouted files.
+FEATURE_REGISTRY = CONDUCT / 'pipeline' / 'feature_registry.py'
 
 # Bootstrap: the loader is fetched by path too, so every file has to carry this paragraph itself
 # (see `shared/loader.py`).
@@ -117,9 +120,10 @@ FORWARD_GROUPS = (
     ('session', STATE_MANAGE, True, "a node's own conversations, which live on this machine only"),
 )
 
-#: The files no verb names: the pipeline entry every verb file loads, and the shared session note.
-#: `TOOL_FILES` checks these alongside everything the tables above point at.
-UNROUTED_TOOLS = (CONDUCT_PIPELINE, SESSION_NOTE)
+#: The files no verb names: the pipeline entry every verb file loads, the shared session note, and the
+#: registry the installed features are read through. `TOOL_FILES` checks these alongside everything
+#: the tables above point at.
+UNROUTED_TOOLS = (CONDUCT_PIPELINE, SESSION_NOTE, FEATURE_REGISTRY)
 
 #: What `doctor` insists on finding: the tables' targets, once each, then the two above -- so a verb
 #: added to a table is checked by itself.
@@ -199,6 +203,72 @@ def _registered_driver(root: Path) -> str:
     return _git(root, 'config', '--get', f'merge{_ledger_name()}.driver').stdout.strip()
 
 
+def _feature_registry():
+    """`conduct/pipeline/feature_registry.py` loaded by path: the tree's one scan of installed features.
+
+    By path, like every other part of this tree -- `pf` borrows no tool's package. The doctor is where
+    "what is installed" is answered without running the pipeline at all, which is exactly why a
+    feature's declaration is data: a broken feature must not take this door down with it.
+    """
+    return _loader().load_by_path('pf_feature_registry', FEATURE_REGISTRY,
+                                  register=True, reuse=True)
+
+
+def _knob_shadows() -> list:
+    """The declarations that claim a built-in setting's name, through the knob table's own door.
+
+    The two tables meet in `state/knobs.py`, and the merge keeps the built-in cell: the declaration
+    is then unreachable while its summary still reads as if it were in force. Nothing else sees both
+    tables, so the doctor asks this one -- loaded through the pipeline's door onto it
+    (`pipeline/store.py`), by path like every other neighbour.
+    """
+    store = _loader().load_by_path('pf_pipeline_store', CONDUCT / 'pipeline' / 'store.py',
+                                   register=True, reuse=True)
+    return store.knob_shadows()
+
+
+def _report_features() -> int:
+    """Say which features are installed (with the tags and methods the outside writes down), print
+    every problem their declarations have, and count those problems for the doctor's exit code.
+
+    Zero feature folders is a legal project and is reported as such: the core is whole without any
+    feature, and that sentence is what makes it visible.
+
+    **Every installed implementation is loaded once, here, on purpose.** `validate()` can only report
+    a load failure some call already ran into, and the doctor is the door a human reaches for when
+    the tree is already suspect -- a feature whose `impl.py` cannot even compile has to be named on
+    this list, not discovered at the next close. The load is one `importlib` per folder, and the
+    failure it records is the sentence printed below.
+    """
+    registry = _feature_registry()
+    features = registry.load_all()
+    if not features:
+        print(f'features: 0 installed (the scan reads {registry.features_dir()}; one folder per '
+              f'feature is where one would come from)')
+    else:
+        print(f'features: {len(features)} installed')
+        for feature in features:
+            parts = [f'  · {feature["name"]}']
+            tags = registry.tags_of(feature)
+            methods = registry.methods_of(feature)
+            if tags:
+                parts.append('tags: ' + ', '.join(tags))
+            if methods:
+                parts.append('methods: ' + ', '.join(methods))
+            print('  '.join(parts))
+        for feature in features:
+            if (feature['folder'] / registry.IMPLEMENTATION).is_file():
+                registry.impl_of(feature['name'])
+    problems = registry.validate()
+    try:
+        shadows = _knob_shadows()
+    except Exception as e:                     # noqa: BLE001 -- a health check must answer, not die
+        shadows = [f'the knob table could not be read: {e}']
+    for problem in (*problems, *shadows):
+        print(f'  ✗ {problem}')
+    return len(problems) + len(shadows)
+
+
 def cmd_doctor(fix: bool = False) -> int:
     """Read the health of the checkout and the project; with --fix, run the setup act once."""
     problems = 0
@@ -210,6 +280,11 @@ def cmd_doctor(fix: bool = False) -> int:
             problems += 1
     if sys.version_info < (3, 10):
         print(f'  ✗ Python {sys.version.split()[0]} is too old (this tool tree needs 3.10+)')
+        problems += 1
+    try:
+        problems += _report_features()
+    except Exception as e:                     # noqa: BLE001 -- a health check must answer, not die
+        print(f'  ✗ the feature registry could not be read: {e}')
         problems += 1
 
     root = _project_root(Path.cwd())

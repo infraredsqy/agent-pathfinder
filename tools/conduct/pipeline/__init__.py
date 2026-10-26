@@ -7,22 +7,25 @@ because those are what a caller patches. The machinery is here:
 
     seam.py      the live link back to the entry module's globals (see its docstring)
     store.py     the read layer over one project's .pf/:
-                 load_state / load_signal / load_dag / load_instructions / load_config, the cycle
-                 lookups, `ledger_dir` / `meta_dir`
+                 load_state / load_signal / load_dag / load_instructions, the cycle lookups, the
+                 knob resolution and the readings a ticket is asked for, `ledger_dir` / `meta_dir`
     instruct.py  the standing-instructions account and the one scope judgement ("what can be seen
                  from the step being built")
     nodes.py     the DAG ready set, the tag filter, and "which node next"
     prompts.py   what a dispatch prompt says (the invocation line, and the node's text)
     insertion.py the core mechanism that puts a node into the graph: mint its uuid, write its spec,
                  wire its edges -- a graph edit only, never a session
-    maintenance.py the maintenance channel: the reading, the lines it is measured
-                 against, and the declaration of the node it inserts
+    feature_host.py  the generic feature host: the Context a feature is handed, and the two questions
+                 asked of the folders under `features/` (an insertion now, a gate at the dispatch)
     actions.py   state -> an action package (dispatch / wait / ask_user / stop)
     planner.py   `plan()`: the pure decision, including the node's own close
     writer.py    `apply()` / `record()`: run the commands, and enforce the apply contract
 
 There is no stage table and no per-round file: one cycle picks one DAG node at a time, and how that
-node splits its own work is the session's business.
+node splits its own work is the session's business. No feature is a part of this package: a feature is
+a folder under `features/` -- a declaration and an implementation, with the declaration naming the
+dedupe tag and the method card the outside sees -- and the names this core feeds to every reader come
+from those declarations, not from here.
 
 This package is loaded by PATH, never by name: `conduct_pipeline.py` registers it under `pf_pipeline`
 on every load, so a caller that loads a fresh `conduct_pipeline.py` gets a fresh package with it. See
@@ -37,7 +40,7 @@ from . import instruct  # noqa: F401
 from . import nodes  # noqa: F401
 from . import prompts  # noqa: F401
 from . import insertion  # noqa: F401
-from . import maintenance  # noqa: F401
+from . import feature_host  # noqa: F401
 from . import actions  # noqa: F401
 from . import planner  # noqa: F401
 from . import writer  # noqa: F401
@@ -48,7 +51,7 @@ from . import writer  # noqa: F401
 #: package -- the layers keep none of their own, so there is no second list to drift from this one.
 __all__ = [
     # the layers themselves, for a caller that wants to poke at one of them
-    'seam', 'store', 'instruct', 'nodes', 'prompts', 'insertion', 'maintenance', 'actions',
+    'seam', 'store', 'instruct', 'nodes', 'prompts', 'insertion', 'feature_host', 'actions',
     'planner', 'writer',
 
     # store: the read layer, and the door to the session notes under `.pf/meta/sessions/`
@@ -60,8 +63,13 @@ __all__ = [
     '_holding_of', '_holding_ids',
     'session_note', 'session_notes', 'note_session', 'SESSION_NOTE_PY',
 
-    # store: the settings -- this project's layer over the machine's
-    'CONFIG_NAME', 'global_config_path', 'project_config_path', 'load_config',
+    # store: the settings -- one knob read through the whole chain, and the readings a ticket's
+    # form asks for (both merged from the features' declarations on the way)
+    'CONFIG_NAME', 'global_config_path', 'project_config_path',
+    'knob_specs', 'resolve_knob', 'knob_sources', 'ticket_readings',
+
+    # feature_host: the Context a feature is handed, and the two questions the core asks of it
+    'Context', 'insertions', 'gates', 'registry', 'FEATURE_REGISTRY_PY',
 
     # instruct: the account, and the scope judgement
     'instruction_is_live', 'SCOPES', 'DEFAULT_SCOPE', 'entry_scope',
@@ -80,15 +88,9 @@ __all__ = [
     'INSERT_ACTION', 'NEW_NODE', 'ADD_MARKER', 'insert', 'mint', 'read_new_node_id', 'write_spec',
     'is_add_slot', 'fill', 'fill_all',
 
-    # maintenance: the maintenance channel
-    'READING_KEYS', 'METRICS', 'crossed', 'reading_of', 'insert_into',
-    'thresholds_for', 'asked_readings', 'pool_weight',
-    'maintenance_spec', 'maintenance_title', 'maintenance_tag',
-    'ISSUE_REPAIR_KEY', 'ISSUE_REPAIR_OFF', 'ISSUE_REPAIR_VALUES', 'ISSUE_REPAIR_DEFAULT',
-    'issue_repair_on',
-
     # actions: state -> an action package, and an action package as the caller reads it
-    '_ask', '_dispatch_many', '_insert_node', '_maintenance_due', 'attention_items', '_ticket_wait',
+    '_ask', '_dispatch_many', '_insert_node', '_insertions_due', '_pick_insertions_due',
+    'attention_items', '_ticket_wait',
     '_retry_wait', '_sessions_wait', '_close_commands', '_stop_action', 'render_action',
 
     # planner: plan() and the node's own close
@@ -105,7 +107,7 @@ __all__ = [
 # with `__all__`, and a name that appears in one and not the other is exactly the drift this split
 # has to avoid -- so a name nobody defines is a loud ImportError at load time, not a missing
 # attribute later.
-_LAYERS = (store, instruct, nodes, prompts, insertion, maintenance, actions, planner, writer)
+_LAYERS = (store, instruct, nodes, prompts, insertion, feature_host, actions, planner, writer)
 
 for _name in __all__:
     if _name in globals():

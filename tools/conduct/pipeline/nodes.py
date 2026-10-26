@@ -334,7 +334,7 @@ def node_row(dag: dict, node_id: str) -> dict:
     row.
 
     This is the one place a node record's shape is taken: the stop criterion reads this very copy,
-    and the entries of the dispatch and maintenance roads grow out of it too. When the graph has no
+    and the entries of the dispatch road grow out of it too. When the graph has no
     such row, it hands over an empty row carrying only the id (callers read with `.get()`, and
     anything missing reads as the default).
     """

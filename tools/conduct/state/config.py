@@ -1,287 +1,222 @@
-"""This machine's and this project's settings: factory default -> global override -> project
-override, the later one wins.
+"""This machine's and this project's settings, over the knob chain.
 
-A value lives in exactly three places, and no other file may write a second copy of it:
+A setting lives on one chain and nowhere else (`state/knobs.py` owns the table and the resolution):
 
-    factory default   `CONFIG_SPEC` -- the one definition (to change a default, change this one table)
-    global override   `~/.pf/config.json` (travels with the person/machine, never enters a project's repository)
-    project override  `<project>/.pf/config.json` (travels with the project; `init` puts an empty `{}` there)
+    node -> this line -> this project -> this machine -> factory default
 
-**Either override layer may be absent**: a missing file reads as "the default was never changed", and
-everything goes by the factory default. Nobody generates the global layer for you: `pf config set
---global` writes it only when a human really means to change the global default. The project layer is
-written by `init` as an empty object, at a path you can see at a glance, and an empty object reads as
-"no override". `list` prints each key's effective value and the layer it came from; `get` prints the
-value alone (that is what a skill reads).
+Narrow beats wide, and the same name may be stated on several layers at once: which one is in force
+is determined, not guessed. What every reading carries is therefore a pair -- **the effective value
+and the layer it came from** -- because "I set it, why is it not in force" is the one question this
+chain owes an answer to. `list` prints the pair; `get` prints the value alone, which is what a skill
+reads.
 
-`worktree_mode`'s default is not a value but a condition -- `fork` for a git project, `off` otherwise --
-so `default_of()` computes it and that cell of the table is left `None`. The four keys are also the
-shape of `CONFIG_SPEC`: the candidate table for `set` and `get` comes straight from it, a value read off
-disk is checked against that same table, and a value that cannot be read is reported on the spot rather
-than quietly falling back to the default.
+Not every knob takes every layer: a core setting is how this project or this machine behaves (the
+project and global layers), while a knob a feature declares walks the whole chain. A write into a
+layer the knob does not take is refused here, naming the layers it does take. And three names are
+not settings at all -- `parallel`, `when_shelved` and `spawner` live on the line record, whose writer
+is `pf cycle policy`: this command does not know them, and saying so here is what keeps a value
+nothing reads out of a config file.
+
+The two *file* override layers are written here: the project layer (`<project>/.pf/config.json`,
+written by `init` as an empty object) and the global layer (`~/.pf/config.json`, which nobody
+generates for you -- `set --global` is a human really meaning to change the machine's default). The
+node layer (`<project>/.pf/nodes/<id>/config.json`) is written here too, under the same ledger lock.
+The cycle layer is **not** written here: it rides on the cycle record, whose one writer is
+`state/cycles.py`, and this file delegates to that writer rather than opening a second one.
+
+`set` and `unset` write exactly one layer. `set` stores a value (a switch's `off` is a value: a knob
+is turned off by writing `off`); `unset` drops the layer's entry, letting the next wider layer show
+through again. The two are different moves and are spelled differently on purpose.
 """
 
 from __future__ import annotations
 
-import contextlib
 import sys
 from pathlib import Path
 
-from .store import (
-    LEDGER_NAME,
-    _atomic_write,
-    _ledger,
-    _ledger_lock,
-    _read_json,
-    ledger_dir_for,
-)
+from . import knobs
+from .store import _ledger
 
-#: The override layer's file name -- both layers share it. The one source is `tools/shared/ledger.py`,
-#: and this file only takes that value over: where the project layer lands is computed by `ledger.py`'s
-#: `config_path_of`, and this file never composes a `config.json` of its own.
+#: The override layers' file name -- both file layers share it. The one source is
+#: `tools/shared/ledger.py`, and this file only takes that value over.
 CONFIG_NAME = _ledger().CONFIG_NAME
 
-#: The one definition of the four keys: factory default, shape, and a one-line summary. `kind` is
-#: `parse_value`'s only dispatch -- adding a key means adding this one cell.
-CONFIG_SPEC = {
-    'max_agents': {
-        'kind': 'count',
-        'default': 3,
-        'summary': 'how many subagents one session may have in flight at once',
-    },
-    'test_tier': {
-        'kind': 'choice',
-        'values': ('full', 'minimal'),
-        'default': 'full',
-        'summary': 'how this project is verified: full runs the whole suite, minimal runs only the '
-                   'few checks the project names',
-    },
-    'worktree_mode': {
-        'kind': 'choice',
-        'values': ('off', 'fork', 'reuse'),
-        'default': None,
-        'summary': 'whether a node gets a worktree of its own: fork by default in a git project, '
-                   'off otherwise',
-    },
-    'issue_repair': {
-        'kind': 'choice',
-        'values': ('on', 'off'),
-        'default': 'on',
-        'summary': 'whether a line crossing its own maintenance threshold gets a repair node '
-                   'inserted for it',
-    },
-}
 
-#: The override layers, lowest first: factory default, then global, then project.
-LAYERS = ('global', 'project')
-
-#: Where an effective value came from, as it is written for a human to read.
-LAYER_LABELS = {
-    'builtin': 'factory default',
-    'global': f'global ~/{LEDGER_NAME}/{CONFIG_NAME}',
-    'project': f'project {LEDGER_NAME}/{CONFIG_NAME}',
-}
-
-
-# ────────────────────────────────────────────────────────────────────────────
-# The project layer goes through `ledger_dir_for`; no other place composes a path under `.pf/`
-# (that discipline lives in store). The global layer is the same shape in the home directory:
-# `~/.pf/config.json`.
+# ── the layers, and the shape of one value ─────────────────────────────────
 
 def global_config_path() -> Path:
-    """Where the global override lands: `~/.pf/config.json`.
-
-    "The home directory counts as a project" is this layer's own way of putting it; the landing itself
-    is the one source's business (`shared/ledger.py`'s `home_config_path`, along with the `PF_HOME_DIR`
-    sandbox switch): both layers share one name and one shape, and the composition lives in one place.
-    """
-    return _ledger().home_config_path()
+    """Where the global layer lands: `~/.pf/config.json` (see `knobs.global_config_path`)."""
+    return knobs.global_config_path()
 
 
 def project_config_path(project: str | None = None) -> Path:
-    """Where the project override lands: `<project>/.pf/config.json`.
+    """Where the project layer lands: `<project>/.pf/config.json`."""
+    return knobs.project_config_path(project)
 
-    `project` may be omitted (omitted, the root this copy is bound to is used), so this wants the ledger
-    directory first and then the file under it: `ledger_dir_for(None)`'s omit semantics stay in store,
-    and `config_path_of` wants nothing but a ledger directory.
+
+def layer_path(layer: str, project: str | None = None, node: str | None = None) -> Path:
+    """Where one file layer lands (the cycle layer has no file: it is on the cycle record)."""
+    return knobs.layer_path(layer, project, node=node)
+
+
+def read_layer(layer: str, project: str | None = None, cycle=None, node: str | None = None) -> dict:
+    """The knobs one layer states -- `cycle` is the record itself, `node` a node id."""
+    return knobs.read_layer(layer, project, cycle=cycle, node=node)
+
+
+def _spec(key: str) -> dict:
+    """The one cell of the knob table this key names, or a refusal naming the keys that exist."""
+    spec = knobs.specs().get(key)
+    if spec is None:
+        print(f'Error: unknown key {key!r}; configurable: {", ".join(sorted(knobs.specs()))}',
+              file=sys.stderr)
+        sys.exit(1)
+    return spec
+
+
+def _check_layer(key: str, spec: dict, layer: str) -> None:
+    """Refuse a write into a layer this knob does not take, naming the layers it does.
+
+    Which layers a knob takes is its own cell (`layers`), not a property of the chain: a core setting
+    is how this project or this machine behaves and takes the two wide layers only, while a knob a
+    feature declares is read through the whole chain and takes all four. Writing into a layer the
+    knob does not take would land a value nothing could ever read, so it is refused here -- the read
+    side reports a value hand-written into such a layer, and the two sides say the same thing.
     """
-    return _ledger().config_path_of(ledger_dir_for(project))
-
-
-def layer_path(layer: str, project: str | None = None) -> Path:
-    return global_config_path() if layer == 'global' else project_config_path(project)
-
-
-def project_root_of(project: str | None = None) -> Path:
-    """This project's root: the parent of the ledger directory. `worktree_mode`'s default has to ask it whether this is a git checkout."""
-    return ledger_dir_for(project).parent
-
-
-# ───────────────────────────────────────────────────────────────────────────
-
-#: One rule per kind: hand it a value (the JSON value read off disk, or the string the command line
-#: gave) and, if it is valid, it hands back a value in the config's domain -- None if it is not. The
-#: read side and the write side both come through here: adding a kind, or moving a kind's boundary,
-#: touches this section; each cell of `CONFIG_SPEC` has one `kind`, and that is the only dispatch.
-def _parse_count(spec: dict, value):
-    """`count`: a positive integer. A boolean does not count; the command line's `"3"` and the disk's 3 both yield 3."""
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, str):
-        try:
-            value = int(value.strip())
-        except ValueError:
-            return None
-    return value if isinstance(value, int) and value >= 1 else None
-
-
-def _parse_choice(spec: dict, value):
-    """`choice`: a word from this cell's own candidate table."""
-    return value if value in spec['values'] else None
-
-
-_KINDS = {'count': _parse_count, 'choice': _parse_choice}
-
-
-def parse_value(spec: dict, value):
-    """One value for one key: parsed and checked by `spec['kind']`'s rule, None if it is not valid.
-
-    Both sides share this one copy: `read_layer` uses it to check a value read off disk, and
-    `cmd_config_set` uses it to check a value from the command line. One copy per side ends in "it
-    writes but does not read back" (or the other way round) -- a kind's boundary is defined here once.
-    """
-    return _KINDS[spec['kind']](spec, value)
-
-
-def _shape_error(key: str, value, where: Path) -> None:
-    print(f'Error: {where} has an invalid {key}: {value!r}', file=sys.stderr)
+    allowed = knobs.layers_of(spec)
+    if layer in allowed:
+        return
+    print(f'Error: {key} does not take the {layer} layer (it takes: {", ".join(allowed)}); '
+          f'nothing was written', file=sys.stderr)
     sys.exit(1)
 
 
-def _checked(key: str, value, where: Path):
-    """One value read off disk, checked against `CONFIG_SPEC` and handed back.
-
-    A value that cannot be read stops the call right there: a mis-written setting quietly falling back
-    to the default makes that key look "never configured" -- while it is in fact configured wrongly.
-    """
-    checked = parse_value(CONFIG_SPEC[key], value)
-    if checked is None:
-        _shape_error(key, value, where)
-    return checked
-
-
-def read_layer(layer: str, project: str | None = None) -> dict:
-    """The keys written in one override layer. A missing file is empty (the normal state); a broken one gets a shout."""
-    path = layer_path(layer, project)
-    data = _read_json(path, str(path))
-    if data is None:
-        return {}
-    if not isinstance(data, dict):
-        print(f'Error: {path} must be a JSON object (key -> value)', file=sys.stderr)
+def _cycle_of(project: str | None, cycle_id: str | None) -> dict | None:
+    """The record one `--cycle <id>` names; an id this project does not have is refused."""
+    if not cycle_id:
+        return None
+    record = knobs.cycle_record(project, cycle_id)
+    if not record:
+        print(f'Error: this project\'s record has no cycle "{cycle_id}"', file=sys.stderr)
         sys.exit(1)
-    out = {}
-    for key, value in data.items():
-        if key not in CONFIG_SPEC:
-            print(f'Warning: {path} has {key!r}, which is not a configurable key; skipped '
-                  f'(configurable: {", ".join(sorted(CONFIG_SPEC))})', file=sys.stderr)
-            continue
-        out[key] = _checked(key, value, path)
-    return out
+    return record
 
 
-def default_of(key: str, project: str | None = None):
-    spec = CONFIG_SPEC[key]
-    if spec['default'] is not None:
-        return spec['default']
-    return 'fork' if (project_root_of(project) / '.git').exists() else 'off'
+# ── the readings ───────────────────────────────────────────────────────────
+
+def resolve_config(project: str | None = None, cycle=None, node: str | None = None) -> dict:
+    """Effective values alone: `{key: value}`. `cycle` is an id (``None`` = this project's layers only)."""
+    record = _cycle_of(project, cycle)
+    return {key: value for key, (value, _source)
+            in knobs.resolve(project, cycle=record, node=node).items()}
 
 
-def resolve_config(project: str | None = None) -> dict:
-    """Effective values: factory default -> global -> project, each layer covering the one before."""
-    out = {key: default_of(key, project) for key in CONFIG_SPEC}
-    for layer in LAYERS:
-        out.update(read_layer(layer, project))
-    return out
+def config_sources(project: str | None = None, cycle=None, node: str | None = None) -> dict:
+    """Which layer each knob's effective value came from: `{key: source}`."""
+    record = _cycle_of(project, cycle)
+    return knobs.knob_sources(project, cycle=record, node=node)
 
 
-def config_sources(project: str | None = None) -> dict:
-    """Which layer each key's effective value came from: `builtin` / `global` / `project`."""
-    out = {key: 'builtin' for key in CONFIG_SPEC}
-    for layer in LAYERS:
-        for key in read_layer(layer, project):
-            out[key] = layer
-    return out
+def _shown(value) -> str:
+    """One value as it is printed: `-` when no layer states it and it has no factory value."""
+    return '-' if value is None else str(value)
 
 
-# ───────────────────────────────────────────────────────────────────────────
-# The project layer is locked together with the ledger directory: like state.json it is one whole
-# read-modify-write, and two lines running `config set` at once would lose one write. The global layer
-# has no shared lock to speak of (it belongs to no project), so it goes by `_atomic_write`'s atomic replace.
+# ── the write side ─────────────────────────────────────────────────────────
 
-def _parse_for_write(key: str, value: str):
-    """One value from the command line's side: the same kind's rule, and this side speaks the refusal."""
-    spec = CONFIG_SPEC[key]
-    stored = parse_value(spec, value)
-    if stored is None:
-        if spec['kind'] == 'count':
+def _parse_for_write(key: str, spec: dict, value: str):
+    """One value from the command line: the kind's own rule, and this side speaks the refusal.
+
+    `set` stores a value, so `off` is refused for every kind that has no `off` in its vocabulary --
+    `unset` is the move that drops an entry, and the two must not be spelled the same way. `number`
+    and `integer` take a positive value only: both are "the last acceptable reading" shaped, and a
+    line of 0 would judge every reading as over it.
+    """
+    kind = spec['kind']
+    parsed = knobs.parse(kind, value, spec.get('values'))
+    if parsed is not None and kind in ('number', 'integer') and parsed <= 0:
+        parsed = None
+    if parsed is None:
+        if kind == 'number':
+            print(f'Error: {key} wants a positive number, but read {value!r}', file=sys.stderr)
+        elif kind == 'integer':
             print(f'Error: {key} wants a positive integer, but read {value!r}', file=sys.stderr)
-        else:
+        elif kind == 'switch':
+            print(f'Error: {key} wants on or off, but read {value!r}', file=sys.stderr)
+        elif spec.get('values'):
             print(f'Error: {key} wants one of {list(spec["values"])}, but read {value!r}',
                   file=sys.stderr)
-        sys.exit(1)
-    return stored
-
-
-def write_value(key: str, value, layer: str, project: str | None = None) -> None:
-    """Write one key of one layer (`value is None` = drop that layer's override).
-
-    The project layer goes through `_ledger_lock`, which is itself the gate: a `.pf/` that was never
-    init-ed may not be written at all. The global layer belongs to this machine rather than to any
-    project, so there is no shared lock to speak of -- `nullcontext` makes both paths write one shape.
-    """
-    path = layer_path(layer, project)
-    with (_ledger_lock(project) if layer == 'project' else contextlib.nullcontext()):
-        data = _read_json(path, str(path)) if path.exists() else {}
-        if not isinstance(data, dict):
-            data = {}
-        if value is None:
-            data.pop(key, None)
         else:
-            data[key] = value
-        _atomic_write(path, data)
+            print(f'Error: {key} wants a word, but read {value!r}', file=sys.stderr)
+        sys.exit(1)
+    return parsed
 
 
-# ────────────────────────────────────────────────────────────────────────────
-
-def cmd_config_list(project: str | None = None) -> None:
-    effective = resolve_config(project)
-    sources = config_sources(project)
-    width = max(len(key) for key in CONFIG_SPEC)
-    for key in CONFIG_SPEC:
-        print(f'{key.ljust(width)} = {effective[key]} ({LAYER_LABELS[sources[key]]})')
+def _layer_label(layer: str, cycle=None, node: str | None = None) -> str:
+    """One layer's own label: the two record layers carry the identity they hang on."""
+    if layer in ('cycle', 'node'):
+        return knobs.source_label(layer, cycle=cycle, node=node)
+    return knobs.LAYER_LABELS[layer]
 
 
-def cmd_config_get(key: str, project: str | None = None) -> None:
+def write_value(key: str, value, layer: str = 'project', project: str | None = None,
+                cycle=None, node: str | None = None) -> None:
+    """Write one knob into exactly one layer (`value is None` = drop that layer's entry).
+
+    `cycle` is the cycle **id** for the cycle layer (that layer's writer works from the record's
+    identity), and the node id for the node layer. The cycle layer goes through `state/cycles.py`,
+    the one writer of the cycle record -- this file does not write `state.json`.
+    """
+    if layer == 'cycle':
+        _cycle_of(project, cycle)                 # the identity is checked before anything is written
+        from . import cycles                      # the cycle record's writer lives with its readers
+        cycles.write_cycle_policy(cycle, key, value)
+        return
+    if layer == 'node' and not node:
+        print('Error: the node layer needs a node id (--node)', file=sys.stderr)
+        sys.exit(1)
+    knobs.write_layer(layer, project, key, value, node=node)
+
+
+# ── the command line ───────────────────────────────────────────────────────
+
+def cmd_config_list(project: str | None = None, cycle=None, node: str | None = None) -> None:
+    """Every knob's effective value and the layer it came from -- the whole chain, one line each."""
+    record = _cycle_of(project, cycle)
+    effective = knobs.resolve(project, cycle=record, node=node)
+    width = max(len(key) for key in effective)
+    for key, (value, source) in effective.items():
+        print(f'{key.ljust(width)} = {_shown(value)} '
+              f'({knobs.source_label(source, cycle=record, node=node)})')
+
+
+def cmd_config_get(key: str, project: str | None = None, cycle=None, node: str | None = None) -> None:
     """It prints the value alone: this one line is what a caller (a skill, a script) gets."""
-    print(resolve_config(project)[key])
+    print(_shown(resolve_config(project, cycle, node)[key]))
 
 
-def cmd_config_set(key: str, value: str, layer: str = 'project',
-                   project: str | None = None) -> None:
-    stored = _parse_for_write(key, value)
-    write_value(key, stored, layer, project)
-    print(f'CONFIG: {key} = {stored} (written to {LAYER_LABELS[layer]})')
-    _report_effective(key, project)
+def cmd_config_set(key: str, value: str, layer: str = 'project', project: str | None = None,
+                   cycle=None, node: str | None = None) -> None:
+    spec = _spec(key)
+    _check_layer(key, spec, layer)
+    stored = _parse_for_write(key, spec, value)
+    write_value(key, stored, layer, project, cycle, node)
+    print(f'CONFIG: {key} = {stored} (written to {_layer_label(layer, cycle, node)})')
+    _report_effective(key, project, cycle, node)
 
 
-def cmd_config_unset(key: str, layer: str = 'project', project: str | None = None) -> None:
-    write_value(key, None, layer, project)
-    print(f'CONFIG: {key} override dropped from {LAYER_LABELS[layer]}')
-    _report_effective(key, project)
+def cmd_config_unset(key: str, layer: str = 'project', project: str | None = None,
+                     cycle=None, node: str | None = None) -> None:
+    _check_layer(key, _spec(key), layer)
+    write_value(key, None, layer, project, cycle, node)
+    print(f'CONFIG: {key} override dropped from {_layer_label(layer, cycle, node)}')
+    _report_effective(key, project, cycle, node)
 
 
-def _report_effective(key: str, project: str | None) -> None:
-    """One more line on the effective value after the write: writing the global layer while the project has an override of its own makes that line the whole difference."""
-    effective = resolve_config(project)[key]
-    source = config_sources(project)[key]
-    print(f'CONFIG: effective {key} = {effective} (from {LAYER_LABELS[source]})')
+def _report_effective(key: str, project: str | None, cycle=None, node: str | None = None) -> None:
+    """One more line on the effective value after the write: writing the global layer while a narrower
+    layer states the same name makes that line the whole difference."""
+    record = _cycle_of(project, cycle)
+    value, source = knobs.resolve(project, cycle=record, node=node)[key]
+    print(f'CONFIG: effective {key} = {_shown(value)} '
+          f'(from {knobs.source_label(source, cycle=record, node=node)})')

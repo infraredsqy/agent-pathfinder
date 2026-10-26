@@ -10,8 +10,8 @@ import time
 from pathlib import Path
 
 from . import insertion, seam
-from .store import (_holding_ids, _loader, cycle_policy, find_cycle, load_signal, load_state,
-                    note_session)
+from .store import (_holding_ids, _loader, cycle_policy, find_cycle, load_dag, load_signal,
+                    load_state, note_session)
 from .prompts import (launch_dir, started_marker, write_prompt_file)
 from .planner import plan
 
@@ -90,6 +90,21 @@ def _snapshot(project: Path, cycle_id: str) -> tuple:
 
 #: `_snapshot`'s three positions, by name: `progress` reports them under these keys, in this order.
 _SNAPSHOT_FIELDS = ('hand', 'path', 'status')
+
+
+def _graph_nodes(project: Path) -> frozenset:
+    """The node ids on the graph, for the one action whose whole product IS the graph's growth.
+
+    An insertion edits the graph and nothing else: it opens no session, pins no node and writes no
+    path step. At a close the commands that carry it also settle the node (so `_snapshot` moves), but
+    at a PICK there is no node to settle and the action would look like a no-op to the apply
+    contract -- while it has in fact created a node. This is the insertion's own progress reading,
+    and it is only ever asked for that action kind.
+    """
+    try:
+        return frozenset((load_dag(project).get('nodes') or {}))
+    except (RuntimeError, ValueError):
+        return frozenset()
 
 
 def _claim_pid(body: str) -> int | None:
@@ -319,6 +334,10 @@ def apply(project, cycle_id: str | None = None, decision: str | None = None,
     # below); popped so it never reaches a caller as something to run.
     add_command = action.pop('add_command', None)
     spec_of = action.pop('spec_of', None)
+    # An insertion action may carry SEVERAL nodes (one per source that asked for one). Each has its
+    # own `add`, its own text and its own commands; the first one's list already carries the close
+    # this they all ride on, so the order a caller sees is the order they run in.
+    insertions = [item for item in (action.get('insertions') or []) if isinstance(item, dict)]
 
     prompts = ([{'node_id': action['node_id'], 'prompt': action['prompt'],
                  'prompt_text': action['prompt_text']}] if action.get('prompt_text')
@@ -338,53 +357,92 @@ def apply(project, cycle_id: str | None = None, decision: str | None = None,
         action['applied'] = False
         return action
 
-    if add_command is None and kind == insertion.INSERT_ACTION:
+    if add_command is None and kind == insertion.INSERT_ACTION and not insertions:
         raise RuntimeError(f'action {kind!r} arrived without its `add` command: the inserted '
                            f'node cannot be created')
 
     before_state = _snapshot(project, action['cycle'])
-    # The mint runs where the planner put `add` -- the close commands ahead of it have to land
-    # first (the dedup judgement reads the graph, and `add`'s uuid is what the rest of the list is
-    # written in terms of), so `done` counts what has already run when it fires.
-    #
-    # An index loop, not `for cmd in commands`: the marker step REBINDS `commands` (placeholder
-    # substituted), and a `for` would go on iterating the pre-substitution list it captured.
+    # An insertion may be the only thing that runs (a pick-time one carries no close commands):
+    # then the graph's own growth is the progress, and it is read only for that action kind.
+    before_graph = _graph_nodes(project) if kind == insertion.INSERT_ACTION else None
+    # What runs, in order: one list per insertion (a singular action is one list too). The marker
+    # slot is where `add` belongs: the close commands ahead of it have to land first (the dedup
+    # judgement reads the graph, and `add`'s uuid is what the rest of the list is written in terms
+    # of), so `done` counts what has already run when it fires.
+    runs = ([{'commands': list(item.get('commands') or []), 'add': item.get('add_command'),
+              'spec_of': item.get('spec_of'), 'spec': item.get('spec_path'),
+              'steps': list(item.get('steps') or [])} for item in insertions]
+            if insertions else
+            [{'commands': list(commands), 'add': add_command, 'spec_of': spec_of,
+              'spec': action.get('spec'), 'steps': list(action.get('steps') or [])}])
+    # An index loop, not `for cmd in commands`: the marker step REBINDS a run's command list
+    # (placeholder substituted), and a `for` would go on iterating the pre-substitution list it
+    # captured.
     ran: list = []
     done = 0
-    i = 0
-    while i < len(commands):
-        cmd = commands[i]
-        try:
-            # The marker slot is where `add` belongs: run it there (its stdout carries the uuid the
-            # rest of the list is written in terms of), read the uuid, and substitute it in.
-            if add_command is not None and insertion.is_add_slot(cmd):
-                node_id, commands = insertion.mint(project, add_command, spec_of, commands)
-                ran.append(insertion.fill_all(list(add_command), node_id))
-                action['node_id'] = node_id
-                # The uuid did not exist when this action was built: the paths it reports and the
-                # steps it shows a reader were written against the placeholder.
-                if action.get('spec'):
-                    action['spec'] = insertion.fill(action['spec'], node_id)
-                if action.get('steps'):
-                    action['steps'] = insertion.fill_all(action['steps'], node_id)
-                add_command = None
-                done += 1
-                continue                  # the rebind moved every later command: re-read this slot
-            seam.run(cmd, project)
-        except RuntimeError as e:
-            if done:
-                raise RuntimeError(f'{e}\n(commands {done}/{len(commands)} of action {kind!r} '
-                                   f'already ran: the state is half-applied, look before '
-                                   f'retrying)') from e
-            raise
-        done += 1
-        i += 1
-    if add_command is not None:
-        raise RuntimeError(f'action {kind!r} carried an `add` command that never ran: the inserted '
-                           f'node cannot be created')
+    total = sum(len(run['commands']) for run in runs)
+    filled_lists: list = []
+    for index, run in enumerate(runs):
+        cmds = run['commands']
+        add = run['add']
+        i = 0
+        while i < len(cmds):
+            cmd = cmds[i]
+            try:
+                # The marker slot is where `add` belongs: run it there (its stdout carries the uuid
+                # the rest of the list is written in terms of), read the uuid, substitute it in.
+                if add is not None and insertion.is_add_slot(cmd):
+                    node_id, cmds = insertion.mint(project, add, run['spec_of'], cmds)
+                    ran.append(insertion.fill_all(list(add), node_id))
+                    # The uuid did not exist when this action was built: the paths it reports and the
+                    # steps it shows a reader were written against the placeholder. The first
+                    # insertion is the action's own (`node_id` / `spec` / `steps`).
+                    if index == 0:
+                        action['node_id'] = node_id
+                    if insertions:
+                        # Each insertion reports the node it became, next to the first one's mirror.
+                        insertions[index]['node_id'] = node_id
+                    if run.get('spec'):
+                        run['spec'] = insertion.fill(run['spec'], node_id)
+                    if run.get('steps'):
+                        run['steps'] = insertion.fill_all(run['steps'], node_id)
+                    add = None
+                    done += 1
+                    continue              # the rebind moved every later command: re-read this slot
+                seam.run(cmd, project)
+            except RuntimeError as e:
+                if done:
+                    raise RuntimeError(f'{e}\n(commands {done}/{total} of action {kind!r} '
+                                       f'already ran: the state is half-applied, look before '
+                                       f'retrying)') from e
+                raise
+            done += 1
+            i += 1
+        if add is not None:
+            raise RuntimeError(f'action {kind!r} carried an `add` command that never ran: the '
+                               f'inserted node cannot be created')
+        filled_lists.append(cmds)
+    commands = [cmd for cmds in filled_lists for cmd in cmds]
+    # The uuid did not exist when this action was built, so the fields a reader is shown were written
+    # against the placeholder; they now carry the first insertion's real one (a singular action's only
+    # one is its own).
+    head = runs[0]
+    if action.get('spec'):
+        action['spec'] = head['spec']
+    if action.get('steps'):
+        action['steps'] = head['steps']
+    if insertions:
+        # An insertion's own `add`, text builder and command list are the writer's half of the
+        # mechanism, never the caller's: they are what `apply` just consumed.
+        for item, run in zip(insertions, runs):
+            item['spec_path'] = run['spec']
+            item['steps'] = run['steps']
+            for key in ('add_command', 'spec_of', 'commands'):
+                item.pop(key, None)
+        action['insertions'] = insertions
     after_state = _snapshot(project, action['cycle'])
 
-    if before_state == after_state:
+    if before_state == after_state and (before_graph is None or before_graph == _graph_nodes(project)):
         raise RuntimeError(
             f'contract violation: action {kind!r} ran {len(commands)} command(s) but nothing '
             f'changed (before={before_state}, after={after_state})')
@@ -421,11 +479,18 @@ def record(project, cycle_id: str | None = None) -> dict:
     This is the whole of the conductor's mechanical routine, and it is one call: consume a finished
     node's signal, do every piece of bookkeeping that follows from it, and stop at the first thing a
     caller can act on -- `dispatch` (spawn this node), `wait` (a node waiting for its own closing
-    call), `ask_user`, `stop_pipeline`. An `insert_node` never appears here: an insertion is made at
-    a close (`--after`), and it leaves the line with the next dispatch to make.
+    call), `ask_user`, `stop_pipeline`, or `insert_node`.
 
-    Note the shape: it re-plans after every applied step rather than returning the action it just
-    ran. Returning the close action would leave a closed-but-undispatched pipeline behind.
+    **An insertion is where the call stops, at BOTH timings.** The graph edit is the answer: the
+    caller commits and pushes, then runs the next step, where the ranking decides who runs first. So
+    a pick-time insertion is not re-planned behind the caller's back -- the settle loop ends on the
+    `insert_node` action, exactly as a close's insertion does -- and a feature that answers every
+    time it is asked contributes one node per call, never a burst. No caller may assume `record`
+    always ends in a dispatch.
+
+    Note the shape otherwise: it re-plans after every other applied step rather than returning the
+    action it just ran. Returning the close action would leave a closed-but-undispatched pipeline
+    behind.
     """
     project = Path(project).resolve()
     action = {'action': 'wait', 'commands': []}
@@ -435,6 +500,11 @@ def record(project, cycle_id: str | None = None) -> dict:
         commands = action.get('commands') or []
 
         if kind in ('dispatch', 'open_node'):
+            return apply(project, cycle_id, action=action)
+        if kind == insertion.INSERT_ACTION:
+            # One insertion ends the step, whatever timing asked for it: the same answer a close's
+            # insertion gives. Re-planning here is what let a pick feature that keeps offering grow
+            # the graph and never reach a dispatch.
             return apply(project, cycle_id, action=action)
         if kind == 'stop_pipeline':
             return apply(project, cycle_id, action=action) if commands else action

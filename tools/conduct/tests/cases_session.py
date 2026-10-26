@@ -307,9 +307,10 @@ class TestTheRecordDoors(Base):
     """The four things under `.pf/` have one door each: every door takes `project`, and the
     caller says whose project to read.
 
-    `session` (the graph, `nodes/<id>/spec.md`, `meta/sessions/`), `instruction` and `maintenance`
-    all take their record from here -- assembling the path locally would give one record a second
-    failure mode (one place shouts when it reads badly, the other silently reads an empty set).
+    `session` (the graph, `nodes/<id>/spec.md`, `meta/sessions/`), `instruction` and `levers` (the
+    temp sweep) all take their record from here -- assembling the path locally would give one record
+    a second failure mode (one place shouts when it reads badly, the other silently reads an empty
+    set).
     """
 
     def state_package(self):

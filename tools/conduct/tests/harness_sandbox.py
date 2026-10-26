@@ -60,10 +60,9 @@ class Sandbox:
         self.root = Path(self._tmp.name)
         self.cli = cli
         # The machine's own settings layer (`~/.pf/config.json`) is pointed inside the sandbox: it is
-        # the one thing a run reads from outside the project (the maintenance channel's switch), and
-        # what a case reads must not change with the machine it happens to run on. `PF_HOME_DIR` is
-        # the same lever `cases_config` pulls; this file's cases have no setUp of their own. `close()`
-        # puts it back.
+        # the one thing a run reads from outside the project (a knob's widest layer), and what a case
+        # reads must not change with the machine it happens to run on. `PF_HOME_DIR` is the same lever
+        # `cases_config` pulls; this file's cases have no setUp of their own. `close()` puts it back.
         self.home = self.root / '.home'
         self._env_home = os.environ.get('PF_HOME_DIR')
         os.environ['PF_HOME_DIR'] = str(self.home)
@@ -187,9 +186,9 @@ class Sandbox:
         """`cycle create`: a new line, with the filter set every new line must carry.
 
         `tags` defaults to `coding` here because `cycle create` / `cycle start` now REFUSE a call
-        without `--tags` (a line's range also says which line the maintenance channel answers to).
-        A case whose subject is that refusal calls `_tool('cycle', 'create', …)` itself, with no
-        `--tags`, so the helper's default can never hide it.
+        without `--tags` (a line's range is also the set the pick filters by). A case whose subject is
+        that refusal calls `_tool('cycle', 'create', …)` itself, with no `--tags`, so the helper's
+        default can never hide it.
         """
         args = ['cycle', 'create', cycle_id, '--title', title]
         if tags:

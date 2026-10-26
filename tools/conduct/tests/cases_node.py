@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import NODE, NODE2, NODE3, Base, pipeline, skill_of  # noqa: E402
 from harness import (CONDUCT_DIR, Closer, Driver, WorkerSession,  # noqa: E402
-                     _dag_hook, stop_after)
+                     _dag_hook, requires_feature, stop_after)
 
 #: The implementation package's own directory. `graph_readers` recognizes "a caller inside the
 #: package" by the stack frame's **directory**, not by a substring of the file name: the paths of the
@@ -671,15 +671,28 @@ class TestShelvedPolicy(Base):
         bad_value = sb.set_policy('cyc', 'when_shelved', 'maybe', check=False)
         self.assertNotEqual(bad_value.returncode, 0)
         self.assertIn('stop', bad_value.stderr)
+        self.assertNotIn('policies', sb.cycle(), 'a refused write still wrote something')
+
+    @requires_feature('maintenance')
+    def test_a_feature_knob_is_validated_like_any_other(self):
+        """A knob a feature declares is a first-class policy key: it is refused for a value its kind
+        cannot be, and a line of 0 is refused too (a 0 line fails every reading).
+
+        The key arrives through the registry, so this skips when the folder that declares it is not
+        installed -- deleting a feature is a supported state, and the core's own keys above still
+        cover the validation path without it.
+        """
+        sb = self.pair()
         bad_number = sb.set_policy('cyc', 'test_seconds_limit', 'soon', check=False)
         self.assertNotEqual(bad_number.returncode, 0)
         zero = sb.set_policy('cyc', 'test_seconds_limit', '0', check=False)
         self.assertNotEqual(zero.returncode, 0, 'a line of 0 fails every reading')
         self.assertNotIn('policies', sb.cycle(), 'a refused write still wrote something')
 
+    @requires_feature('maintenance')
     def test_a_numeric_policy_lands_as_a_number_and_off_clears_it(self):
-        """Numeric policies (the maintenance line's two): a positive number lands as the number
-        itself, and `off` drops the entry."""
+        """A feature's numeric knob (the kind `number`): a positive number lands as the number itself,
+        and `off` drops the entry."""
         sb = self.pair()
         proc = sb.set_policy('cyc', 'test_seconds_limit', '15', cli=True)
 
@@ -971,9 +984,10 @@ class TestTheCloseReadsTheGraphOnce(Base):
     def test_a_close_that_fills_a_slot_reads_the_graph_once(self):
         """The fill pass: the close reads once, and the dispatch filled right there reads once more.
 
-        The second read is the **dispatch slot**'s (`_dispatch_many` reads the graph for the node's
-        title and mode) and has nothing to do with the closing pass; the close's own judgements always
-        use the one handed down.
+        The second read is the **dispatch slot**'s: the dispatch is built in `plan` (it is the same
+        step for a close's refill and for a cycle's first pick), and the feature gate is asked with
+        the copy that step read. It has nothing to do with the closing pass; the close's own
+        judgements always use the one handed down.
         """
         sb = self.make()
         sb.add_node(NODE, 'first')
@@ -990,7 +1004,7 @@ class TestTheCloseReadsTheGraphOnce(Base):
         self.assertEqual('dispatch', action['action'], action)
         self.assertEqual(sorted(sb.holding_ids()), sorted([NODE2, NODE3]),
                          'the slot that was freed has been filled')
-        self.assertEqual({'_close_own_node', '_dispatch_many'}, set(callers),
+        self.assertEqual({'_close_own_node', 'plan'}, set(callers),
                          f'the graph readers: {callers}')
 
     def test_the_pick_path_reads_the_graph_once_too(self):
@@ -1013,21 +1027,28 @@ class TestTheCloseReadsTheGraphOnce(Base):
 #  the closing decision: one entry, whatever the line holds
 # ═══════════════════════════════════════════════════════════════════════════════
 
+@requires_feature('maintenance')
 class TestTheCloseHasOneEntry(Base):
     """The judge that ends a node -- the stop rule, the close's commands, the stop answer, and the
-    maintenance channel's insertion -- is asked from exactly one function, for a line holding one
-    node and for a line holding several alike.
+    features' insertion -- is asked from exactly one function, for a line holding one node and for a
+    line holding several alike.
 
     How many slots a line holds at once is a *parameter* of that one function; when it is answered
     in two places instead, every new judgement has to be hung twice, and the two ladders drift apart
     in exactly the corners no case looks at. This is the case that looks: it drives the closes that
     between them walk every branch, and records who asked.
+
+    One of those branches is a close a feature answers with an insertion ("several slots, the
+    maintenance node goes in"), which needs the shipped declaration; the class therefore skips when
+    that folder is not installed. The pin it carries is a code-shape one, and the shape does not
+    change with a data folder.
     """
 
     #: The machinery a close is built from: the stop rule, the mechanical close list, the stop
-    #: answer, and the maintenance channel's two halves (the judgement and the action it becomes).
-    MACHINERY = ('stop_criterion', '_close_commands', '_stop_action', '_maintenance_hit',
-                 '_maintenance_due')
+    #: answer, and the features' two halves (the judgement the host is asked, and the action it
+    #: becomes).
+    MACHINERY = ('stop_criterion', '_close_commands', '_stop_action', '_feature_insertions',
+                 '_insertions_due')
 
     def machinery_callers(self):
         """Replace that machinery with a wrapper recording its caller's function name, in **every**
@@ -1111,7 +1132,7 @@ class TestTheCloseHasOneEntry(Base):
 
     def several_slot_closes(self):
         """The closes a line holding several slots can take: a refill, a slot still in flight with
-        nothing to refill with, and the maintenance channel's insertion."""
+        nothing to refill with, and a close a feature answers with an insertion."""
         def fill_one(sb):
             sb.add_node(NODE, 'UI design')
             sb.add_node(NODE2, 'the next one')
@@ -1130,9 +1151,11 @@ class TestTheCloseHasOneEntry(Base):
             return {'node': NODE}
 
         def maintenance_due(sb):
-            sb.add_node(NODE, 'UI design')
-            sb.add_node(NODE2, 'the next one', deps=[NODE])
-            sb.start_cycle()
+            """The same close, and a feature answers it with a node: the branch that is only walked
+            when the judgement hands something back."""
+            sb.add_node(NODE, 'UI design', tags=['coding'])
+            sb.add_node(NODE2, 'the next one', tags=['coding'], deps=[NODE])
+            sb.start_cycle(tags=['coding'])
             sb.set_policy('cyc', 'parallel', 2)
             sb.set_policy('cyc', 'test_seconds_limit', 120)
             sb.write_signal('cyc', NODE, 'completed', 'done',

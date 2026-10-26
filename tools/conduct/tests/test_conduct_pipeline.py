@@ -38,6 +38,10 @@ What this suite is organised around
   6. the guards each of those costs: `TestCloseGuards` (the close), `TestSignalGuards` (a forged
      ticket), `TestCleanTemp` (the sweep, and a state it cannot read)
   7. `TestEndToEnd`: the whole walk through the real CLI, with a dry-run spawn and no session
+  8. the extension point: a feature is a folder -- `TestTheRegistry` (what a declaration merges and
+     what a broken one costs), `TestTheDeletedFeatureFolder` (the pipeline with none installed),
+     `TestTheDispatchGate` and `TestThePickTiming` (the two timings it acts at), and
+     `TestTheInsertionActionShape` (the one action kind every insertion source shares)
 """
 
 from __future__ import annotations
@@ -80,6 +84,8 @@ from cases_parallel_slots import *  # noqa: F401,F403
 from cases_fork import *          # noqa: F401,F403
 from cases_init import *          # noqa: F401,F403
 from cases_config import *        # noqa: F401,F403
+from cases_knobs import *         # noqa: F401,F403
+from cases_feature import *       # noqa: F401,F403
 from cases_session import *       # noqa: F401,F403
 from cases_shared import *        # noqa: F401,F403
 from cases_bin import *           # noqa: F401,F403

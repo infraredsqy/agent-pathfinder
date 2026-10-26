@@ -3,13 +3,19 @@
 Owns all eleven verbs of `pf cycle` -- create / start / rename / status / policy / list / current /
 show / hold / close / retry -- plus the vocabulary a cycle carries: VALID_TAGS, `_parse_cycle_tags`
 and the policy table (`POLICY_*`, and `cycle_policy` as the one reading of it).
+
+A line's policies are its own thing: three of them (`when_shelved` / `parallel` / `spawner`) belong
+to the line and live nowhere else, and the rest are the knobs the installed features declare, which
+this line may state on its own record. Nothing in this file spells a feature's name -- the thresholds
+a line configures arrive from the declarations of whatever is installed.
 """
 
 import json
 import sys
 from pathlib import Path
 
-from .store import (CYCLE_VALID_STATUSES, PARALLEL_DEFAULT, VALID_NODE_RESULTS,
+from . import knobs
+from .store import (CYCLE_VALID_STATUSES, VALID_NODE_RESULTS,
                     _find_cycle, _holding_ids, _holding_of, _ledger_lock, _loader, _now,
                     _read_dag, _read_signal, _read_state, _resolve_project_root, _set_holding,
                     _signal_path, _write_signal, _write_state, dag_manage, ledger_dir_for)
@@ -29,10 +35,10 @@ def _require_tags(tags: list, verb: str) -> None:
     """A new line must state the range it picks from; an empty range is refused, with `--tags` in
     the hint.
 
-    Which branch a line **belongs to** (whether it may have a maintenance node inserted for a
-    maintenance metric) is expressed by this tag too: a cycle with no tags would give "who may
-    react to a maintenance metric" a second answer. Cycles already on disk keep running; this gate
-    applies to new calls only.
+    Which branch a line **belongs to** (whether a feature that reacts to a crossed threshold may
+    insert a node for a line like this one) is expressed by this tag too: a cycle with no tags
+    would give "who may react to a crossed threshold" a second answer. Cycles already on disk keep
+    running; this gate applies to new calls only.
     """
     if tags:
         return
@@ -40,141 +46,179 @@ def _require_tags(tags: list, verb: str) -> None:
           f'For example: {verb} <slug> --tags coding. '
           f'Known words: {"/".join(VALID_TAGS)} (a word outside the vocabulary is fine too; it is '
           f'taken as given). '
-          f'Every pick this line makes, and where its maintenance channel applies, read this one '
-          f'range.',
+          f'Every pick this line makes, and which features may react to it, reads this one range.',
           file=sys.stderr)
     sys.exit(2)
 
 
-# ── cycle policies: rules a line carries itself ───────────────────────
-# `cycle.policies` is optional: a cycle that never wrote the key lands in exactly today's shape,
-# and the defaults fill it in on the way back out. The first is `when_shelved` -- a node closed out
-# without delivering (so it was shelved, waiting for a human to rescue it): does this line stop and
-# wait, or go on to pick the next node. Default `stop`: the default must fall on the conservative
-# side.
-# The second is `parallel` -- how many nodes this line holds, and how many sessions it opens, at
-# once. Default 1 (one slot at a time). It is a **cap**: whether nodes can run side by side is the
-# dependency graph's call.
-# The same set of words as `pipeline/store.py` (that one owns the reading, this one the writing).
-POLICY_DEFAULTS = {'when_shelved': 'stop', 'parallel': PARALLEL_DEFAULT}
-POLICY_VALUES = {'when_shelved': ('stop', 'continue')}
+# ── cycle policies: the knobs a line states itself ───────────────────
+# `cycle.policies` is this line's own layer of the knob chain. Three of its keys are the line's and
+# nobody else's -- they are NOT settings and they are not on `state/knobs.py`'s table, because the
+# readers of every one of them truncate the chain to this record: the pick reads `parallel`, the stop
+# answer reads `when_shelved`, `resolve_spawner` reads `spawner`. A value under one of these names in
+# a project or a global file would be a setting nothing reads, which is exactly the "I set it, why is
+# it not in force" this tree refuses to ship -- so `pf config` does not know these three names and
+# `pf cycle policy` is the door that writes them.
+#
+# `when_shelved`: a node closed out without delivering (so it was shelved, waiting for a human to
+# rescue it) -- does this line stop and wait, or go on to pick the next node. Default `stop`: the
+# default must fall on the conservative side.
+# `parallel`: how many nodes this line holds, and how many sessions it opens, at once. Default 1 (one
+# slot at a time). It is a **cap**: whether nodes can run side by side is the dependency graph's call.
+# `spawner`: which spawner opens this line's sessions (`dsh` / `zcode`). Words only, never a path:
+# the cycle record merges across machines with `.pf/`, so a machine-local path landing in the state
+# file is a dead value on another machine; where a path is wanted, use the one-off `--spawner <path>`.
+LINE_POLICIES = {
+    'when_shelved': {
+        'kind': 'word',
+        'values': ('stop', 'continue'),
+        'default': 'stop',
+        'summary': 'what this line does when a node comes back not delivered: stop and wait for a '
+                   'human, or mark it shelved and carry on',
+    },
+    'parallel': {
+        'kind': 'integer',
+        'default': 1,
+        'summary': 'how many nodes this line holds and how many sessions it opens at once (a cap: '
+                   'whether they can run side by side is the graph\'s call)',
+    },
+    'spawner': {
+        'kind': 'word',
+        'values': ('dsh', 'zcode'),
+        'default': None,
+        'summary': 'which spawner opens this line\'s sessions (words only, never a path: the cycle '
+                   'record merges across machines)',
+    },
+}
+
+#: The table `cycle policy` judges with: the line's own three, then every knob a declaration brings
+#: that takes the cycle layer. A feature's thresholds and its switch do walk the whole chain, so this
+#: line may state them (one chain, one place to state a value); the core's own settings do not take
+#: this layer, so `max_agents` is not a policy and `pf cycle policy` refuses it. Derived from
+#: `knobs.specs()` -- no feature's name is spelled in this file.
+_SPECS = {**LINE_POLICIES,
+          **{key: cell for key, cell in knobs.specs().items()
+             if 'cycle' in knobs.layers_of(cell)}}
+#: The same table, for a caller that builds `--help`: one source for what a policy's value looks like.
+POLICY_SPECS = _SPECS
+#: The two knobs every line carries a value for, in the order a reading prints them. Their defaults
+#: are the line table's (writing a value for either again here would be a second source for it).
+POLICY_DEFAULTS = {key: LINE_POLICIES[key]['default'] for key in ('when_shelved', 'parallel')}
+POLICY_VALUES = {key: tuple(LINE_POLICIES[key].get('values') or ())
+                 for key in POLICY_DEFAULTS if LINE_POLICIES[key]['kind'] == 'word'}
 #: Integer policies: an integer value, with `off` to cancel. `parallel` lives here (floor 1: a line
 #: holds at least one slot).
-POLICY_COUNTS = ('parallel',)
+POLICY_COUNTS = tuple(key for key in POLICY_DEFAULTS if LINE_POLICIES[key]['kind'] == 'integer')
 #: Numeric policies: no candidate table, the value parses as a number; `off` cancels (absent means
-#: "not configured").
-#: The two maintenance lines live here: they are **this line's own rules**, the same kind of thing
-#: as `tags`, so they ride on the cycle record -- a line that never touches code (`art` /
-#: `writing`) does not carry either key at all.
-POLICY_NUMBERS = ('test_seconds_limit', 'issue_pool_weight_limit')
+#: "not configured"). The thresholds of the features that declare a metric land here -- they are
+#: **this line's own rules**, the same kind of thing as `tags`, so they ride on the cycle record.
+POLICY_NUMBERS = tuple(sorted(key for key, spec in _SPECS.items() if spec['kind'] == 'number'))
 #: Word policies: the value must be in the candidate table, `off` clears it, and there is no
-#: default -- a line that never configured it falls to the next level of the call chain, and
-#: nothing changes. `spawner` lives here: which spawner opens this line's sessions
-#: (`dsh` / `zcode`). Words only, never a path: the cycle record merges across machines with
-#: `.pf/`, so a machine-local path landing in the state file is a dead value on another machine;
-#: where a path is wanted, use the one-off `--spawner <path>`.
-POLICY_WORDS = ('spawner',)
-POLICY_WORD_CHOICES = {'spawner': ('dsh', 'zcode')}
+#: default -- a line that never configured it falls to the next level of the chain, and nothing
+#: changes. `spawner` lives here, and so does a feature's word knob that names no default.
+POLICY_WORDS = tuple(sorted(key for key, spec in _SPECS.items()
+                            if spec['kind'] == 'word' and spec.get('default') is None
+                            and key not in POLICY_DEFAULTS))
+POLICY_WORD_CHOICES = {key: tuple(_SPECS[key].get('values') or ()) for key in POLICY_WORDS
+                       if _SPECS[key].get('values')}
 #: The union of legal policy keys: the four tables are the whole source, computed once here --
 #: `cycle policy`'s refusal and argparse's `choices` (through `state-manage.py`) both read this.
-POLICY_KEYS = tuple(sorted(set(POLICY_VALUES) | set(POLICY_NUMBERS) | set(POLICY_COUNTS)
-                           | set(POLICY_WORDS)))
+POLICY_KEYS = tuple(sorted(_SPECS))
 
 
 def cycle_policy(cycle: dict) -> dict:
-    """This line's effective policies right now: keys missing from disk (or holding a word nobody
-    recognizes) are filled in with their defaults.
+    """This line's effective policies right now: the two always-present knobs filled in with their
+    defaults, plus every value the line states on its own record, parsed by its kind.
 
-    Numeric policies (`POLICY_NUMBERS`) and word policies (`POLICY_WORDS`) have no default: not
-    configured means they do not appear in this reading.
-    Integer policies (`POLICY_COUNTS`) do have a default (`parallel` defaults to 1); a non-integer
-    on disk counts as not configured.
+    A value the kind refuses (a hand-edited record) is read as not stated rather than raising: the
+    reading side of a state record is tolerant, the writing side is what refuses. `parallel` falls
+    back to its default; a knob with no factory value stays absent until some layer states it.
     """
     stated = cycle.get('policies') or {}
-    out = {}
-    for key, default in POLICY_DEFAULTS.items():
-        value = stated.get(key)
-        if key in POLICY_COUNTS:
-            out[key] = value if _policy_count(value) is not None else default
-        else:
-            out[key] = value if value in POLICY_VALUES.get(key, ()) else default
-    for key in POLICY_NUMBERS:
-        number = _policy_number(stated.get(key))
-        if number is not None:
-            out[key] = number
-    for key in POLICY_WORDS:
-        value = stated.get(key)
-        if value in POLICY_WORD_CHOICES.get(key, ()):
-            out[key] = value
+    out = dict(POLICY_DEFAULTS)
+    for key, value in stated.items():
+        spec = _SPECS.get(key)
+        if spec is None:
+            continue
+        parsed = knobs.parse(spec['kind'], value, spec.get('values'))
+        if parsed is not None:
+            out[key] = parsed
     return out
 
 
-def _policy_count(value):
-    """An integer policy off disk, or `None`. Only a value that is already a positive integer
-    counts."""
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        return None
-    return value
+def _parse_policy_value(key: str, text: str):
+    """One policy value from the command line, parsed by its kind; `None` means "drop the entry".
 
+    `off` is a **clearing word** for `number` / `integer` / `word`: it drops this line's entry, which
+    is the same move `pf config unset --cycle` makes. On a `switch` it is a **value** -- a switch is
+    turned off by writing `off`, and dropping its entry is `config unset`'s move. The two meanings
+    never meet, because the kind decides which one applies.
 
-def _policy_number(value):
-    """A numeric policy off disk, or `None`. Only a value that is already a number counts: a boolean
-    and a string are both read as not configured."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    return value
-
-
-def _parse_policy_number(key: str, text: str):
-    """A numeric policy from the command line: a positive number lands on disk, `off` cancels.
-
-    0 and negative numbers are refused outright -- the line is "the last acceptable number", so 0
-    would judge every reading as over the line.
+    Numbers and integers take a positive value only: both are "the last acceptable reading" shaped,
+    and a line of 0 would judge every reading as over it.
     """
+    spec = _SPECS.get(key)
+    if spec is None:
+        print(f'Error: unknown policy {key!r}; valid keys: {list(POLICY_KEYS)}', file=sys.stderr)
+        sys.exit(1)
+    kind = spec['kind']
+    if kind == 'switch':
+        if text not in ('on', 'off'):
+            print(f'Error: policy {key} must be on or off, got {text!r}', file=sys.stderr)
+            sys.exit(1)
+        return text
     if str(text).strip().lower() == 'off':
         return None
-    try:
-        parsed = float(text)
-    except (TypeError, ValueError):
-        print(f'Error: policy {key} takes a positive number or `off`, got {text!r}',
+    if kind == 'number':
+        try:
+            parsed = float(text)
+        except (TypeError, ValueError):
+            print(f'Error: policy {key} takes a positive number or `off`, got {text!r}',
+                  file=sys.stderr)
+            sys.exit(1)
+        if not parsed > 0 or parsed == float('inf'):
+            print(f'Error: policy {key} must be positive (a line of 0 fails every reading)',
+                  file=sys.stderr)
+            sys.exit(1)
+        return int(parsed) if parsed.is_integer() else parsed
+    if kind == 'integer':
+        try:
+            parsed = int(str(text).strip())
+        except (TypeError, ValueError):
+            print(f'Error: policy {key} takes a positive integer or `off`, got {text!r}',
+                  file=sys.stderr)
+            sys.exit(1)
+        if parsed < 1:
+            print(f'Error: policy {key} must be at least 1 (a line holds at least one node)',
+                  file=sys.stderr)
+            sys.exit(1)
+        return parsed
+    allowed = spec.get('values')
+    if allowed is not None and text not in allowed:
+        print(f'Error: policy {key} must be one of {list(allowed)} or `off`, got {text!r}',
               file=sys.stderr)
-        sys.exit(1)
-    if parsed <= 0:
-        print(f'Error: policy {key} must be positive (a line of 0 fails every reading)',
-              file=sys.stderr)
-        sys.exit(1)
-    return int(parsed) if parsed.is_integer() else parsed
-
-
-def _parse_policy_count(key: str, text: str):
-    """An integer policy from the command line: a positive integer lands on disk, `off` cancels
-    (default 1)."""
-    if str(text).strip().lower() == 'off':
-        return None
-    try:
-        parsed = int(str(text).strip())
-    except (TypeError, ValueError):
-        print(f'Error: policy {key} takes a positive integer or `off`, got {text!r}',
-              file=sys.stderr)
-        sys.exit(1)
-    if parsed < 1:
-        print(f'Error: policy {key} must be at least 1 (a line holds at least one node)',
-              file=sys.stderr)
-        sys.exit(1)
-    return parsed
-
-
-def _parse_policy_word(key: str, text: str):
-    """A word policy from the command line: a word from the candidate table lands on disk, `off`
-    clears it (clearing means "not configured", falling back to the next level of the call
-    chain)."""
-    if str(text).strip().lower() == 'off':
-        return None
-    if text not in POLICY_WORD_CHOICES.get(key, ()):
-        print(f'Error: policy {key} must be one of {list(POLICY_WORD_CHOICES[key])} '
-              f'or `off`, got {text!r}', file=sys.stderr)
         sys.exit(1)
     return text
+
+
+def write_cycle_policy(cycle_id: str, key: str, value) -> dict:
+    """Write one slot of this line's own layer (`value is None` drops it), and hand back the whole
+    effective policy set.
+
+    **The one writer of this part of the cycle record**: `cycle policy` and `pf config set --cycle`
+    both come through here, so the record has one writer and one place where its `updated_at` moves.
+    """
+    with _ledger_lock():
+        state = _read_state()
+        cycle = _find_cycle(state, cycle_id)
+        policies = cycle.setdefault('policies', {})
+        if value is None:
+            policies.pop(key, None)
+        else:
+            policies[key] = value
+        cycle['updated_at'] = _now()
+        _write_state(state)
+        return cycle_policy(cycle)
 
 
 def _parse_cycle_tags(raw: str | list | None) -> list:
@@ -267,38 +311,14 @@ def cmd_cycle_policy(cycle_id: str, key: str, value: str) -> None:
     the cycle record rather than on one call: every step this line takes, and every close, reads
     the same one.
 
-    A numeric policy (the two maintenance lines) takes a positive number and `off` drops it; an
-    integer one (`parallel`) takes a positive integer; a word one (`spawner`) takes a word from the
-    candidate table and `off` drops it.
+    Each kind states what its values are: a number takes a positive number, an integer a positive
+    integer, a word a word from its candidate table, a switch `on` or `off`. `off` drops the entry
+    for a number / integer / word ("not configured": the next layer of the chain shows through); on
+    a switch it is a value -- a switch is turned off by writing `off`, and dropping its entry is
+    `pf config unset --cycle`.
     """
-    if key in POLICY_NUMBERS:
-        stored = _parse_policy_number(key, value)
-    elif key in POLICY_COUNTS:
-        stored = _parse_policy_count(key, value)
-    elif key in POLICY_WORDS:
-        stored = _parse_policy_word(key, value)
-    elif key in POLICY_VALUES:
-        allowed = POLICY_VALUES[key]
-        if value not in allowed:
-            print(f'Error: policy {key} must be one of {list(allowed)}', file=sys.stderr)
-            sys.exit(1)
-        stored = value
-    else:
-        print(f'Error: unknown policy {key!r}; valid keys: {list(POLICY_KEYS)}',
-              file=sys.stderr)
-        sys.exit(1)
-
-    with _ledger_lock():
-        state = _read_state()
-        cycle = _find_cycle(state, cycle_id)
-        policies = cycle.setdefault('policies', {})
-        if stored is None:
-            policies.pop(key, None)
-        else:
-            policies[key] = stored
-        cycle['updated_at'] = _now()
-        _write_state(state)
-        effective = cycle_policy(cycle)
+    stored = _parse_policy_value(key, value)
+    effective = write_cycle_policy(cycle_id, key, stored)
     print(f'POLICY: "{cycle_id}" → ' + ', '.join(f'{k}={v}' for k, v in effective.items()))
 
 
@@ -333,7 +353,7 @@ def cmd_cycle_start(cycle_id: str, title: str | None,
     _require_tags(tags, 'pf cycle start')
     # The command-line slot goes through the same parsing door `cycle policy` uses: a positive
     # integer lands on disk, `off` falls back to the default.
-    stated = _parse_policy_count('parallel', parallel) if parallel is not None else None
+    stated = _parse_policy_value('parallel', parallel) if parallel is not None else None
     with _ledger_lock():
         project = _resolve_project_root(Path.cwd())
         # How many slots the opening pins and how many each close refills are one thing:

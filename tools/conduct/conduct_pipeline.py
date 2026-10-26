@@ -196,10 +196,10 @@ def _tool_path(env_var: str, default):
 # this module having a second search path of its own: a silent fallback into `~/.agents` would also
 # hide the failure that matters -- a shipped tree whose sibling `dag/` went missing.
 DAG_MANAGE = _tool_path('DSH_CONDUCT_DAG_MANAGE', CONDUCT.parent / 'dag' / 'dag-manage.py')
-#: `issue_manager.py` owns the issue pool (`.pf/issues/issues.json`) and the one number this side
-#: reads out of it: the pool's weighted debt, which the maintenance channel compares with a line's
-#: `issue_pool_weight_limit`. Same rule as `DAG_MANAGE` above -- the sibling `issue/` directory of
-#: the shipped tree, with `DSH_CONDUCT_ISSUE_MANAGE` for a tree that keeps these scripts elsewhere.
+#: `issue_manager.py` owns the issue pool (`.pf/issues/issues.json`) and the one number a feature
+#: reads out of it at the close (the pool's weighted debt, which the tool computes itself). Same rule
+#: as `DAG_MANAGE` above -- the sibling `issue/` directory of the shipped tree, with
+#: `DSH_CONDUCT_ISSUE_MANAGE` for a tree that keeps these scripts elsewhere.
 ISSUE_MANAGE = _tool_path('DSH_CONDUCT_ISSUE_MANAGE', CONDUCT.parent / 'issue' / 'issue_manager.py')
 
 

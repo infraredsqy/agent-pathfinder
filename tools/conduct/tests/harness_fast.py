@@ -37,9 +37,8 @@ __all__ = [
 _FAST_SM_CACHE = {}
 _PIPELINE_CALL_LOCK = threading.RLock()
 
-#: Destinations the real CLI declares `type=int`. argparse hands a `str` through for anything else,
-#: and the maintenance thresholds are compared as numbers, so a string through here would be a
-#: comparison of the wrong type rather than a visible failure.
+#: Destinations the real CLI declares `type=int`. A feature's numeric knobs are compared as numbers,
+#: so a string through here would be a comparison of the wrong type rather than a visible failure.
 _INT_FLAGS = ('stop_after_nodes',)
 
 
@@ -338,8 +337,8 @@ class InProcessDagManage:
         """Answer one `dag-manage ...` argv the way the real process would.
 
         The five verbs the pipeline needs: `list [-n N]` (the tool's own node ranking), `status <node>
-        completed|shelved` (the close marks the node), and -- for the maintenance channel's graph edit
-        (`pipeline.maintenance`) -- `add`, `depend` and `undepend`. Each one calls the
+        completed|shelved` (the close marks the node), and -- for an insertion's graph edit
+        (`pipeline.insertion`) -- `add`, `depend` and `undepend`. Each one calls the
         project's own `cmd_*`, so a uuid is really minted and an edge is really written; only the
         process start is gone. Everything else falls through as a non-zero exit, which
         `ranked_ready_nodes` already knows how to read.

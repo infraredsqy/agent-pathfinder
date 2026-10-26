@@ -8,15 +8,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import maintenance, seam
+from . import feature_host, seam
 from .store import (_holding_ids, active_cycles, cycle_policy, find_cycle,
                     load_dag, load_signal, load_state, normalize_mode)
 from .instruct import live_instructions
 from .nodes import (blocked_reason, holding_ready_nodes, mode_for, node_in_tag_scope, node_row,
                     pick_node, ranked_ready_nodes, tag_blocked_ready_nodes)
 from .prompts import started_marker
-from .actions import (_ask, _close_commands, _dispatch_many, _maintenance_due,
-                      _retry_wait, _sessions_wait, _ticket_wait, _stop_action)
+from .actions import (_ask, _close_commands, _dispatch_many, _insertions_due,
+                      _pick_insertions_due, _retry_wait, _sessions_wait, _ticket_wait, _stop_action)
 
 
 def stop_criterion(project: Path, cycle: dict, node: dict | None, dag: dict | None = None) -> tuple:
@@ -135,7 +135,11 @@ def plan(project, cycle_id: str | None = None, decision: str | None = None,
     if waiting:
         # Freshly pinned nodes are what a dispatch is for. A node whose session already runs is left
         # out of the list: handing it to the spawner again would boot a second session onto it.
-        return _dispatch_many(project, cycle, waiting)
+        dag = load_dag(project)
+        gated = _feature_gate(project, cycle, waiting, dag)
+        if gated is not None:
+            return gated
+        return _dispatch_many(project, cycle, waiting, dag=dag)
     if fresh:
         return _sessions_wait(cycle, fresh, holding)
     return _retry_wait(cycle, holding[0], holding)
@@ -175,12 +179,30 @@ def _pick_next(project: Path, cycle: dict, tags) -> dict:
     (`pick_node` takes the top row), so a line's first pick takes the same rows the fill would.
     The line fills the slots its `parallel` policy allows -- one pin per slot, in ranking order --
     and the pipeline never stops here: a human who wants a different one names it (`--node`,
-    `cycle hold`).
+    `cycle hold`). A feature may put a node in front of the pick (`_feature_pick_insertions`); that
+    answer is a graph edit with no pins, so the pick itself is then made on the next step, with the
+    inserted node in the same ranking.
     """
     slots = cycle_policy(cycle)['parallel']
     dag = load_dag(project)
     ready = ranked_ready_nodes(project, limit=slots, tags=tags, dag=dag)
     if ready:
+        # A gate sits at the dispatch, and pinning is the first half of one: asked before the pins so
+        # a refused dispatch leaves nothing pinned behind it.
+        gated = _feature_gate(project, cycle, [n['id'] for n in ready], dag)
+        if gated is not None:
+            return gated
+        # The other timing an insertion is allowed at: asked here, after the ready set is known and
+        # before anything is pinned, so the nodes a feature wants enter the graph ahead of the pick
+        # instead of behind it. What comes back pins nobody -- the next step picks by ranking, and
+        # the inserted node is in that ranking.
+        offers = _feature_pick_insertions(project, cycle, dag, ready[0])
+        if offers:
+            # `None` = every offer was skipped (a feature whose text builder raises): the pick is
+            # then the ordinary one, exactly as if nothing had asked.
+            action = _pick_insertions_due(project, cycle, offers, ready[0])
+            if action is not None:
+                return action
         return _open(project, cycle, ready)
     tagged = tag_blocked_ready_nodes(project, tags, dag=dag)
     holding = holding_ready_nodes(project, dag=dag)
@@ -253,8 +275,14 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
 
     This closing pass **reads the graph once** (the `dag` below) and hands it down as an argument:
     the stop rule (the node's own mode, plus the instruction pass's scope judgement), the fill list,
-    the blocked reason, the maintenance channel's insertion judgement and the attention list all read
-    it -- so stop, fill, cannot-fill and naming-outside-scope each read it that one time.
+    the blocked reason, the dispatch gate, the features' insertion judgement and the attention list
+    all read it -- so stop, fill, cannot-fill, gate-refused and naming-outside-scope each read it
+    that one time.
+
+    **A close that fills a slot asks the dispatch gate before it hands the fill over.** The fill is
+    the first half of a dispatch (its commands pin the nodes), so a gate that refuses it must refuse
+    BEFORE the pins: the answer then settles this node, pins nobody and writes no prompt, and the
+    line stays in service for the next step to ask again -- the same shape the pick path has.
     """
     dag = load_dag(project)
     named = node_arg                    # the name a human typed; it may not travel on below
@@ -396,29 +424,54 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
         return _stop_action(project, cycle, reason, cmds, node_id=node_id, shelved_nodes=shelved,
                             stop_line=park_line, dag=dag)
 
+    # ── the dispatch gate, before the pins it would refuse ───────────────────
+    # The commands below ARE the first half of a dispatch: they close this node and hold the fill.
+    # Asked at the dispatch built out of them it would be too late -- the successor would be pinned
+    # with no prompt and no session, while the answer still claimed nothing was. So it is asked
+    # here, on the fill, exactly as `_pick_next` asks it before its pins.
+    refused = _gate_reasons(project, cycle, [n['id'] for n in filled], dag)
+    if refused:
+        # The gate is about opening a session, not about the close: this node is settled all the
+        # same (the commands below close it and mark the DAG), but nobody is pinned and no prompt is
+        # written. The line stays in service, so the next step asks the gate again.
+        closed_only = _close_commands(project, cycle, node_id, outcome, 'stop', None, park=False)
+        return _stop_action(
+            project, cycle,
+            _gate_says(refused) +
+            f'. {node_id[:8]} is settled all the same -- closing it pins nothing and needs no '
+            f'session -- but no next node was pinned and no prompt was written; the line stays in '
+            f'service, and the next step will ask the gate again.',
+            closed_only, node_id=node_id, shelved_nodes=shelved, dag=dag, stop_line=False)
+
     # The whole fill list is handed over, not just its head: as many free slots as there are
     # (`parallel` minus what is still held) get filled, and every one has to be pinned -- pinning
     # only the head leaves the rest of the slots quietly empty.
     cmds = _close_commands(project, cycle, node_id, outcome, 'continue', filled)
-    # The maintenance channel's one judgement, at the one moment it can be made: the settle that
-    # closes a node is the only place a reading and a freshly picked successor are both in hand.
-    # With nothing configured it answers `None` and this whole feature costs one dict lookup.
-    due = _maintenance_hit(project, cycle, sig, dag)
-    if due is not None:
-        # The maintenance action is a close that also edits the graph, so it carries the same close
-        # commands (`_close_commands` with no successor) ahead of its own: the graph edit runs after
-        # the closed node is marked. The graph edit itself pins no node -- it mints one, writes its
-        # spec and wires its edges -- and no dispatch follows it.
-        return _maintenance_due(project, cycle, node_id, due, filled[0],
-                                # park=False: the insertion pins nothing and no dispatch follows
-                                # it, so a `cycle status inactive` here would take the line out of
-                                # service and the next pick would never reach the inserted node.
-                                # The line has to stay in service for the usual ranking to pick it
-                                # up. `filled[0]` is the pick the new node stands in front of; the
-                                # rest of the fill is pinned here like any other close's fill.
-                                close_commands=_close_commands(project, cycle, node_id, outcome,
-                                                               'continue', filled[1:], park=False),
-                                extra_note=spoke)
+    # The features' one judgement, at the one moment it can be made: the settle that closes a node is
+    # the only place a reading and a freshly picked successor are both in hand. With nothing
+    # configured no feature offers anything and this whole pass costs one dict lookup.
+    offers = _feature_insertions(project, cycle, node_id, sig, dag, filled[0])
+    if offers:
+        # The insertion action is a close that also edits the graph, so it carries the same close
+        # commands (`_close_commands` with no successor) ahead of its own edits: they run after the
+        # closed node is marked. The graph edit itself pins no node -- it mints one, writes its spec
+        # and wires its edges -- and no dispatch follows it.
+        inserted = _insertions_due(project, cycle, node_id, offers, filled[0],
+                                   # park=False: the insertion pins nothing and no dispatch follows
+                                   # it, so a `cycle status inactive` here would take the line out of
+                                   # service and the next pick would never reach the inserted nodes.
+                                   # The line has to stay in service for the usual ranking to pick
+                                   # them up. `filled[0]` is the pick they stand in front of; the
+                                   # rest of the fill is pinned here like any other close's fill.
+                                   close_commands=_close_commands(project, cycle, node_id, outcome,
+                                                                  'continue', filled[1:],
+                                                                  park=False),
+                                   extra_note=spoke)
+        if inserted is not None:
+            return inserted
+        # `None` = every offer was skipped (a feature whose text builder raises): this close goes on
+        # as the ordinary one below -- the node is settled, the slot filled, the next session asked
+        # for. One broken folder must not freeze the line at its close.
     # The pointer is NOT pinned here: the returned `open_node` is what `apply` runs, and it re-plans
     # into the dispatch through the same `_open` path a cycle with no node in hand uses. The shape
     # follows the line: a one-slot close names its one node, a list close carries `nodes`.
@@ -436,16 +489,82 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
     return opened
 
 
-def _maintenance_hit(project: Path, cycle: dict, sig: dict | None, dag: dict):
-    """The metric the maintenance channel is opening for, or `None`.
+def _feature_pick_insertions(project: Path, cycle: dict, dag: dict,
+                             target: dict | None = None) -> list:
+    """The insertions the features want at a PICK, in registry order (empty is the common case).
 
-    The whole judgement is one call into `maintenance.crossed`: the reading off this node's ticket,
-    the lines this line carries in its own policies, and the tag gate. A line with no line
-    configured gets `None` here -- and that is what keeps the close byte-for-byte what it was
-    before this channel existed. The `dag` handed down is the one read at the close entry: the
-    dedup judgement reads the graph, and that is what it reads.
+    The second of the two timings an insert action may occupy (`feature_registry.TIMINGS` has three
+    cells for three timings; a feature declares exactly one). A pick has no node being closed and no
+    ticket to read, so what a feature is handed here is the line, the graph read for the pick and the
+    node the ranking chose -- nothing else. That is also why `node_id` / `sig` are left out: a
+    feature that ran at a close and one that runs at a pick are different folders with different
+    declarations, and this one has no ticket to be handed.
     """
-    return maintenance.crossed(project, cycle, sig, dag)
+    ctx = feature_host.Context(project, cycle=cycle, dag=dag, target=target)
+    return feature_host.insertions('pick', ctx)
+
+
+def _feature_insertions(project: Path, cycle: dict, node_id: str, sig: dict | None, dag: dict,
+                        target: dict | None = None) -> list:
+    """The insertions the features want at this close, in registry order (empty is the common case).
+
+    The whole judgement is `feature_host.insertions`: this only states WHICH state a feature is
+    handed -- the line, the node being closed, that node's ticket, the graph read at the close entry
+    and the node the close had picked. A line with nothing configured gets an empty list here, and
+    that is what keeps the close byte-for-byte what it was before features existed.
+
+    The `dag` handed down is the one read at the close entry: a feature asking "does this metric
+    already have a node open" reads that copy, not the disk again.
+    """
+    ctx = feature_host.Context(project, cycle=cycle, node_id=node_id, sig=sig, dag=dag,
+                               target=target)
+    return feature_host.insertions('close', ctx)
+
+
+def _gate_reasons(project: Path, cycle: dict, node_ids, dag: dict | None = None) -> list:
+    """The dispatch gate's answers: one sentence per feature that says not now; empty is a go.
+
+    The one place the gate is asked, whichever path is asking -- the pick before its pins, the close
+    before the fill it hands over, and the dispatch the writer builds from either. The context
+    carries the node that would be dispatched, which is what a gate judging "may this node's session
+    open now?" reads.
+    """
+    ctx = feature_host.Context(project, cycle=cycle, dag=dag,
+                               node_id=(list(node_ids) or [None])[0])
+    return feature_host.gates('dispatch', ctx)
+
+
+def _gate_says(reasons) -> str:
+    """A refused dispatch's opening sentence: the gate's own words, verbatim, one per feature."""
+    return 'a feature gate blocked this dispatch: ' + '; '.join(reasons)
+
+
+def _feature_gate(project: Path, cycle: dict, node_ids, dag: dict | None = None) -> dict | None:
+    """The stop answer when a feature gate refuses this dispatch, or `None` for a green light.
+
+    A gate sits at the dispatch -- the one moment "does anybody mind another session opening now?"
+    can be answered -- and **it is asked before anything is pinned or written, on every path**: the
+    pick asks it before its pins (`_pick_next`), a close asks it before the pins its fill hands over
+    (`_close_own_node`), and the dispatch the writer builds from either comes after. A refused
+    dispatch therefore leaves no node held, no prompt file and no session; a refused close-driven
+    dispatch still settles the node that was closing, and pins nobody.
+
+    **A refused dispatch does not park the line.** The contract's own example is a gate about time,
+    and the pipeline is not a resident process: whatever wakes it only knows how to run one more
+    step. Taking the line out of service would make that step answer "line not in service", which
+    kills the gate's whole purpose -- so this answer carries no commands and says the line stays in
+    service; the next step simply asks the gate again. The words name the gate(s) that refused, so a
+    human can act on the reason rather than on the tool.
+    """
+    reasons = _gate_reasons(project, cycle, node_ids, dag)
+    if not reasons:
+        return None
+    return _stop_action(
+        project, cycle,
+        _gate_says(reasons) +
+        '. No session was opened, no prompt was written and nothing was pinned; the line stays in '
+        'service, and the next step will ask the gate again.',
+        [], dag=dag, stop_line=False)
 
 
 def _named_node_outside_scope(dag: dict, node_id: str, tags) -> list | None:

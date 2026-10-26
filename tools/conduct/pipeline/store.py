@@ -3,9 +3,10 @@
 State, signals, the DAG, the instructions and each node's own text all live in `<project>/.pf/`,
 and they are read here. A project either commits that directory or keeps it to itself; nothing in
 
-this module cares which. The settings file is read here as well, and it is the one thing on this
-page that is not this tool's own record: `pf config` owns it, and `load_config` merges its two
-layers for the judgement that needs one key. What is not part of the record is the dispatch
+this module cares which. The settings are read here as well, and they are the one thing on this page
+that is not this tool's own record: `pf config` owns the chain that resolves them, and what this side
+takes is its result -- one knob's effective value, or the layer it came from (the doors are at the
+bottom of this file, borrowed from `state/knobs.py`). What is not part of the record is the dispatch
 plumbing -- `meta/launch/`, the session notes, the claim/started markers, the broken-chain marker
 -- which is why `meta_dir()` is the other door this module offers. One loader per file, each
 returning what is on disk, or an empty shape when the file is absent. The read itself, and the
@@ -116,6 +117,7 @@ def _state_module(name: str):
 
 _STATE_CYCLES = _state_module('cycles')
 _STATE_STORE = _state_module('store')
+_STATE_KNOBS = _state_module('knobs')
 
 #: The policy tables and algorithms: `state/cycles.py`'s one source, of which this is only another
 #: door.
@@ -177,16 +179,15 @@ def meta_dir(project: Path) -> Path:
     return _ledger().meta_dir_for(project)
 
 
-# ── the settings: this project's, and the machine's underneath it ─────────────
-# A project's and a machine's settings (the cells `pf config` owns). Unlike the record, settings
-# **are not this pipeline's**: they are another tool's one source, and the pipeline reads one cell
-# of them (the maintenance channel's switch). So this only reads, and hands over only two layers:
-# the factory defaults and the vocabulary stay on the writing side (`state/config.py`), and the cell
-# being read says for itself which words it knows.
-
-#: The settings file's name, the same for both layers: `<project>/.pf/config.json` and
-#: `~/.pf/config.json`. Taken from the one source (see `_FROM_LEDGER`), so this module spells no
-#: second literal.
+# ── the settings: the knob chain, read through its one table ─────────────────
+# A project's and a machine's settings are not this pipeline's: `pf config` owns the chain that
+# resolves them (node -> cycle -> project -> global -> factory default), and the pipeline only reads
+# cells of it. So the table and the resolution stay on the writing side (`state/knobs.py`), and this
+# side takes five doors onto them -- another copy of the kinds or of the precedence here is how "it is
+# configured but read as unconfigured" starts.
+#
+# The two layer paths stay, as doors of their own: a caller that has to name *where* a value would be
+# written asks them, and the answer comes from the ledger contract (`shared/ledger.py`).
 
 
 def global_config_path() -> Path:
@@ -204,22 +205,46 @@ def project_config_path(project: Path) -> Path:
     return _ledger().config_path_for(project)
 
 
-def load_config(project: Path) -> dict:
-    """This project's settings: the machine's layer, with the project's layer covering it -- the layer
-    written later wins.
+def knob_specs() -> dict:
+    """Every knob the core and the installed features declare, from `state/knobs.py`'s one table."""
+    return _STATE_KNOBS.specs()
 
-    Either layer may be absent (read as "the factory default was never changed"), and either may
-    carry keys this pipeline does not know (others own them). This hands over only what is written
-    down: **each cell's vocabulary and factory default are stated by the judgement that reads it**
-    (the maintenance channel's `maintenance.issue_repair_on`) -- a cell of one settings file
-    explained somewhere else is how one word grows two readings.
+
+def knob_shadows() -> list:
+    """The declared knobs the built-in table already owns: one problem sentence per collision.
+
+    The merge keeps the built-in cell, so a declaration that claims one of those names is unreachable
+    and its own summary is misleading. Nothing else sees both tables, so the doctor asks this door:
+    the runtime goes on (tolerance), and the report lands where a broken declaration belongs
+    (strictness).
     """
-    out = {}
-    for path in (global_config_path(), project_config_path(project)):
-        layer = _jsonio().read_json_strict(path, _ledger().CONFIG_NAME)
-        if isinstance(layer, dict):
-            out.update(layer)
-    return out
+    return _STATE_KNOBS.shadowed()
+
+
+def resolve_knob(project, key: str, cycle=None, node: str | None = None):
+    """One knob's effective value -- the bare value, `None` when no layer states it.
+
+    `cycle` is the cycle record itself (not an id) and `node` is a node id: the chain's two narrowest
+    layers hang on a record and on one node's run, and this side always holds the record already.
+    """
+    return _STATE_KNOBS.resolve_knob(project, key, cycle=cycle, node=node)
+
+
+def knob_sources(project, cycle=None, node: str | None = None) -> dict:
+    """Which layer each knob's effective value came from: `{key: source}` (the "value + layer" pair)."""
+    return _STATE_KNOBS.knob_sources(project, cycle=cycle, node=node)
+
+
+def ticket_readings(project, cycle, node: str | None = None) -> list:
+    """The reading keys a worker is asked for: the declarations' `ticket` readings whose own threshold
+    is in force on the chain -- some layer states it, or the declaration gives it a factory default.
+
+    A threshold with neither would be measured for nothing, so the list narrows to the readings that
+    are really in play. `node` is the node this ask is about, when the caller has one -- the form
+    does, and the closing judgement resolves with it, so the two readers of one threshold agree on
+    which layers count. The words each reading is asked with belong to its declaration, not here.
+    """
+    return _STATE_KNOBS.ticket_readings(project, cycle, node=node)
 
 
 # ── session notes: which conversation produced a node, which ones ran it ──────

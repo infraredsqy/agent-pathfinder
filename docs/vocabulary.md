@@ -35,6 +35,11 @@
 | `policies.parallel` | 同时持有几个节点 | 正整数 |
 | `policies.spawner` | 会话由谁开 | `dsh` / `zcode` |
 
+这三个名字**不在解析链上**：`policies.` 是它们唯一的落点，写它们、改它们的门是 `pf cycle policy`
+（`pf config` 不认这三个名字）。读它们的步骤也只看这条记录 —— 宽的项目层、全局层写这三个名字没人
+读，所以工具不许往那儿写（链本身、以及哪些旋钮落在哪些层，见
+[`./conduct-state.md`](./conduct-state.md) 的「设置」一节）。
+
 ## 三、轴 ③ 交接单上的判决
 
 干活的会话自己写。**判决词永远不出现在节点状态里。**
@@ -87,6 +92,7 @@
 | cycle / 线 | cycle / line | |
 | 交接单 | the note | 工具散文里也叫 the ticket / the signal，同一个记录 |
 | 记录目录 | the ledger | |
+| 本地档 / 提交档 | local / commit | `.pf/` 这个记录目录自己的档：项目仓库 track 它就是提交档，没 track 就是本地档 |
 | 判决 | the status | 轴 ③ 那个字段 |
 | 持有 | hold / holding | 轴 ② |
 | 搁置 | shelve / shelved | 轴 ① |
@@ -98,7 +104,18 @@
 | 收口 / 收尾 | close out | |
 | 正本 | the one source | |
 | 出厂默认 | factory default | |
-| 维护通道 | maintenance channel | |
+| 维护通道 | maintenance channel | 一个功能（一个文件夹）：占收尾时机、产出插入动作 |
+| 功能 | feature | 一个文件夹：声明 + 实现；文件夹名就是它的身份 |
+| 声明 | declaration | 功能文件夹里那份数据：占哪个时机、认哪些名字 |
+| 实现 | implementation | 功能文件夹里的代码：时机到了被叫一次 |
+| 技能卡 | skill card | 方法名点到的那份 `SKILL.md`，住在 `skills/` 树里 |
+| 旋钮 | knob | 一个设置的名字 |
+| 旋钮的种类 | the knob's kind | 数值 / 整数 / 词 / 开关（`number` / `integer` / `word` / `switch`） |
+| 时机 | timing | 收尾 / 挑选 / 派发（`close` / `pick` / `dispatch`） |
+| 动作 | action | 插入 / 拦下（`insert` / `block`） |
+| 度量 | metric | 一条债：一个读数、一条线、一枚去重标签、一个方法名 |
+| 去重标签 | dedupe tag | 节点上的 tag，回答「这个度量是不是已经有一个在局中的节点」 |
+| 方法名 | method name | spec 的 `method: ` 行点名的技能卡 |
 | 过滤集 | filter set | |
 | 重试 | retry | |
 | 降级标记 | degradation marker | |
@@ -109,7 +126,7 @@
 | 读数 | reading | |
 | 判据 | criterion | |
 | 完成判定 | completion rule | |
-| 阈值 / 线 | threshold / the line | |
+| 阈值 / 线 | threshold / the line | 一个旋钮：读到的数到了它，债就到顶 |
 | 范围 | scope | |
 | 池子 | the pool | |
 | 条目（池子里的） | issue | 错题本里的条目是 entry |
@@ -117,7 +134,7 @@
 | 加权和 | weighted sum | |
 | 严重度 | severity | 机器词是 `P0`–`P3` |
 | 测试档 | test tier | 取值 `full` / `minimal` |
-| 本地档 / 提交档 | local / commit | `worktree_mode` 的取值 |
+| worktree 档 | worktree mode | 旋钮：一个节点的活在哪棵树里做 |
 | 讨论节点 | discussion node | |
 | 验证边界 | verification boundary | |
 | 错题本 / 反模式 | anti-patterns | 一份东西的两个叫法，英文合成一个 |

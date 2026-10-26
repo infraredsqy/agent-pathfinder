@@ -5,7 +5,10 @@ DSH_CONDUCT_DAG_MANAGE, the pipeline constants, load_pipeline/_fresh_module/shar
 _decode/_child_env, and the pieces the `cases_*` files share instead of each writing their own:
 `init_markers` (what `init` puts in a `.pf/`), `run_argv` and `git` (one child process, one identity),
 `patched` (one place a global name is swapped), `spawn_dry_run` (the one place a session start is
-turned into a drill), and `shipped_sources` (the one list of the shipped tree).
+turned into a drill), `shipped_sources` (the one list of the shipped tree), and the features
+fixture -- `FEATURES_DIR` / `MAINTENANCE_FEATURE`, `requires_feature` (the skip a case whose subject
+is a shipped declaration carries), `features_dir` (the `PF_FEATURES_DIR` switch, for one block) and
+`write_feature` (one folder, hand-written).
 """
 
 from __future__ import annotations
@@ -20,12 +23,13 @@ import sys
 from pathlib import Path
 
 __all__ = [
-    'CONDUCT_DIR', 'DAG_MANAGE', 'GIT', 'INIT_GITATTRIBUTES', 'INIT_GITIGNORE',
+    'CONDUCT_DIR', 'DAG_MANAGE', 'FEATURES_DIR', 'GIT', 'INIT_GITATTRIBUTES', 'INIT_GITIGNORE',
+    'MAINTENANCE_FEATURE',
     'PIPELINE_PATH', 'HANDOFF_PY', 'HERE', 'SIGNAL_PY', 'SPAWN_DRY_RUN', 'STATE_MANAGE',
     'TERMINAL_ACTIONS', 'TOOLS_DIR',
-    '_child_env', '_decode', '_fresh_module', '_run_command', 'chdir', 'git', 'git_env',
-    'init_markers', 'load_pipeline', 'patched', 'run_argv', 'shared_loader', 'shipped_sources',
-    'spawn_dry_run',
+    '_child_env', '_decode', '_fresh_module', '_run_command', 'chdir', 'features_dir', 'git',
+    'git_env', 'init_markers', 'load_pipeline', 'patched', 'requires_feature', 'run_argv',
+    'shared_loader', 'shipped_sources', 'spawn_dry_run', 'write_feature',
 ]
 
 
@@ -36,6 +40,12 @@ PIPELINE_PATH = CONDUCT_DIR / 'conduct_pipeline.py'
 STATE_MANAGE = CONDUCT_DIR / 'state-manage.py'
 SIGNAL_PY = CONDUCT_DIR / 'signal.py'
 HANDOFF_PY = CONDUCT_DIR / 'handoff.py'
+#: The shipped features directory: one folder per feature, and the folder is the feature's identity.
+#: A case that needs a declaration points `PF_FEATURES_DIR` elsewhere (`features_dir`) instead of
+#: reading this one; a case whose SUBJECT is the shipped feature skips itself when it is not installed
+#: (`requires_feature`), because deleting the folder is a supported project state.
+FEATURES_DIR = CONDUCT_DIR / 'features'
+MAINTENANCE_FEATURE = FEATURES_DIR / 'maintenance'
 # `dag-manage.py` is NOT part of the conduct tool and is never edited by a conduct change, so it
 # is resolved: next to us in the shipped tree, else the machine's installed copy.
 #
@@ -270,3 +280,71 @@ def spawn_dry_run():
             os.environ.pop(SPAWN_DRY_RUN, None)
         else:
             os.environ[SPAWN_DRY_RUN] = old
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  The features directory: the shipped one, and a fixture's own
+# ═══════════════════════════════════════════════════════════════════════════════
+
+#: The registry's one switch: point the scan at a throwaway directory. Read at every call (the
+#: registry caches nothing), so a case can set it for one block and the next case sees the tree again.
+FEATURES_ENV = 'PF_FEATURES_DIR'
+
+
+def requires_feature(name: str = 'maintenance'):
+    """The skip a behaviour case carries when its subject is a feature's declaration.
+
+    A feature is a folder, and deleting it is a supported state of this tree: the pipeline still
+    closes and still dispatches (that is the node's completion criterion). So a case that drives THAT
+    feature must skip rather than fail when the folder is not installed -- the mechanism cases point
+    `PF_FEATURES_DIR` at their own fixture instead and never depend on the shipped tree.
+
+    "Installed" is asked of the scan itself (`feature_registry.features_dir()`), not of the shipped
+    path: a case may hide the tree's own folder by pointing the variable elsewhere, and this skip has
+    to follow that too, or the suite would only be green for one of the two ways of removing it.
+    """
+    import unittest
+    folder = Path(load_pipeline().registry().features_dir()) / name
+    return unittest.skipUnless((folder / 'feature.json').is_file(),
+                               f'the {name!r} feature is not installed ({folder})')
+
+
+@contextlib.contextmanager
+def features_dir(root):
+    """Point the feature scan at `root` for the block, and put the old value back afterwards.
+
+    The pipeline and both CLI packages are loaded in this process and each asks
+    `feature_registry.features_dir()` per call, so this one variable is the whole of the fixture.
+    Restoring it is the half that matters: the next case in the same worker must see the tree again.
+    """
+    root = Path(root)
+    old = os.environ.get(FEATURES_ENV)
+    os.environ[FEATURES_ENV] = str(root)
+    try:
+        yield root
+    finally:
+        if old is None:
+            os.environ.pop(FEATURES_ENV, None)
+        else:
+            os.environ[FEATURES_ENV] = old
+
+
+def write_feature(root, name: str, decl: dict | None = None, impl: str = '', *,
+                  files: dict | None = None) -> Path:
+    """One feature folder under `root`: `<root>/<name>/{feature.json, impl.py}`.
+
+    The fixture's own declaration, never a copy of a shipped one: a case that needs a feature at some
+    timing writes the smallest declaration that states it, so the case says what it depends on. `impl`
+    is the module text; `files` writes extra files into the folder verbatim (an unreadable
+    `feature.json`, say). Returns the folder.
+    """
+    folder = Path(root) / name
+    folder.mkdir(parents=True, exist_ok=True)
+    if decl is not None:
+        (folder / 'feature.json').write_text(json.dumps(decl, ensure_ascii=False, indent=2),
+                                             encoding='utf-8')
+    if impl:
+        (folder / 'impl.py').write_text(impl, encoding='utf-8')
+    for filename, text in (files or {}).items():
+        (folder / filename).write_text(text, encoding='utf-8')
+    return folder

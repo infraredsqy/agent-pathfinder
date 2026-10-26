@@ -1,0 +1,46 @@
+{
+  "name": "maintenance",
+  "summary": "a crossed threshold inserts a node into the graph",
+  "enable_knob": "maintenance",
+  "timing": "close",
+  "action": "insert",
+  "knobs": {
+    "maintenance": {
+      "kind": "switch",
+      "default": "on",
+      "summary": "whether a crossed debt line inserts a node at the close"
+    },
+    "test_seconds_limit": {
+      "kind": "number",
+      "summary": "the project test suite's full wall clock (seconds) the next close must read below"
+    },
+    "issue_pool_weight_limit": {
+      "kind": "number",
+      "summary": "the issue pool's weighted sum the next close must read below"
+    }
+  },
+  "readings": {
+    "test_seconds": {
+      "source": "ticket",
+      "when_knob": "test_seconds_limit",
+      "ask": "the measured wall-clock seconds of a full verification (run the command set the project docs recognize; estimating is not allowed)"
+    },
+    "issue_pool_weight": {
+      "source": "pool"
+    }
+  },
+  "metrics": {
+    "test_seconds": {
+      "line": "test_seconds_limit",
+      "tag": "maint:test_seconds",
+      "method": "pf-test-audit",
+      "order": 0
+    },
+    "issue_pool_weight": {
+      "line": "issue_pool_weight_limit",
+      "tag": "maint:issue_pool_weight",
+      "method": "pf-issue-repair",
+      "order": 1
+    }
+  }
+}

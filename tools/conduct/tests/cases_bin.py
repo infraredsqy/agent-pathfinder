@@ -1,6 +1,7 @@
-"""The two pieces in front of `pf`'s door: `pf.cmd` on Windows, and the project root `doctor` names.
+"""The pieces in front of `pf`'s door: `pf.cmd` on Windows, the project root `doctor` names, and the
+features `doctor` says are installed.
 
-Both live in the pf layer, and what is measured is the rules of that layer:
+All three live in the pf layer, and what is measured is the rules of that layer:
 
   * `pf.cmd` hands the command it receives to `pf.py` as it is, exactly once: whichever interpreter
     it finds is the one used, and that interpreter's exit code is `pf`'s exit code. A non-zero exit
@@ -9,12 +10,21 @@ Both live in the pf layer, and what is measured is the rules of that layer:
   * the project root `doctor` reports is the same root the tools it forwards (`pf dag` / `pf issue`)
     read the ledger by: cwd is the root, the one exception being that a linked worktree goes back to
     the main tree. That the two readings agree is what these cases prove.
+  * `doctor`'s `features:` section: what the scan found, the dedupe tags and methods each feature
+    shows the outside, zero installed for an empty features directory, a declaration problem counted
+    in the exit code, a declaration that claims a built-in setting's name (reported by the one door
+    that sees both tables, with the built-in cell still in force), and an `impl.py` that cannot even
+    compile (the doctor loads each installed one once, so a broken implementation is named here and
+    not discovered at the next close). The scan is pointed at a throwaway features directory, so
+    these cases say nothing about which features this checkout happens to ship -- an empty
+    `features/` is a legal tree and the suite stays green with it.
   * `help` and `--help` print the same body (the parser's own), and the command list is not copied a
     second time.
 
-Every case builds its own thing in a temp dir (a fake `pf.py` plus a real `pf.cmd`, or a throwaway
-git repository plus one worktree), runs the real CLI and cleans up afterwards; no real project is
-touched, no session is opened, and every command stays inside the 5 s budget.
+Every case builds its own thing in a temp dir (a fake `pf.py` plus a real `pf.cmd`, a throwaway git
+repository plus one worktree, or a project plus a features directory), runs the real CLI and cleans up
+afterwards; no real project is touched, no session is opened, and every command stays inside the 5 s
+budget.
 
     python conduct/tests/cases_bin.py            # this file on its own
     python conduct/tests/test_conduct_pipeline.py    # with the whole suite (registration is in that
@@ -35,7 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from harness import GIT, TOOLS_DIR, _child_env, _run_command, git, init_markers, run_argv
 
-__all__ = ['TestPfCmdShim', 'TestDoctorRoot', 'TestCommandList']
+__all__ = ['TestPfCmdShim', 'TestDoctorRoot', 'TestDoctorFeatures', 'TestCommandList']
 
 PYTHON = sys.executable
 BIN = TOOLS_DIR / 'bin'
@@ -217,6 +227,151 @@ class TestDoctorRoot(unittest.TestCase):
         self.assertTrue(self.reported_root(pf('doctor', cwd=self.main)).samefile(
             self.dag_root(self.main)))
         self.assertTrue(self.reported_root(pf('doctor', cwd=self.main)).samefile(self.main))
+
+
+class TestDoctorFeatures(unittest.TestCase):
+    """`doctor`'s `features:` section: what the scan found, and what a declaration's problems cost.
+
+    `PF_FEATURES_DIR` is pointed at a throwaway directory in every case, so what is asserted is the
+    doctor's own reporting -- never which features this checkout ships. The project is a clean one
+    (init markers plus the usage note), so the exit code is the features' alone.
+    """
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix='pf-doctor-features-')
+        self.addCleanup(tmp.cleanup)
+        base = Path(tmp.name)
+        self.project = base / 'project'
+        ledger = init_markers(self.project)
+        (ledger / 'AGENTS.md').write_text('# ledger\n', encoding='utf-8')
+        self.features = base / 'features'
+        self.features.mkdir()
+        self.home = base / 'home'
+        self.home.mkdir()
+
+    # ── helpers ──────────────────────────────────────────────────────────────
+    def doctor(self, features=None):
+        env = _child_env()
+        env['PF_FEATURES_DIR'] = str(self.features if features is None else features)
+        env['PF_HOME_DIR'] = str(self.home)
+        return run_argv([PF, 'doctor'], cwd=self.project, env=env, check=False)
+
+    def add_feature(self, name='auditor', declaration=None, impl=None):
+        """One feature folder under the temp features directory.
+
+        `impl` replaces the trivial implementation a case does not care about: the doctor has to load
+        every installed `impl.py` once, so what a broken one looks like is a case of its own.
+        """
+        folder = self.features / name
+        folder.mkdir()
+        (folder / 'impl.py').write_text(
+            impl if impl is not None else 'def offer(ctx):\n    return None\n', encoding='utf-8')
+        (folder / 'feature.json').write_text(json.dumps(declaration or {
+            'name': name, 'timing': 'close', 'action': 'insert',
+            'knobs': {'audit_limit': {'kind': 'number'}},
+            'readings': {'audit_minutes': {'source': 'ticket', 'when_knob': 'audit_limit',
+                                           'ask': 'the minutes a full audit took'}},
+            'metrics': {'audit_minutes': {'line': 'audit_limit', 'tag': 'audit:minutes',
+                                          'method': 'pf-audit', 'order': 0}},
+        }), encoding='utf-8')
+        return folder
+
+    def pf(self, *args):
+        env = _child_env()
+        env['PF_FEATURES_DIR'] = str(self.features)
+        env['PF_HOME_DIR'] = str(self.home)
+        return run_argv([PF, *args], cwd=self.project, env=env, check=False)
+
+    # ── cases ────────────────────────────────────────────────────────────────
+    def test_an_installed_feature_is_listed_with_its_tags_and_methods(self):
+        self.add_feature()
+
+        proc = self.doctor()
+
+        self.assertEqual(0, proc.returncode, proc.stdout)
+        self.assertIn('features: 1 installed', proc.stdout)
+        self.assertIn('auditor', proc.stdout)
+        self.assertIn('audit:minutes', proc.stdout, 'the dedupe tag the outside writes down')
+        self.assertIn('pf-audit', proc.stdout, 'the method name its nodes point at')
+
+    def test_an_empty_features_directory_reports_zero_installed(self):
+        proc = self.doctor()
+
+        self.assertEqual(0, proc.returncode, proc.stdout)
+        self.assertIn('features: 0 installed', proc.stdout,
+                      'the core is whole with no feature at all, and the doctor says so')
+        self.assertIn(str(self.features), proc.stdout, 'and it says where it looked')
+
+    def test_a_declaration_problem_is_counted_in_the_exit_code(self):
+        clean = self.doctor()
+        self.assertEqual(0, clean.returncode, clean.stdout)
+
+        folder = self.add_feature('broken', {'name': 'broken', 'timing': 'nope'})
+        broken = self.doctor()
+
+        self.assertNotEqual(0, broken.returncode,
+                            f'a broken declaration must reach the exit code:\n{broken.stdout}')
+        self.assertIn('broken', broken.stdout)
+        self.assertIn('not one of', broken.stdout,
+                      'the problem says what the declaration would have to be')
+        self.assertTrue((folder / 'feature.json').is_file())
+
+    def test_a_declaration_that_claims_a_builtin_name_is_reported(self):
+        """A declaration that claims a core setting's name is the merge's one silence: the built-in
+        cell keeps working (a broken declaration may not redefine what a setting means), the declared
+        one is unreachable, and `pf doctor` -- the one door that sees both tables -- says so."""
+        self.add_feature('thief', {
+            'name': 'thief', 'timing': 'close', 'action': 'insert',
+            'knobs': {'max_agents': {'kind': 'word', 'values': ['one', 'many'],
+                                     'summary': 'how many agents, but a word'}},
+            'readings': {}, 'metrics': {},
+        })
+
+        proc = self.doctor()
+
+        self.assertNotEqual(0, proc.returncode,
+                            f'a shadowed built-in name must reach the exit code:\n{proc.stdout}')
+        self.assertIn("'max_agents'", proc.stdout, 'the problem names the knob that collided')
+        self.assertIn("'thief'", proc.stdout, 'and the declaration that tried')
+        # the built-in cell still wins: the setting is an integer, so a word is refused
+        self.assertEqual('3\n', self.pf('config', 'get', 'max_agents').stdout)
+        self.assertNotEqual(0, self.pf('config', 'set', 'max_agents', 'one').returncode,
+                            'the declared word vocabulary reached the built-in setting')
+
+    def test_a_declared_layers_cell_off_the_chain_is_reported(self):
+        """A knob's `layers` cell is data the declaration owns; a layer name that is not on the chain
+        would narrow the knob to a layer nothing resolves, so the doctor names it and the knob keeps
+        the whole chain until the declaration is fixed."""
+        self.add_feature('narrow', {
+            'name': 'narrow', 'timing': 'close', 'action': 'insert',
+            'knobs': {'audit_limit': {'kind': 'number', 'layers': ['line']}},
+            'readings': {}, 'metrics': {},
+        })
+
+        proc = self.doctor()
+
+        self.assertNotEqual(0, proc.returncode,
+                            f'a layers cell off the chain must reach the exit code:\n{proc.stdout}')
+        self.assertIn('audit_limit', proc.stdout)
+        self.assertIn("'line'", proc.stdout, 'the problem names the layer nobody resolves')
+        # the knob is still reachable from the whole chain: the value writes and reads back
+        self.assertEqual(0, self.pf('config', 'set', 'audit_limit', '5').returncode)
+
+    def test_a_broken_implementation_is_reported(self):
+        """`pf doctor` loads every installed `impl.py` once: a feature whose code cannot even compile
+        has to be named on the doctor's list, not discovered at the next close."""
+        clean = self.doctor()
+        self.assertEqual(0, clean.returncode, clean.stdout)
+
+        self.add_feature('syntax', impl='def offer(ctx)\n    return None\n')
+
+        broken = self.doctor()
+
+        self.assertNotEqual(0, broken.returncode,
+                            f'a broken implementation must reach the exit code:\n{broken.stdout}')
+        self.assertIn("'syntax'", broken.stdout)
+        self.assertIn('failed to load', broken.stdout,
+                      'the sentence says the code, not the declaration, is what broke')
 
 
 class TestCommandList(unittest.TestCase):

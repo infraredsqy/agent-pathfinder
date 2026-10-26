@@ -1,4 +1,4 @@
-"""Repair-and-tidy levers over what is already on disk.
+"""The tidy levers over what is already on disk.
 
 Owns cmd_clean_temp: the sweep of the per-node `temp/` directories, which live in each node's own
 place (`<project>/.pf/nodes/<id>/temp/`). temp is the one place process records go, so clearing it

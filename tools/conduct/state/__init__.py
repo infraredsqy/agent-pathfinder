@@ -7,6 +7,8 @@ parser and nothing else; the machinery is here:
     store.py             one root -- `.pf/` -- and the four kinds of thing under it, and how they
                          are read: where it is, how it is read, how it is written
     pipeline_loader.py   how `conduct_pipeline.py` is loaded by path
+    knobs.py             the settings table: the four kinds, the one chain (node -> cycle -> project
+                         -> global -> factory default), and what came from which layer
     cycles.py            the `cycle` group: one line of work -- create / start / rename / status /
                          policy / list / current / show / hold / close / retry
     instruct.py          the `instruction` group: the standing-instructions account, and what is
@@ -14,14 +16,14 @@ parser and nothing else; the machinery is here:
     nextcmd.py           `next` -- the one command that drives the pipeline -- and `dispatch`, the
                          standalone half of its spawn tail; also the closing call's by-node
                          resolution
-    maintenance.py       the repair-and-tidy levers (clean-temp)
+    levers.py            the tidy levers (clean-temp)
     initledger.py        `init` -- the one setup act: write `.pf/.gitignore`, `.pf/.gitattributes` and
                          `.pf/AGENTS.md`; and `register`, which wires the merge driver into a
                          project's git config (init does it too)
     fork.py              the parallel-mode fork: `fork-worktree`, one worktree per node, and the
                          FORK record the close gates on
-    config.py            this machine's and this project's settings: the built-in defaults, the
-                         global and project overrides, and how the three resolve into one value
+    config.py            the settings command: list / get / set / unset over the knob chain, and the
+                         layer the value is written to
     session.py           the `session` group: which conversation produced a node, and which ones ran
                          it -- read from `.pf/meta/sessions/`, plus the one-shot import of the ids an
                          older record left behind
@@ -34,10 +36,11 @@ of `state-manage.py` for why that matters.
 
 from . import store  # noqa: F401
 from . import pipeline_loader  # noqa: F401
+from . import knobs  # noqa: F401
 from . import cycles  # noqa: F401
 from . import instruct  # noqa: F401
 from . import nextcmd  # noqa: F401
-from . import maintenance  # noqa: F401
+from . import levers  # noqa: F401
 from . import initledger  # noqa: F401
 from . import fork  # noqa: F401
 from . import config  # noqa: F401
@@ -51,11 +54,11 @@ from . import session  # noqa: F401
 #: re-exporting them would hand a caller a snapshot that `bind_paths` cannot move.
 __all__ = [
     # the layers themselves, for a caller that wants to poke at one of them
-    'store', 'pipeline_loader', 'cycles', 'instruct', 'nextcmd', 'maintenance',
+    'store', 'pipeline_loader', 'knobs', 'cycles', 'instruct', 'nextcmd', 'levers',
     'initledger', 'fork', 'config',
 
     # store: the read/write layer over the ledger (`.pf/`) and the doors off it
-    'VALID_NODE_RESULTS', 'ISO_FMT', 'PARALLEL_DEFAULT', 'LEDGER_NAME', 'INIT_MARKERS',
+    'VALID_NODE_RESULTS', 'ISO_FMT', 'LEDGER_NAME', 'INIT_MARKERS',
     'ledger_dir_for', 'meta_dir_for', 'nodes_dir_for', 'require_initialized',
     '_now', '_atomic_write', '_read_json', '_read_state', '_read_dag', '_write_state',
     '_find_cycle', '_instructions_path', '_read_instructions', '_write_instructions',
@@ -67,9 +70,15 @@ __all__ = [
     # pipeline_loader: the by-path load of conduct_pipeline.py
     '_load_pipeline',
 
+    # knobs: the one table, the four kinds, the chain, and the effective value + its layer
+    'BUILTIN', 'LAYERS', 'LAYER_LABELS', 'specs', 'parse', 'default_of', 'source_label',
+    'resolve', 'resolve_knob', 'knob_sources', 'ticket_readings', 'cycle_record',
+    'write_layer', 'write_node_layer', 'global_config_path', 'project_config_path',
+    'node_config_path', 'layer_path', 'read_layer',
+
     # cycles: the `cycle` group, the tag vocabulary, and the policies a line carries
     'VALID_TAGS', '_parse_cycle_tags',
-    'POLICY_DEFAULTS', 'POLICY_VALUES', 'POLICY_NUMBERS', 'POLICY_COUNTS',
+    'POLICY_SPECS', 'POLICY_DEFAULTS', 'POLICY_VALUES', 'POLICY_NUMBERS', 'POLICY_COUNTS',
     'POLICY_WORDS', 'POLICY_WORD_CHOICES', 'POLICY_KEYS', 'cycle_policy',
     'cmd_cycle_create', 'cmd_cycle_start', 'cmd_cycle_rename', 'cmd_cycle_status',
     'cmd_cycle_policy', 'cmd_cycle_list', 'cmd_cycle_current', 'cmd_cycle_show',
@@ -85,17 +94,15 @@ __all__ = [
     'cmd_instruction_add', 'cmd_instruction_list', 'cmd_instruction_resolve',
     'cmd_instruction_rm', 'cmd_instruction_revive',
 
-    # nextcmd / maintenance / init
+    # nextcmd / levers / init
     'cmd_next', 'cmd_dispatch', 'cmd_clean_temp', 'cmd_init', 'cmd_register',
 
     # fork: the parallel-mode fork, its worktree, and the record the close gates on
     'node_short_id', 'worktree_path', 'worktree_branch', 'fork_record_path',
     'cmd_fork_worktree', 'gate_close_on_fork',
 
-    # config: the built-in defaults, the two override layers, and one resolved reading
-    'CONFIG_NAME', 'CONFIG_SPEC', 'LAYERS', 'LAYER_LABELS',
-    'global_config_path', 'project_config_path', 'layer_path', 'default_of',
-    'read_layer', 'resolve_config', 'config_sources', 'write_value',
+    # config: the settings command -- one resolved reading, and exactly one layer per write
+    'CONFIG_NAME', 'resolve_config', 'config_sources', 'write_value',
     'cmd_config_list', 'cmd_config_get', 'cmd_config_set', 'cmd_config_unset',
 
     # session: the node's own conversations -- the note under `.pf/meta/sessions/`, and the import
@@ -120,7 +127,7 @@ def bind_paths(ledger_dir) -> None:
 # with `__all__`, and a name that appears in one and not the other is exactly the drift this split
 # has to avoid -- so a name nobody defines is a loud ImportError at load time, not a missing
 # attribute later.
-_LAYERS = (store, pipeline_loader, cycles, instruct, nextcmd, maintenance, initledger,
+_LAYERS = (store, pipeline_loader, knobs, cycles, instruct, nextcmd, levers, initledger,
            fork, config, session)
 
 for _name in __all__:

@@ -1,8 +1,14 @@
-"""Running the maintenance line: the graph edit through the real processes, the walk, the form.
+"""Running the maintenance feature's line: the graph edit through the real processes, the walk, the form.
 
 `TestMaintenanceCli` puts the close back on the real `dag-manage` / `state-manage` processes (the new
 node's uuid only exists in that process's stdout), `TestMaintenanceDrive` walks a whole line from the
-crossing to the far end, and `TestTheForm` pins what the line asks a worker for in its ticket.
+crossing to the far end, and `TestTheForm` pins what the line asks a worker for in its ticket (the
+declaration's `ask` text, read back through `ticket_readings`).
+
+Every class here drives the shipped declaration and therefore carries
+`requires_feature('maintenance')`: with that folder deleted the pipeline still closes and dispatches,
+and these behaviour cases skip instead of failing. What the feature does NOT depend on -- the
+mechanism itself -- is pinned in `cases_insertion.py` and `cases_feature.py`.
 
 When the insert happens, which line it happens on, and how many nodes one metric gets all live in
 `cases_maintenance.py`.
@@ -19,12 +25,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import NODE, NODE2, Base  # noqa: E402
-from cases_maintenance import SelfHealingWorker, coding_line  # noqa: E402
-from harness import HANDOFF_PY, _run_proc  # noqa: E402
+from cases_maintenance import (SelfHealingWorker, TEST_LINE, coding_line,  # noqa: E402
+                               set_config)
+from harness import HANDOFF_PY, _run_proc, requires_feature  # noqa: E402
 
 __all__ = ['TestMaintenanceCli', 'TestMaintenanceDrive', 'TestTheForm']
 
 
+@requires_feature('maintenance')
 class TestMaintenanceCli(Base):
     """The graph edit goes through **the real processes**: the uuid `dag-manage add` prints exists only in
     its stdout.
@@ -102,6 +110,7 @@ class TestMaintenanceCli(Base):
         self.assertEqual(sb.holding_ids(), [])
 
 
+@requires_feature('maintenance')
 class TestMaintenanceDrive(Base):
     """A whole line walked to the end: the maintenance node is dispatched as usual, closes as usual,
     then the line goes on to the one it deferred."""
@@ -198,9 +207,16 @@ class TestMaintenanceDrive(Base):
         self.assertIn('"reading": {"test_seconds"', spec)
         self.assertNotIn('issue_pool_weight', (sb.dag()['nodes'][made]['title']))
 
+@requires_feature('maintenance')
 class TestTheForm(Base):
     """`handoff.py --form <cycle>`: what this line wants is printed on the spot by the note's
-    receiver, and nothing can be written into it."""
+    receiver, and nothing can be written into it.
+
+    The readings a form asks for are the declarations' own: which keys (`ticket_readings`, narrowed by
+    each reading's `when_knob`) and which words (the declared `ask`) are merged out of the installed
+    features, so this class is the other end of the declaration from `cases_feature.py`'s registry
+    cases.
+    """
 
     def form(self, sb, cycle='cyc') -> str:
         return _run_proc(sb.root, [HANDOFF_PY, '--form', cycle]).stdout
@@ -221,6 +237,30 @@ class TestTheForm(Base):
         text = self.form(self.a_line(test_seconds_limit=60))
 
         self.assertIn('"reading":{"test_seconds":', text)
+
+    def test_a_threshold_stated_on_the_project_layer_is_asked_too(self):
+        """The form reads the whole chain, like the close does: a `test_seconds_limit` written on the
+        project layer (no line policy at all) is still a threshold this line is measured against."""
+        sb = self.a_line()                     # no cycle policy whatsoever
+        set_config(sb, TEST_LINE, 60)
+
+        text = self.form(sb)
+
+        self.assertIn('"reading":{"test_seconds":', text)
+
+    def test_a_threshold_on_the_nodes_own_layer_is_asked_when_the_node_is_named(self):
+        """The form resolves with the same context the close judges with: a threshold written on the
+        node about to be settled is in force there, so naming that node asks for the reading. With no
+        node named the answer stays the chain's own (this line and wider), exactly as before."""
+        sb = self.a_line()                     # no cycle policy, no project threshold
+        set_config(sb, TEST_LINE, 60, '--node', NODE)
+
+        asked = _run_proc(sb.root, [HANDOFF_PY, '--form', 'cyc', NODE]).stdout
+        unnamed = self.form(sb)
+
+        self.assertIn('"reading":{"test_seconds":', asked)
+        self.assertNotIn('"reading"', unnamed,
+                         'a form that names no node claimed a layer a node states')
 
     def test_the_pool_line_never_becomes_a_ticket_slot(self):
         """The pool slot is computed by the issue tool: this line configured it, yet the key still does not

@@ -219,6 +219,11 @@ def cmd_dispatch(args) -> None:
     which lives in `dsh-spawn.ps1` and is untouched here). A real spawn also drops the delivered
     launch directory, exactly as `next --spawn` does; `DSH_CONDUCT_SPAWN_DRY_RUN=1` reports the call
     without opening a session and keeps the prompt file, which is what a human retries by hand.
+
+    The one question it asks of the tree before spawning is the dispatch gate (`pipeline.gates`): the
+    features installed at that timing say whether a session may open now, and this verb is a dispatch
+    -- skipping it here would leave `pf dispatch` as the way around a gate. A refused gate writes
+    nothing, opens nothing and leaves the line in service, exactly like the `next` path's refusal.
     """
     pipeline = _load_pipeline()
     cycle_id, as_json, spawner, named_project = args.id, args.json, args.spawner, args.project
@@ -245,6 +250,16 @@ def cmd_dispatch(args) -> None:
         print(f'Error: cycle "{cycle_id}" is holding no node, so there is nothing to dispatch. '
               f'`next --cycle {cycle_id} --json` picks the next one and writes its prompt.',
               file=sys.stderr)
+        sys.exit(2)
+    # The dispatch gate belongs HERE as much as on the `next` path: "may a session open now?" is the
+    # dispatch moment's own question, and this verb is a dispatch. Asked before the prompt sweep and
+    # before any spawn, so a refused dispatch writes nothing and opens nothing -- the line keeps its
+    # hand and stays in service (`next` asks the same gate again on the next step). Read-only: one
+    # feature folder scan, no writes.
+    blocked = pipeline.gates(
+        'dispatch', pipeline.Context(root, cycle=cycle, node_id=holding[0]))
+    if blocked:
+        print('Error: a feature gate blocked this dispatch: ' + '; '.join(blocked), file=sys.stderr)
         sys.exit(2)
     prompts = []
     already = []

@@ -425,15 +425,16 @@ def cmd_status(args):
 def cmd_weight(args):
     """The pool's weighted debt, as ONE number (default) or its breakdown (`-v`).
 
-    This is the one slot of reading the pipeline itself wants: when pf-conduct closes a node out it
-    compares this number against this line's own `issue_pool_weight_limit`. The tool computes the
-    number -- the pool is its one source; a number a session reports cannot be checked by anyone.
+    This is the one slot of reading the pipeline itself wants: at a close, whatever judges the pool's
+    debt compares this number against a threshold the user configured for that line. The tool
+    computes the number -- the pool is its one source; a number a session reports cannot be checked
+    by anyone.
 
     Only entries not yet settled are counted (`OWED`, the same reading as `status`), and
     `decision == external` is then ruled out: the call on those is not the agent's to make
     (re-architecting, moving to another model, changing the experience), and counting them in is a
-    floor nobody can shift, so the threshold never gets back under the line and the maintenance node
-    gets inserted round after round.
+    floor nobody can shift, so the threshold never gets back under the line and a debt node gets
+    inserted round after round.
     """
     data = _read()
     actionable = [i for i in data['issues'].values()

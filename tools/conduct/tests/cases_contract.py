@@ -12,13 +12,14 @@ import ast
 import inspect
 import json
 import sys
+from contextlib import ExitStack
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import ACTION_VOCABULARY, Base, NODE, NODE2, NODE3, pipeline, normalise  # noqa: E402
 from harness import (  # noqa: E402
-    CONDUCT_DIR, Sandbox, WorkerSession, patched,
+    CONDUCT_DIR, Sandbox, WorkerSession, features_dir, patched, write_feature,
     _dag_hook as harness_dag_hook,
 )
 
@@ -27,6 +28,7 @@ __all__ = [
     'TestContract',
     'TestPurity',
     'TestOneChildProcessPath',
+    'TestTheInsertionActionShape',
 ]
 
 
@@ -344,7 +346,7 @@ class TestContract(Base):
         default is, which positional swallows the rest, which destinations are cast to `int`, and
         which command a verb reaches.
 
-        The maintenance channel writes the graph through this stand-in (`add` / `depend` /
+        The feature that inserts nodes writes the graph through this stand-in (`add` / `depend` /
         `undepend`), minting a real uuid and writing real edges, so a drift in the restatement --
         `--mode`'s default becoming `auto`, say -- writes different nodes than the shipped process
         would while every fast-path case stays green. The one case that drives the real processes
@@ -604,8 +606,8 @@ class TestOneChildProcessPath(Base):
         """The child-process call that ranks the ready set goes through the seam: patching the
         entry's `_capture` catches it.
 
-        `dag-manage list` is the package's one child-process call made to *see output* (the
-        maintenance channel's `add` is the other), and it used to carry a copy of the
+        `dag-manage list` is the package's one child-process call made to *see output* (an
+        insertion's `add` is the other), and it used to carry a copy of the
         `subprocess.run` spelling of its own; this case pins that it goes through the seam.
         """
         sb = self.make()
@@ -642,3 +644,155 @@ class TestOneChildProcessPath(Base):
             if 'subprocess' in used | imported:
                 offenders.append(path.name)
         self.assertEqual(offenders, [], f'these modules start a child process themselves, around the seam: {offenders}')
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  the insertion action: one vocabulary, one shape, and nothing left to run
+# ═══════════════════════════════════════════════════════════════════════════════
+
+#: An insertion source the cases below plug in themselves: one file, one offer, no core change. It
+#: offers once per close and once per pick (the tag keeps it from offering twice), so the same
+#: fixture serves both timings without depending on any shipped declaration.
+FIXTURE_IMPL = '''
+TAG = 'fixture:insertion-shape'
+
+
+def offer(ctx):
+    if ctx.nodes_with_tag(TAG):
+        return None
+    return {
+        'title': 'Inserted by the fixture',
+        'tags': [TAG],
+        'spec_of': lambda node_id: f'# fixture\\n\\nwritten for {node_id}\\n',
+        'fields': {'metric': 'fixture'},
+        'note': 'the fixture asked for this node',
+    }
+'''
+
+
+def fixture_decl(timing='close'):
+    return {'name': 'fixture', 'summary': 'the insertion shape fixture', 'timing': timing,
+            'action': 'insert', 'knobs': {}, 'readings': {}, 'metrics': {}}
+
+
+def _places(value, key: str):
+    """Every place `key` appears as a dict key, at any depth (the preview scrub is "anywhere")."""
+    if isinstance(value, dict):
+        if key in value:
+            yield value
+        for inner in value.values():
+            yield from _places(inner, key)
+    elif isinstance(value, list):
+        for inner in value:
+            yield from _places(inner, key)
+
+
+class TestTheInsertionActionShape(Base):
+    """`insert_node` is one action kind with one shape, whatever the source and whatever the timing.
+
+    Three things are pinned, and they are the three a caller is handed:
+
+      * the vocabulary: the action kinds are the entry's own table (`conduct_pipeline.ACTIONS`), and
+        `insert_node` is one of them;
+      * the planned shape: an action that has not run yet still carries the commands and the text
+        builder (`apply` consumes them), but a PREVIEW must not hand any of that to a caller -- not
+        at the top, and not inside each nested `insertions[*]`;
+      * the walk: an insertion is where a `next` stops -- the pick's graph edit comes back as
+        `insert_node`, the caller commits, and the next step dispatches -- so the caller always sees
+        the graph edit before the session, and one call never inserts a burst.
+    """
+
+    def fixture(self, sb, timing='close'):
+        """Point the feature scan at one hand-written folder for the test's whole life."""
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(features_dir(sb.root / 'features'))
+        write_feature(sb.root / 'features', 'fixture', fixture_decl(timing), FIXTURE_IMPL)
+        return sb.root / 'features'
+
+    def test_the_action_vocabulary_is_the_entrys_own_table(self):
+        """The caller's list (`cases_base.ACTION_VOCABULARY`) and the tool's table are one list.
+
+        Two copies drift silently: a caller that has not learned a kind the tool can return has no
+        branch for it, and nothing raises until the day it happens.
+        """
+        self.assertEqual(set(ACTION_VOCABULARY), set(pipeline.ACTIONS),
+                         'the caller vocabulary and the entry table disagree')
+        self.assertIn(pipeline.INSERT_ACTION, pipeline.ACTIONS)
+        self.assertEqual('insert_node', pipeline.INSERT_ACTION)
+
+    def test_a_previewed_insertion_hands_no_runbook_to_the_caller(self):
+        """`next --plan` on a close a feature answers with an insertion: the JSON carries no
+        `commands`, no `add_command` and no `spec_of` **anywhere**, at any depth.
+
+        A preview is not executable -- that is the invariant `render_action` owns -- and an insertion
+        carries its graph edits twice (mirrored at the top and once per insertion). Scrubbing only
+        the top would leave the side door open; and `spec_of` is a callable, so a preview that kept
+        it would not even serialize.
+        """
+        sb = self.make()
+        sb.add_node(NODE, 'Write code A', mode='auto', tags=['coding'])
+        sb.add_node(NODE2, 'Write code B', mode='auto', tags=['coding'], deps=[NODE])
+        sb.start_cycle(tags=['coding'])
+        sb.next()
+        sb.write_signal('cyc', NODE, 'completed', 'done', {'deliverable': 'x'})
+        self.fixture(sb)
+
+        planned = pipeline.plan(sb.root, 'cyc', after=NODE, self_verified=True)
+        self.assertEqual('insert_node', planned['action'], planned)
+        self.assertTrue(planned.get('commands'), 'the close action carries the edits that must run')
+        self.assertTrue(planned['insertions'][0].get('add_command'),
+                        'the nested copy lost the `add` the writer runs')
+
+        text = pipeline.render_action(planned, as_json=True, preview=True)
+        action = json.loads(text)
+
+        found = [key for key in ('commands', 'add_command', 'spec_of')
+                 for _ in _places(action, key)]
+        self.assertEqual([], found, f'a previewed insertion still hands over {found}: {text}')
+        self.assertTrue(action.get('settling'),
+                        'a preview that did not run must report that it is still settling')
+        # what a reader DOES need is still there, at both levels
+        self.assertTrue(action['spec'])
+        self.assertEqual(['Inserted by the fixture'], [i['title'] for i in action['insertions']])
+        self.assertTrue(action['insertions'][0]['spec_path'])
+        self.assertEqual({'metric': 'fixture'}, action['insertions'][0]['fields'])
+
+    def test_a_pick_insertion_is_a_graph_edit_and_ends_the_step(self):
+        """A pick-time source: the plan is an insertion that pins nothing, and the walk applies it.
+
+        A pick has no close commands to run with it, so the graph's own growth is the only progress
+        there is -- and the walk stops there and answers `insert_node`: the caller commits and
+        pushes, and the step after it picks and dispatches. One call never inserts a burst.
+        """
+        sb = self.make()
+        sb.add_node(NODE, 'Write code A', mode='auto', tags=['coding'])
+        sb.create_cycle('cyc', tags=['coding'])
+        self.fixture(sb, timing='pick')
+
+        planned = sb.plan()
+
+        self.assertEqual('insert_node', planned['action'], planned)
+        self.assertNotIn('prompt', planned, 'an insertion is not a dispatch')
+        self.assertNotIn('prompt_text', planned)
+        self.assertEqual([], sb.holding_ids(), 'the pick pinned a node before the insertion landed')
+        self.assertEqual('active', sb.cycle()['status'])
+        self.assertEqual(1, len(sb.dag()['nodes']), 'plan wrote the node it only promised')
+
+        walked = sb.next()
+
+        self.assertEqual('insert_node', walked['action'],
+                         f'a bare next did not stop on the insertion itself: {walked}')
+        nodes = sb.dag()['nodes']
+        made = [uid for uid in nodes if uid != NODE]
+        self.assertEqual(1, len(made), f'the fixture inserted no node: {nodes}')
+        self.assertEqual([], nodes[made[0]]['dependencies'],
+                         'a pick insertion has no parent: it is ready when it exists')
+        self.assertTrue((sb.root / '.pf' / 'nodes' / made[0] / 'spec.md').is_file(),
+                        'the inserted node has no text')
+
+        dispatched = sb.next()
+
+        self.assertEqual('dispatch', dispatched['action'], dispatched)
+        self.assertEqual(NODE, dispatched['node_id'],
+                         'the step after the insertion did not dispatch the picked node')
