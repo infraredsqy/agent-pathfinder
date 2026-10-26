@@ -120,7 +120,7 @@ into the spec; to change it, use `pf config set test_tier <value>`.
 | | `full`, the whole suite | `minimal`, everything pared down |
 |---|---|---|
 | Are tests written | new logic needs tests, and **only invariants get locked** — none that lock a formula, a snapshot or an implementation detail | **none by default**; only "it would fail silently without this" gets one, and say first which silent failure it blocks |
-| What stays | the whole set; when it runs over, the debt channel inserts a prune node | only numeric / precision cross-checks, cross-source structural agreement, and the paths only luck reaches |
+| What stays | the whole set; when it runs over, the debt channel inserts a debt node | only numeric / precision cross-checks, cross-source structural agreement, and the paths only luck reaches |
 | Each round's verification | the fast lane = the cases of the files touched | the few checks the project itself names / probes / one run |
 | The review on "missing tests" | one that should be there and is not = an issue | missing tests pass; a missing "silent-failure kind of verification" is recorded as an issue |
 
