@@ -13,9 +13,13 @@ Two questions are asked of a folder, and this module is the one place they are a
 
 **Runtime tolerance, doctor strictness.** A feature that raises is not allowed to stop somebody's
 project mid-pipeline: one `WARNING:` line goes to stderr, that feature contributes nothing this
-pass, and the pipeline carries on. Most of what breaks a feature is deterministic, and the doctor
-(`pf doctor`) is where it is reported -- the same split as everywhere else in this tree: the write
-side is loud about what it can prove at the moment it happens, and the runtime never guesses.
+pass, and the pipeline carries on. `sys.exit()` is the same failure written differently -- a door
+may not end the process -- so `SystemExit` is caught here too, which is what the validator's live
+call (`feature_registry._live_call_problems`) already asks of every door; `KeyboardInterrupt` is
+not caught, because Ctrl-C stays the human's. Most of what breaks a feature is deterministic, and
+the doctor (`pf doctor`) is where it is reported -- the same split as everywhere else in this tree:
+the write side is loud about what it can prove at the moment it happens, and the runtime never
+guesses.
 
 **What a feature may look at is this module's `Context`, and nothing else.** It is handed the cycle,
 the node, the ticket and the graph the caller already read -- never a path to the ledger and never
@@ -280,7 +284,7 @@ def insertions(timing: str, ctx: Context) -> list:
             continue
         try:
             offer = impl.offer(ctx)
-        except Exception as e:                   # noqa: BLE001 -- tolerant at runtime, strict in doctor
+        except (Exception, SystemExit) as e:     # noqa: BLE001 -- tolerant at runtime, strict in doctor
             warn(name, 'failed', e)
             continue
         if not offer:                            # None / {} / False: "nothing from me this pass"
@@ -311,7 +315,7 @@ def gates(timing: str, ctx: Context) -> list:
             continue
         try:
             reason = impl.check(ctx)
-        except Exception as e:                   # noqa: BLE001
+        except (Exception, SystemExit) as e:     # noqa: BLE001
             warn(name, 'failed', e)
             continue
         if reason:

@@ -23,7 +23,10 @@ What this file pins, in the order the criteria are stated:
   * **the pick timing**: an `insert` feature may also act at a pick, where its node enters the graph
     in front of the node the ranking chose; it pins nothing, writes no prompt and opens no session,
     and it is asked again on every step -- so a feature that wants the line to carry on stops
-    offering while one of its own nodes is open on the graph.
+    offering while one of its own nodes is open on the graph;
+  * **a door may not end the process**: `sys.exit()` at any of the three doors where a feature's own
+    code runs -- a gate, an offer, the text builder an offer hands over -- is contained exactly like
+    a raise, so it costs that feature its pass and never the line's step.
 
 Every case here builds its own features directory: nothing in this file depends on `features/` as it
 is shipped in this checkout.
@@ -46,7 +49,8 @@ from harness import (HANDOFF_PY, STATE_MANAGE, TOOLS_DIR, _run_proc, features_di
                      patched, requires_feature, shipped_sources, write_feature)
 
 __all__ = ['TestTheRegistry', 'TestTheDeletedFeatureFolder', 'TestTheDispatchGate',
-           'TestThePickTiming', 'TestABrokenOfferIsContained', 'TestTheOffersFields']
+           'TestThePickTiming', 'TestABrokenOfferIsContained', 'TestTheOffersFields',
+           'TestADoorMayNotEndTheProcess']
 
 #: The tag an insertion fixture's node carries, and what its offer uses to stay one at a time.
 FIXTURE_TAG = 'fixture:feature'
@@ -90,6 +94,36 @@ def offer(ctx):
     def spec_of(node_id):
         raise RuntimeError('the template is broken')
     return {'title': 'Boom', 'tags': ['coding'], 'spec_of': spec_of}
+'''
+
+#: A door that ends the process instead of answering. `SystemExit` is not an `Exception`, so the
+#: containment has to name it: a feature may not stop somebody's project that way either.
+EXIT_GATE_IMPL = '''
+import sys
+
+
+def check(ctx):
+    sys.exit('the fixture gate wants the process to end')
+'''
+
+EXIT_OFFER_IMPL = '''
+import sys
+
+
+def offer(ctx):
+    sys.exit('the fixture offer wants the process to end')
+'''
+
+#: The same failure one step later: the offer is accepted and the builder it handed over ends the
+#: process. That builder runs inside the containment around the graph edit.
+EXIT_BUILDER_IMPL = '''
+import sys
+
+
+def offer(ctx):
+    def spec_of(node_id):
+        sys.exit('the fixture template wants the process to end')
+    return {'title': 'Exit', 'tags': ['coding'], 'spec_of': spec_of}
 '''
 
 #: The same timing with an offer whose *shape* is wrong: `tags` is one string (the graph tool would
@@ -933,3 +967,67 @@ class TestTheOffersFields(FeatureBase):
             self.assertIn(f"{key!r} is the action's own cell", text)
         self.assertEqual(4, text.count('field is reserved'),
                          f'one warning per dropped key was not printed: {text}')
+
+
+class TestADoorMayNotEndTheProcess(FeatureBase):
+    """`sys.exit()` is a raise written differently, and the runtime contains it the same way.
+
+    `SystemExit` is a `BaseException`, so on its own it walks through every containment there is and
+    takes the step with it: nothing written, no line on stderr, and the exit code the feature chose.
+    The validator already refuses it (a door may not raise on a stand-in project), so this is the
+    runtime saying the same thing at each of the three doors a feature's own code runs behind: the
+    gate call, the offer call, and the text builder the offer handed over.
+    """
+
+    def test_a_gate_that_exits_the_process_is_skipped_with_one_warning(self):
+        """The gate calls `sys.exit`: the dispatch goes through as if it had said nothing, and the
+        process carrying the line is still the tool's, not the feature's."""
+        sb = self.coding_line()
+        write_feature(self.features(), 'exit-gate', block_decl('exit-gate'), EXIT_GATE_IMPL)
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            action = sb.plan()
+
+        self.assertEqual('dispatch', action['action'], action)
+        self.assertIn('WARNING: feature exit-gate failed', err.getvalue())
+        self.assertIn('the fixture gate wants the process to end', err.getvalue())
+
+    def test_an_offer_that_exits_the_process_is_skipped_and_the_close_still_dispatches(self):
+        """The offer ends the process before it has an answer: the close answers as the ordinary one
+        -- the node is settled, the graph does not grow, one warning names the offer -- and the step
+        the line was waiting for is taken."""
+        sb = self.finished_head()
+        write_feature(self.features(), 'exit-offer', insert_decl('exit-offer'), EXIT_OFFER_IMPL)
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            action = sb.close_round(NODE)
+
+        self.assertEqual('dispatch', action['action'], action)
+        self.assertEqual(NODE2, action['node_id'])
+        self.assertEqual(2, len(sb.dag()['nodes']), 'the skipped offer edited the graph anyway')
+        self.assertEqual([NODE], sb.path_nodes(), 'the node was not closed')
+        lines = [line for line in err.getvalue().splitlines() if line.startswith('WARNING:')]
+        self.assertEqual(1, len(lines), f'the feature did not get exactly one warning: {lines}')
+        self.assertIn('feature exit-offer', lines[0])
+        self.assertIn('the fixture offer wants the process to end', lines[0])
+
+    def test_a_builder_that_exits_the_process_costs_its_offer_and_nothing_else(self):
+        """The builder ends the process where the eager text was to come from: that offer contributes
+        nothing, and the close still settles the node and dispatches the next one."""
+        sb = self.finished_head()
+        write_feature(self.features(), 'exit-build', insert_decl('exit-build'), EXIT_BUILDER_IMPL)
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            action = sb.close_round(NODE)
+
+        self.assertEqual('dispatch', action['action'], action)
+        self.assertEqual(NODE2, action['node_id'])
+        self.assertEqual(2, len(sb.dag()['nodes']), 'the skipped offer edited the graph anyway')
+        self.assertEqual([NODE], sb.path_nodes(), 'the node was not closed')
+        lines = [line for line in err.getvalue().splitlines() if line.startswith('WARNING:')]
+        self.assertEqual(1, len(lines), f'the feature did not get exactly one warning: {lines}')
+        self.assertIn('feature exit-build', lines[0])
+        self.assertIn('the fixture template wants the process to end', lines[0])

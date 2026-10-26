@@ -202,8 +202,9 @@ def _insertions_due(project: Path, cycle: dict, closed: str | None, offers: list
     the pick decides who runs first -- an insertion never waits for another insertion.
 
     **Each offer is contained on its own.** Building one offer's edit runs its source's `spec_of()`
-    eagerly (`_text_of`), and a feature whose builder raises must not stop somebody's close: one
-    `WARNING:` line, that offer contributes nothing this pass, and the offers after it still land.
+    eagerly (`_text_of`), and a feature whose builder raises -- or ends the process with `sys.exit()`,
+    which is not an `Exception` -- must not stop somebody's close: one `WARNING:` line, that offer
+    contributes nothing this pass, and the offers after it still land.
     With every offer skipped this returns `None`, and the caller answers the ordinary close -- the
     node is still settled and the next slot still dispatches, as if no feature had spoken.
 
@@ -232,7 +233,7 @@ def _insertions_due(project: Path, cycle: dict, closed: str | None, offers: list
                 # really lands carries it (an offer skipped above has no command list of its own).
                 close_commands=close_commands if not edits else None,
             )
-        except Exception as e:                   # noqa: BLE001 -- tolerant at runtime, strict in doctor
+        except (Exception, SystemExit) as e:     # noqa: BLE001 -- tolerant at runtime, strict in doctor
             feature_host.warn(offer.get('feature') or '?', 'failed', e)
             continue
         edit['fields'] = _own_fields(offer.get('feature') or '?', offer.get('fields'))
