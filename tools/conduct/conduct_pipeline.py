@@ -58,11 +58,10 @@ Usage:
     python conduct_pipeline.py plan   [--cycle ID] [--project DIR]
     python conduct_pipeline.py apply  [--cycle ID] [--project DIR] [--after NODE_ID]
     python conduct_pipeline.py record [--cycle ID] [--project DIR]
-    python conduct_pipeline.py contract
 
-Those four are this module's own entry, for drills and tests. The pipeline's one entry point is
+Those three are this module's own entry, for drills and tests. The pipeline's one entry point is
 `pf next`: `--plan` runs `plan`, `--after <node>` runs `apply`, neither runs `record`, and
-`pf next --help` prints the action vocabulary `contract` prints.
+`state-manage.py next --help` prints the action vocabulary from `ACTIONS` on its tail.
 
 Environment:
     DSH_CONDUCT_DAG_MANAGE   where `dag-manage.py` is, when it is not the sibling `dag/`
@@ -246,9 +245,9 @@ globals().update({name: getattr(_impl, name) for name in _impl.__all__})
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
-# The action vocabulary, printable with `conduct_pipeline.py contract`. Kept as data so the doc and
-# the code cannot drift: the same list answers "what can `next` hand me". This dict is the single
-# source of the names.
+# The action vocabulary, which `state-manage.py next --help` prints on the tail of its help. Kept as
+# data so the help and the code cannot drift: the same list answers "what can `next` hand me". This
+# dict is the single source of the names.
 ACTIONS = {
     'dispatch':      'a node is pinned and the prompt has landed -- send it out (`dispatch <cycle>` '
                      'is what does this; `next --spawn` is the same call done in one go)',
@@ -279,10 +278,10 @@ def _render_contract() -> str:
 def main(argv=None) -> int:
     """This module's own entry: parse the line, run `plan` / `apply` / `record`, print the answer.
 
-    What is here is the parse, the vocabulary (`contract`) and the one call into the package. The
-    output -- JSON or the human rendering, and the rule that a preview carries no commands -- is
-    `actions.render_action`'s, the same one `pf next` prints through, so the two spellings of the
-    pipeline's front door cannot drift apart in what they show.
+    What is here is the parse and the one call into the package. The output -- JSON or the human
+    rendering, and the rule that a preview carries no commands -- is `actions.render_action`'s, the
+    same one `pf next` prints through, so the two spellings of the pipeline's front door cannot drift
+    apart in what they show.
 
     The closing call's answers (`--continue` / `--stop` / `--node` / `--note`) are refused unless
     something is being settled or previewed, exactly as `pf next` refuses them without `--after` or
@@ -303,7 +302,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog='conduct_pipeline.py',
         description='Decide what the conduct pipeline does next (read-only planner + writer).')
-    parser.add_argument('command', choices=['plan', 'apply', 'record', 'contract'])
+    parser.add_argument('command', choices=['plan', 'apply', 'record'])
     parser.add_argument('--cycle', help='Cycle id (default: the single active cycle)')
     parser.add_argument('--project', default='.', help='Project root (default: cwd)')
     parser.add_argument('--continue', dest='cont', action='store_true',
@@ -317,10 +316,6 @@ def main(argv=None) -> int:
     parser.add_argument('--note', default='', help='why the closing call decided that')
     parser.add_argument('--json', action='store_true')
     args = parser.parse_args(argv)
-
-    if args.command == 'contract':
-        print(_render_contract())
-        return 0
 
     decision = 'continue' if args.cont else 'stop' if args.stop else None
     decision_given = bool(args.cont or args.stop)

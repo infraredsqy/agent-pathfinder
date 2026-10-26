@@ -229,16 +229,16 @@ def _knob_shadows() -> list:
 
 def _report_features() -> int:
     """Say which features are installed (with the tags and methods the outside writes down), print
-    every problem their declarations have, and count those problems for the doctor's exit code.
+    every problem the validator found, and count those problems for the doctor's exit code.
 
     Zero feature folders is a legal project and is reported as such: the core is whole without any
     feature, and that sentence is what makes it visible.
 
-    **Every installed implementation is loaded once, here, on purpose.** `validate()` can only report
-    a load failure some call already ran into, and the doctor is the door a human reaches for when
-    the tree is already suspect -- a feature whose `impl.py` cannot even compile has to be named on
-    this list, not discovered at the next close. The load is one `importlib` per folder, and the
-    failure it records is the sentence printed below.
+    The questions are the validator's (`feature_registry.verify()`), which is also what the test
+    suite asks: the declarations against the core's closed sets, the method cards each one names, and
+    one real call of every implementation against a stand-in project -- a feature whose code cannot
+    even compile, or whose door raises, has to be named on this list, not discovered at the next
+    close. The one road a project's pipeline takes never asks any of this.
     """
     registry = _feature_registry()
     features = registry.load_all()
@@ -256,10 +256,7 @@ def _report_features() -> int:
             if methods:
                 parts.append('methods: ' + ', '.join(methods))
             print('  '.join(parts))
-        for feature in features:
-            if (feature['folder'] / registry.IMPLEMENTATION).is_file():
-                registry.impl_of(feature['name'])
-    problems = registry.validate()
+    problems = registry.verify()
     try:
         shadows = _knob_shadows()
     except Exception as e:                     # noqa: BLE001 -- a health check must answer, not die

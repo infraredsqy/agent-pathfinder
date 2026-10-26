@@ -23,6 +23,12 @@ stopped by a feature that is broken. The scan is not cached -- the folder on dis
 so a feature put back or taken away shows up at the next call, and a features directory with nothing
 in it returns nothing from every door here (that is what "the folder was deleted" looks like).
 
+`validate()` asks the declaration alone; `verify()` is the validator and asks both sides: the same
+declaration problems, plus the method cards the declarations name, plus one real call of every
+implementation against a stand-in project (`_StandIn`). The suite and `pf doctor` are its two
+callers, and nothing on the pipeline's route is: a project in the middle of its pipeline must not be
+stopped by a feature that is broken.
+
 Standalone on purpose: this file imports the standard library and fetches `tools/shared/loader.py`
 by path, and it carries no package-relative import, because it is loaded by path from two packages.
 """
@@ -33,6 +39,7 @@ import importlib.util
 import json
 import os
 import re
+import tempfile
 from pathlib import Path
 
 #: The knob kinds the core knows. A feature's declaration may only use these -- a fifth kind is a
@@ -60,6 +67,13 @@ SOURCES = ('ticket', 'pool')
 #: this file restates the names because it is loaded by path from two packages and imports neither:
 #: they are the closed set a declaration's `layers` cell may narrow its own knob to.
 LAYERS = ('node', 'cycle', 'project', 'global')
+
+#: Where a method's card lives: `skills/<lang>/<method>/SKILL.md`, one tree per language, and one of
+#: them is enough. The root is computed from this file's own place -- a checkout keeps `skills/` one
+#: level above `tools/` -- which is also the installed layout (`~/.agents/skills` beside
+#: `~/.agents/tools`), so a tree that moves carries its cards with it.
+SKILLS = Path(__file__).resolve().parents[3] / 'skills'
+CARD = 'SKILL.md'
 
 #: The environment variable that points the scan somewhere else (a sandbox, a drill copy): the
 #: features directory is data, so it gets the same kind of switch every other part of the tree has.
@@ -352,6 +366,209 @@ def validate() -> list:
     installed = {feature['name'] for feature in features}
     problems.extend(_RUNTIME_PROBLEMS[name] for name in sorted(_RUNTIME_PROBLEMS)
                     if name in installed)
+    return problems
+
+
+# ── the validator: the declaration, against the implementation beside it ────
+
+class _StandIn:
+    """The context the validator calls an implementation with: a temporary project, its own names.
+
+    The doors are the core `Context`'s (`feature_host.Context`), answered the way a project that
+    configured its knobs but holds nothing yet would: a declared knob reads the first value its cell
+    allows (a `number` / `integer` as 1, a `word` as its first declared word, a `switch` as `on`), a
+    declared ticket reading reads 1, the line is in service with no tags, and the graph is empty.
+
+    The line carries no tags on purpose: which line a feature judges is its own business, read off
+    the cycle it is handed, and the core guessing a tag on its behalf would be the core naming a
+    feature's concern. A feature that needs one answers "not known this pass", which is legal.
+
+    **No child process starts and nothing is written.** `capture` answers the empty text without
+    running anything, `run` does nothing, and `spec_path` only spells a landing spot: the validator
+    must not perform a graph edit or open a session to find out whether an implementation lies.
+    """
+
+    def __init__(self, decl: dict, project):
+        self.project = Path(project)
+        self.cycle = {'id': 'validator', 'title': 'the validator\'s stand-in line', 'tags': [],
+                      'status': 'active'}
+        self.node_id = None
+        self.sig = {}
+        self.dag = {'nodes': {}}
+        self.target = {}
+        self._knobs = {key: _cell_value(cell) for key, cell in _names(decl)['knobs'].items()
+                       if isinstance(cell, dict)}
+        self._readings = {key: 1.0 for key, cell in _names(decl)['readings'].items()
+                          if isinstance(cell, dict) and cell.get('source') == 'ticket'}
+
+    def knob(self, name: str):
+        return self._knobs.get(name)
+
+    def reading(self, key: str):
+        return self._readings.get(key)
+
+    def nodes_with_tag(self, tag: str) -> list:
+        return []
+
+    def capture(self, argv) -> str:
+        return ''
+
+    def run(self, argv) -> None:
+        return None
+
+    def spec_path(self, node_id: str) -> str:
+        """Where a node's own text would land -- a placeholder, because that layout is not this
+        file's to spell (`nodes.py` owns it, and nothing here writes a file)."""
+        return str(self.project / 'stand-in' / f'{node_id}.md')
+
+
+def _cell_value(cell: dict):
+    """One declared knob's stand-in value: the first value the cell's kind allows."""
+    kind = cell.get('kind')
+    if kind in ('number', 'integer'):
+        return 1
+    words = cell.get('values')
+    if kind == 'word' and isinstance(words, list) and words:
+        return words[0]
+    return 'on'
+
+
+def _card_problems(features: list) -> list:
+    """Every method name whose card no language tree under `SKILLS` has.
+
+    One tree is enough: a method has exactly one card, so an install picks one language and the card
+    it needs is the one that came with it. A skills root that is not there at all is one problem of
+    its own -- otherwise every method would be reported, and the sentence about the tree is the one a
+    human can act on.
+    """
+    trees = sorted(path for path in (SKILLS.iterdir() if SKILLS.is_dir() else [])
+                   if path.is_dir() and not path.name.startswith(('.', '__')))
+    if not trees:
+        return [f'the skills tree is not there ({SKILLS}): no method card can be found, so every '
+                f'method an installed declaration names is unbacked']
+    out = []
+    for feature in features:
+        for method in methods_of(feature):
+            if not any((tree / method / CARD).is_file() for tree in trees):
+                out.append(f'feature {feature["name"]!r}: method {method!r} has no card (none of the '
+                           f'language trees under {SKILLS} has {method}/{CARD})')
+    return out
+
+
+def _command_verbs(answer, out: list) -> None:
+    """Every command-shaped list in one answer, collected by its verb.
+
+    A command is an argv of strings, and an answer spelling an edit of its own would spell it as a
+    list of them; so a list whose elements are all lists/tuples is command-shaped, and anything else
+    (a tag list, a paragraph, a number) is not.
+    """
+    if isinstance(answer, dict):
+        for part in answer.values():
+            _command_verbs(part, out)
+    elif isinstance(answer, (list, tuple)):
+        if answer and all(isinstance(part, (list, tuple)) for part in answer):
+            out.extend(str(argv[0]) for argv in answer if argv)
+        else:
+            for part in answer:
+                _command_verbs(part, out)
+
+
+#: The answer keys this check reads: the two list-shaped ones `feature_host._usable_offer` reads and
+#: types as lists of strings (`tags`, `steps`). `fields` is left out on purpose -- its value is the
+#: free-shape dict a reader is shown, so a two-dimensional list there is a legitimate field and the
+#: core accepts it. A key the core never reads is left out for the same reason: an argv list in it
+#: edits nothing, and a flat one is no command list anyway. The rest (`title`, `note`, `spec_of`)
+#: carries a string or a callable, where no command list can live.
+EDIT_KEYS = ('tags', 'steps')
+
+
+def _edit_problems(name: str, answer) -> list:
+    """The command-shaped lists one answer carries in the keys the core reads -- and there may be none.
+
+    A feature **declares a node**; the edit that puts it into the graph is the core's, and it has one
+    implementation (`insertion.py`), which is also the one home of the verbs it uses. So this check
+    does not restate that vocabulary: it reports a command-shaped list in a key the core reads
+    (`EDIT_KEYS`), and the sentence stays on that fact -- a list shaped like a command, and which key
+    it turned up in -- because what the answer holds is all this side can see.
+    """
+    out = []
+    for key in EDIT_KEYS:
+        verbs = []
+        _command_verbs(answer.get(key), verbs)
+        if verbs:
+            out.append(f'feature {name!r}: its answer carries a command-shaped list in {key!r} '
+                       f'({", ".join(repr(verb) for verb in verbs)}); a feature declares the node '
+                       f'and the core performs the edit')
+    return out
+
+
+def _live_call_problems(feature: dict, decl: dict) -> list:
+    """One real call of one implementation, against a stand-in project.
+
+    The door is the one its action has: `offer` for an `insert`, `check` for a `block`. A missing
+    door is a feature that declares a timing nothing will ever serve. An action outside the two is
+    skipped -- `validate()` names it, and there is no door to call.
+
+    A load failure is skipped here for the same reason: it is `_RUNTIME_PROBLEMS`' entry, printed by
+    `validate()`, and calling a module that did not load is not a second finding.
+    """
+    name = feature['name']
+    door = {'insert': 'offer', 'block': 'check'}.get(decl.get('action'))
+    if door is None:
+        return []
+    impl = impl_of(name)
+    if impl is None:
+        return []
+    call = getattr(impl, door, None)
+    if not callable(call):
+        return [f'feature {name!r}: {IMPLEMENTATION} has no {door}(), so the {decl.get("action")!r} '
+                f'timing it declares can never be served']
+    try:
+        with tempfile.TemporaryDirectory(prefix='pf-feature-check-') as tmp:
+            answer = call(_StandIn(decl, tmp))
+    except (Exception, SystemExit) as e:      # noqa: BLE001 -- a feature's door may not raise
+        return [f'feature {name!r}: {door}() raised on a stand-in project: {e!r}']
+    if not answer:
+        # "Nothing from me this pass" is always a legal answer: it is what a project with no debt
+        # left, no line stated and nothing to say gets, and no feature has to answer every time.
+        return []
+    expected = dict if door == 'offer' else str
+    if not isinstance(answer, expected):
+        return [f'feature {name!r}: {door}() answered {type(answer).__name__}, and that timing reads '
+                f'{"an offer object" if door == "offer" else "a reason string"} or nothing']
+    return _edit_problems(name, answer)
+
+
+def verify() -> list:
+    """The validator: everything `validate()` answers, plus the half only the implementation can show.
+
+    Three questions, and every sentence that comes back names the feature:
+
+      * **is the declaration inside the core's closed sets, and do two features keep off each other's
+        names?** -- `validate()`'s own list, unchanged;
+      * **does the method its metrics name have a card?** -- `skills/<lang>/<method>/SKILL.md`, in at
+        least one language tree (`_card_problems`);
+      * **does the implementation keep its side of the bargain?** -- one real call against a stand-in
+        project: it must answer (an offer, a reason) or "not known this pass", it must never raise,
+        and it may not carry a command-shaped list in a key the core reads (`_live_call_problems`).
+
+    Nothing here raises on a broken feature -- a broken feature is a sentence, not an exception. The
+    two callers are the test suite and `pf doctor`; the pipeline's route never asks: somebody's
+    project must not be stopped mid-run by a feature that is broken, which is failure isolation and
+    nothing about speed.
+    """
+    features = load_all()
+    # The loads happen FIRST: `validate()` reads `_RUNTIME_PROBLEMS`, and an implementation that
+    # cannot be loaded has to be on this list rather than discovered at some later close.
+    for feature in features:
+        if (feature['folder'] / IMPLEMENTATION).is_file():
+            impl_of(feature['name'])
+    problems = validate()
+    problems.extend(_card_problems(features))
+    for feature in features:
+        decl = _decl_of(feature)
+        if decl is not None:
+            problems.extend(_live_call_problems(feature, decl))
     return problems
 
 

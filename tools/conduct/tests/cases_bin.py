@@ -259,8 +259,11 @@ class TestDoctorFeatures(unittest.TestCase):
     def add_feature(self, name='auditor', declaration=None, impl=None):
         """One feature folder under the temp features directory.
 
-        `impl` replaces the trivial implementation a case does not care about: the doctor has to load
-        every installed `impl.py` once, so what a broken one looks like is a case of its own.
+        `impl` replaces the trivial implementation a case does not care about: the doctor has to call
+        every installed `impl.py` once, and load it once on top of that, so what a broken one looks
+        like is a case of its own. The method the default declaration names is one whose card exists
+        in the `skills/` tree: a card that is missing is a problem the doctor reports, and a fixture
+        that carried one would make every case here fail for a reason none of them is about.
         """
         folder = self.features / name
         folder.mkdir()
@@ -272,7 +275,7 @@ class TestDoctorFeatures(unittest.TestCase):
             'readings': {'audit_minutes': {'source': 'ticket', 'when_knob': 'audit_limit',
                                            'ask': 'the minutes a full audit took'}},
             'metrics': {'audit_minutes': {'line': 'audit_limit', 'tag': 'audit:minutes',
-                                          'method': 'pf-audit', 'order': 0}},
+                                          'method': 'pf-test-audit', 'order': 0}},
         }), encoding='utf-8')
         return folder
 
@@ -292,7 +295,7 @@ class TestDoctorFeatures(unittest.TestCase):
         self.assertIn('features: 1 installed', proc.stdout)
         self.assertIn('auditor', proc.stdout)
         self.assertIn('audit:minutes', proc.stdout, 'the dedupe tag the outside writes down')
-        self.assertIn('pf-audit', proc.stdout, 'the method name its nodes point at')
+        self.assertIn('pf-test-audit', proc.stdout, 'the method name its nodes point at')
 
     def test_an_empty_features_directory_reports_zero_installed(self):
         proc = self.doctor()
@@ -372,6 +375,37 @@ class TestDoctorFeatures(unittest.TestCase):
         self.assertIn("'syntax'", broken.stdout)
         self.assertIn('failed to load', broken.stdout,
                       'the sentence says the code, not the declaration, is what broke')
+
+    def test_a_method_without_a_card_is_reported(self):
+        """The doctor runs the validator's card check: a method a declaration names has to have its
+        `SKILL.md` in one of the language trees, or a generated node points a session at nothing."""
+        self.add_feature('cardless', {
+            'name': 'cardless', 'timing': 'close', 'action': 'insert',
+            'knobs': {'audit_limit': {'kind': 'number'}},
+            'readings': {'audit_minutes': {'source': 'ticket', 'when_knob': 'audit_limit'}},
+            'metrics': {'audit_minutes': {'line': 'audit_limit', 'tag': 'audit:cardless',
+                                          'method': 'pf-no-such-card', 'order': 0}},
+        })
+
+        proc = self.doctor()
+
+        self.assertNotEqual(0, proc.returncode,
+                            f'a method card that is missing must reach the exit code:\n{proc.stdout}')
+        self.assertIn("'cardless'", proc.stdout, 'the problem names the feature')
+        self.assertIn("'pf-no-such-card'", proc.stdout, 'and the method nobody has a card for')
+
+    def test_an_implementation_that_raises_is_reported(self):
+        """The doctor really calls each implementation once, against a stand-in project: a feature
+        that explodes at its door is named here, not discovered at somebody's next close."""
+        self.add_feature('boom', impl='def offer(ctx):\n    raise RuntimeError("boom")\n')
+
+        proc = self.doctor()
+
+        self.assertNotEqual(0, proc.returncode,
+                            f'an implementation that raises must reach the exit code:\n{proc.stdout}')
+        self.assertIn("'boom'", proc.stdout, 'the problem names the feature')
+        self.assertIn('raised on a stand-in project', proc.stdout,
+                      'the sentence says the code answered with an exception')
 
 
 class TestCommandList(unittest.TestCase):

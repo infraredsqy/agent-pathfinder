@@ -86,6 +86,8 @@ from cases_init import *          # noqa: F401,F403
 from cases_config import *        # noqa: F401,F403
 from cases_knobs import *         # noqa: F401,F403
 from cases_feature import *       # noqa: F401,F403
+from cases_checks import *        # noqa: F401,F403
+from cases_guards import *        # noqa: F401,F403
 from cases_session import *       # noqa: F401,F403
 from cases_shared import *        # noqa: F401,F403
 from cases_bin import *           # noqa: F401,F403

@@ -1,6 +1,6 @@
 """`conduct_pipeline.py`'s own entries, and the one file that builds the spawner's argv.
 
-The module has two entry surfaces of its own -- `plan` / `apply` / `contract` as a process -- and the
+The module has two entry surfaces of its own -- `plan` / `apply` / `record` as a process -- and the
 first half drives them the shipped way against a throwaway project. The second half is the guard over
 the shipped sources: exactly one file may spell `dsh-spawn.ps1`'s argv, because a second spelling
 reads perfectly well on its own.
@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import Base, NODE, NODE2  # noqa: E402
-from harness import CONDUCT_DIR, PIPELINE_PATH, run_argv, shipped_sources  # noqa: E402
+from harness import CONDUCT_DIR, shipped_sources  # noqa: E402
 
 __all__ = ['TestPipelineModuleEntries', 'TestOneSpawner']
 
@@ -25,7 +25,7 @@ __all__ = ['TestPipelineModuleEntries', 'TestOneSpawner']
 class TestPipelineModuleEntries(Base):
     """`conduct_pipeline.py` as a real process: the module's own entry points, driven the shipped way.
 
-    These are not the state-manage surface: `plan` / `apply` / `contract` are how a launcher (and the
+    These are not the state-manage surface: `plan` / `apply` / `record` are how a launcher (and the
     module's own documented usage) reaches the pipeline, so their spelling, their encoding and their
     exit codes are part of what is under test.
     """
@@ -44,17 +44,6 @@ class TestPipelineModuleEntries(Base):
         action = json.loads(proc.stdout)
         self.assertEqual(action['action'], 'dispatch')
         self.assertIsNone(sb.read_signal('cyc', NODE), 'the plan wrote a signal')
-
-    def test_contract_subcommand_prints_the_action_vocabulary(self):
-        """`conduct_pipeline.py contract` is the reference a downstream agent reads to learn the action
-        names it must handle."""
-        proc = run_argv([PIPELINE_PATH, 'contract'], check=False)
-        self.assertEqual(proc.returncode, 0,
-                         f'conduct_pipeline.py contract failed:\n{proc.stdout}\n{proc.stderr}')
-        for name in ('dispatch', 'open_node', 'insert_node', 'stop_pipeline', 'wait', 'no_cycle'):
-            self.assertIn(name, proc.stdout)
-        for gone in ('verify_round', 'open_round', 'stage'):
-            self.assertNotIn(gone, proc.stdout)
 
     def test_the_two_front_ends_print_the_same_preview(self):
         """The same plan, printed the same by both front ends -- even "the preview cannot be run"

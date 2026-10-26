@@ -14,9 +14,12 @@
   `pipeline/feature_registry.py` is the core's whole knowledge of them — four knob kinds, three
   timings, two actions, and the rules a declaration has to satisfy — and it is loaded by path from
   both packages (`feature_host.py` asks it for actions, `state/knobs.py` merges the knobs they
-  declare), one copy per process. A feature's names live in its declaration only: adding or removing
-  one is a folder move, and no core file names one. The declaration names, per metric, the method the
-  generated node's session reads; that card lives in the `skills/` tree.
+  declare), one copy per process. Its `verify()` is the validator over both sides (the declaration's
+  cards, and one real call of each implementation against a stand-in project): the suite and
+  `pf doctor` are its only callers, never the pipeline's route. A feature's names live in its
+  declaration only: adding or removing one is a folder move, and no core file names one. The
+  declaration names, per metric, the method the generated node's session reads; that card lives in
+  the `skills/` tree.
 - `ledger-merge.py` must stay at the conduct root: `pf`'s `merge-ledger` forwarding finds it by
   this relative path. A project registers through `pf register`, which records
   `pf merge-ledger %O %A %B %P` — independent of where the checkout lives, so moving it needs no
