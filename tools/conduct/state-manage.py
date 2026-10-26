@@ -475,9 +475,13 @@ def main(argv=None) -> None:
                     "drive the pipeline to its next stable action -- consume a finished node's "
                     'signal, do the bookkeeping, stop at the first thing a caller can act on. '
                     'The actions a caller may have to act on are `dispatch` (spawn this node), '
+                    '`insert_node` (a node was just put into the graph and nothing was opened: '
+                    'commit and push, then run `next --spawn` again and the pick decides), '
                     '`wait` (read its note / close_with and run that one command), `ask_user`, '
-                    '`stop_pipeline`. The returned action NEVER carries commands to run: the '
-                    'tool runs them.',
+                    '`stop_pipeline`, `no_cycle` (there is no cycle yet: opening one takes a '
+                    "human's intent). An `open_node` never reaches you -- it is the tool pinning "
+                    "the next node itself, and what you read is that slot's `dispatch`. "
+                    'The returned action NEVER carries commands to run: the tool runs them.',
         # `-h` is this parser's own action because its help carries the action vocabulary
         # (`conduct_pipeline.ACTIONS`, the single source the contract is computed from) as an
         # epilog, computed at print time.
@@ -510,9 +514,10 @@ def main(argv=None) -> None:
 
     p_disp = sub.add_parser(
         'dispatch',
-        help='Start the session for the node this cycle is holding (what `next --after` wrote)',
+        help='Start the session for the node this cycle is holding (the prompt was written when '
+             'that node was pinned)',
         description='Dispatch and nothing else: read the node this cycle holds, then start the '
-                    'session whose prompt the closing call already wrote at '
+                    'session whose prompt the step that pinned it already wrote at '
                     '.pf/meta/launch/<cycle>/<node>/prompt.txt. No bookkeeping and no state change '
                     '-- that is what makes "commit and push first, then dispatch" expressible: the '
                     'next session boots in the same worktree and pulls. '

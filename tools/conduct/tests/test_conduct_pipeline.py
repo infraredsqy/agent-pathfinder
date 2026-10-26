@@ -65,6 +65,7 @@ from cases_contract import *      # noqa: F401,F403
 from cases_close import *         # noqa: F401,F403
 from cases_recovery import *      # noqa: F401,F403
 from cases_maintenance import *   # noqa: F401,F403
+from cases_insertion import *     # noqa: F401,F403
 from cases_maintenance_run import *  # noqa: F401,F403
 from cases_cli import *           # noqa: F401,F403
 from cases_cli_entries import *   # noqa: F401,F403

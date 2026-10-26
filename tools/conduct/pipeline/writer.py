@@ -9,10 +9,10 @@ import os
 import time
 from pathlib import Path
 
-from . import maintenance, seam
+from . import insertion, seam
 from .store import (_holding_ids, _loader, cycle_policy, find_cycle, load_signal, load_state,
                     note_session)
-from .prompts import (launch_dir, launch_prompt_path, started_marker, write_prompt_file)
+from .prompts import (launch_dir, started_marker, write_prompt_file)
 from .planner import plan
 
 MAX_SETTLE_STEPS = 8
@@ -293,28 +293,6 @@ def _prune_launch_dirs(project: Path, cycle_id: str) -> None:
             shutil.rmtree(d, ignore_errors=True)
 
 
-def _capture_new_node(project: Path, add_command: list, spec_of, commands: list) -> tuple:
-    """Run the one command that mints the maintenance node's id, then fill the id in everywhere.
-
-    Returns `(node_id, rest_of_commands)`, the second already carrying the real uuid where the
-    placeholder was and no longer holding `add` itself -- the command has run by then, and leaving
-    it in the list would run it twice.
-
-    `maintenance.insertion` marks where `add` belongs in the list (it is one of the pipeline's
-    commands, in the pipeline's order) and hands it over separately for exactly this reason: its
-    stdout is the only place the uuid ever appears, and `seam.run` throws stdout away -- so this one
-    command goes through `seam.capture`, the same way `nodes._rank_ready_nodes` reads the ranking.
-    Nothing written in terms of the new node can run before this has an answer.
-
-    The node's `spec.md` is written right here, from the same step: what a session reads is that
-    file, the session boots long after this call, and `plan()` is not allowed to touch a file.
-    """
-    node_id = maintenance.read_new_node_id(project, add_command)
-    maintenance.write_spec(project, node_id, spec_of(node_id))
-    return node_id, [maintenance.substitute(c, node_id) for c in commands
-                     if not maintenance.is_add_slot(c)]
-
-
 def apply(project, cycle_id: str | None = None, decision: str | None = None,
           node: str | None = None, note: str = '', self_verified: bool = False,
           after: str | None = None, action: dict | None = None,
@@ -337,8 +315,8 @@ def apply(project, cycle_id: str | None = None, decision: str | None = None,
                       decision_given=decision_given)
     kind = action['action']
     commands = action.get('commands') or []
-    # Built separately by the planner, run first and then dropped from the list (see
-    # `_capture_new_node`); popped so it never reaches a caller as something to run.
+    # Built separately by the planner, run first and then dropped from the list (see the marker slot
+    # below); popped so it never reaches a caller as something to run.
     add_command = action.pop('add_command', None)
     spec_of = action.pop('spec_of', None)
 
@@ -360,8 +338,8 @@ def apply(project, cycle_id: str | None = None, decision: str | None = None,
         action['applied'] = False
         return action
 
-    if add_command is None and kind == maintenance.MAINTENANCE_ACTION:
-        raise RuntimeError(f'action {kind!r} arrived without its `add` command: the maintenance '
+    if add_command is None and kind == insertion.INSERT_ACTION:
+        raise RuntimeError(f'action {kind!r} arrived without its `add` command: the inserted '
                            f'node cannot be created')
 
     before_state = _snapshot(project, action['cycle'])
@@ -379,16 +357,16 @@ def apply(project, cycle_id: str | None = None, decision: str | None = None,
         try:
             # The marker slot is where `add` belongs: run it there (its stdout carries the uuid the
             # rest of the list is written in terms of), read the uuid, and substitute it in.
-            if add_command is not None and maintenance.is_add_slot(cmd):
-                node_id, commands = _capture_new_node(project, add_command, spec_of, commands)
-                ran.append(maintenance.substitute(list(add_command), node_id))
+            if add_command is not None and insertion.is_add_slot(cmd):
+                node_id, commands = insertion.mint(project, add_command, spec_of, commands)
+                ran.append(insertion.fill_all(list(add_command), node_id))
                 action['node_id'] = node_id
-                if action.get('prompt'):
-                    # The path the action reports names the node, and the node had no name until now.
-                    # The placeholder's own file was written above and is never read: the re-plan this
-                    # rebind feeds writes the real node's prompt, and `_prune_launch_dirs` sweeps the
-                    # placeholder's directory away.
-                    action['prompt'] = str(launch_prompt_path(project, action['cycle'], node_id))
+                # The uuid did not exist when this action was built: the paths it reports and the
+                # steps it shows a reader were written against the placeholder.
+                if action.get('spec'):
+                    action['spec'] = insertion.fill(action['spec'], node_id)
+                if action.get('steps'):
+                    action['steps'] = insertion.fill_all(action['steps'], node_id)
                 add_command = None
                 done += 1
                 continue                  # the rebind moved every later command: re-read this slot
@@ -402,8 +380,8 @@ def apply(project, cycle_id: str | None = None, decision: str | None = None,
         done += 1
         i += 1
     if add_command is not None:
-        raise RuntimeError(f'action {kind!r} carried an `add` command that never ran: the '
-                           f'maintenance node cannot be created')
+        raise RuntimeError(f'action {kind!r} carried an `add` command that never ran: the inserted '
+                           f'node cannot be created')
     after_state = _snapshot(project, action['cycle'])
 
     if before_state == after_state:
@@ -416,9 +394,13 @@ def apply(project, cycle_id: str | None = None, decision: str | None = None,
                           'after': dict(zip(_SNAPSHOT_FIELDS, after_state))}
     action.pop('commands', None)
     # An open_node is a dispatch in disguise: run the follow-up too, so callers have exactly one
-    # shape to handle ("spawn a session with this prompt"). A maintenance_due is the same deal: the
-    # node it inserted is now the cycle's own, and what the caller needs is its dispatch.
-    if kind in ('open_node', maintenance.MAINTENANCE_ACTION):
+    # shape to handle ("spawn a session with this prompt").
+    #
+    # An `insert_node` is NOT, and that is the whole point of it: the graph grew a node, no session
+    # was opened and the inserted node is not pinned, so this action is where the call stops. What
+    # picks the node up is the next dispatch (`_pick_next` and the ranking), exactly as for any other
+    # node.
+    if kind == 'open_node':
         follow = apply(project, action['cycle'])
         follow['applied'] = True
         follow['opened_node'] = action.get('node_id')
@@ -426,8 +408,6 @@ def apply(project, cycle_id: str | None = None, decision: str | None = None,
         # The sentence the open carried rides along: what the caller gets is the re-planned dispatch,
         # and the open_node action itself never reaches him, so anything left there would be read by
         # nobody (for one, "the node named to run is not in the filter set").
-        # The maintenance node's road is even more so: the reason it was inserted is written only on
-        # this action's note, and dropping it here would leave it unread.
         spoken = (action.get('follow') or {}).get('note') or action.get('note')
         if spoken:
             follow['note'] = spoken
@@ -441,8 +421,8 @@ def record(project, cycle_id: str | None = None) -> dict:
     This is the whole of the conductor's mechanical routine, and it is one call: consume a finished
     node's signal, do every piece of bookkeeping that follows from it, and stop at the first thing a
     caller can act on -- `dispatch` (spawn this node), `wait` (a node waiting for its own closing
-    call), `ask_user`, `stop_pipeline`. A `maintenance_due` is the same shape as `open_node`: the
-    tool's own intermediate step, which `apply` runs and re-plans into the dispatch behind it.
+    call), `ask_user`, `stop_pipeline`. An `insert_node` never appears here: an insertion is made at
+    a close (`--after`), and it leaves the line with the next dispatch to make.
 
     Note the shape: it re-plans after every applied step rather than returning the action it just
     ran. Returning the close action would leave a closed-but-undispatched pipeline behind.
@@ -454,7 +434,7 @@ def record(project, cycle_id: str | None = None) -> dict:
         kind = action['action']
         commands = action.get('commands') or []
 
-        if kind in ('dispatch', 'open_node', maintenance.MAINTENANCE_ACTION):
+        if kind in ('dispatch', 'open_node'):
             return apply(project, cycle_id, action=action)
         if kind == 'stop_pipeline':
             return apply(project, cycle_id, action=action) if commands else action

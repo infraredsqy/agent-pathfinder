@@ -9,10 +9,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import maintenance, seam
+from . import insertion, maintenance, seam
 from .nodes import mode_for, node_row, node_spec_path
 from .prompts import build_prompt_text, launch_dir, launch_prompt_path
-from .store import DEFAULT_MODE, load_dag
+from .store import load_dag
 
 
 def _ask(question: str, **extra) -> dict:
@@ -23,9 +23,8 @@ def _node_entry(project: Path, cycle: dict, row: dict, mode: str) -> dict:
     """One node's entry inside a dispatch-shaped action.
 
     The id, its title, its mode, where its prompt file lands and the text to write there -- one
-    builder, so the multi-node dispatch and the maintenance insert cannot spell their entries
-    differently. `row` is a graph row with its id in it (`nodes.node_row`); the maintenance node has
-    no row yet, so its caller hands over the id and the title it was generated with.
+    builder, so the multi-node dispatch and the single-node one cannot spell their entries
+    differently. `row` is a graph row with its id in it (`nodes.node_row`).
     """
     node_id = row['id']
     return {'node_id': node_id, 'node_title': row.get('title', ''), 'mode': mode,
@@ -62,51 +61,69 @@ def _dispatch_many(project: Path, cycle: dict, node_ids: list) -> dict:
     }
 
 
+def _insert_node(cycle: dict, edit: dict, note: str, steps, fields: dict | None = None) -> dict:
+    """One insertion source's package, as the caller reads it.
+
+    The graph edit itself is `insertion.insert`'s (`edit`); what a source adds is the words: why this
+    node, and where it went. The shape is the same for every source, because it is the same action --
+    which is the point of the core mechanism.
+
+    **It is not a dispatch and it is not shaped like one.** There is no `prompt` / `prompt_text` /
+    `mode`: no session is opened, no prompt file is written, and the line's hand is not moved
+    (`insertion.py`). The node sits in the graph and the next dispatch picks it up by the usual
+    ranking, so a caller that reads `dispatch` fields here has nothing to read -- deliberately.
+
+    `node_id` is the `NEW_NODE` placeholder until `writer.apply` has run `add` and rebound it, and
+    the same goes for the paths in `steps`: the uuid does not exist before that.
+    """
+    return {
+        'action': insertion.INSERT_ACTION, 'cycle': cycle['id'],
+        'node_id': insertion.NEW_NODE, 'node_title': edit['title'],
+        'note': note, 'steps': list(steps or []), **(fields or {}),
+        # `add` and `spec_of` are the writer's half of the mechanism, not the caller's: `apply` pops
+        # them before this action reaches anybody, and `insertion.mint` is what runs the one and
+        # reads the uuid off the other.
+        'spec': edit['spec_path'], 'add_command': edit['add_command'],
+        'spec_of': edit['spec_of'], 'commands': edit['commands'],
+    }
+
+
 def _maintenance_due(project: Path, cycle: dict, closed: str, hit: dict, target: dict,
                      close_commands: list, extra_note: str = '') -> dict:
     """The action that inserts a maintenance node between the node just closed and the one it picked.
 
-    Its `commands` are the real graph edit (`maintenance.insertion`): drop the old direct edge if it
-    is there, create the maintenance node, wire the two edges, and pin the cycle on it. Nothing is
-    written here -- `apply` is the only writer, and `plan` must stay byte-for-byte read-only.
+    Its `commands` are the real graph edit (`maintenance.insert_into` -> `insertion.insert`): drop the
+    old direct edge if it is there, create the node, wire the two edges. Nothing is written here --
+    `apply` is the only writer, and `plan` must stay byte-for-byte read-only.
 
-    It is shaped like `_dispatch_many` on purpose ("the same walk as dispatch"): the same `prompt` /
-    `prompt_text` / `mode` fields, so `dispatch <cycle>` and `next --spawn` need no second case. The
-    difference is WHICH node is pinned -- the one just inserted, not the one the close had picked --
-    and that the picked node is named in `deferred_node`, because it is still the next thing the
-    line will do, just not yet.
+    The picked node is named in `deferred_node`: it is still the next thing this line will do, just
+    not yet -- the new node stands in front of it in the graph. What does NOT happen here is a
+    dispatch: no session is opened, and the inserted node is not pinned. This action does not speak
+    for the close it rides on either -- `close_commands` comes in from the caller, and on a line that
+    fills several slots those same commands pin the rest of that fill. So which node the next
+    dispatch picks is the usual ranking's call: the inserted one is a ready node like any other, and
+    nothing here promised it the slot.
     """
-    node_id = maintenance.NEW_NODE
-    entry = _node_entry(project, cycle, {'id': node_id, 'title': hit['title']}, DEFAULT_MODE)
+    edit = maintenance.insert_into(project, cycle, hit, closed, target['id'],
+                                   close_commands=close_commands)
     shown = (f'{hit["value"]:g}{hit["unit"]}')
     line = (f'{hit["at"]:g}{hit["unit"]}')
     note = (f'{hit["subject"]} read {shown}, over the line {line} in this line\'s policies '
-            f'(`policies.{hit["line"]}`): the maintenance node is inserted between the just-closed '
-            f'{closed[:8]} and the {target.get("title") or target["id"]} it had picked, and pinned '
-            f'on the new node. Dispatch as with `dispatch`: after committing and pushing, run '
-            f'`pf dispatch {cycle["id"]}`.')
-    edit = maintenance.insertion(project, closed, target['id'], cycle['id'], hit,
-                                 spec_of=hit['spec_of'], close_commands=close_commands)
-    return {
-        'action': maintenance.MAINTENANCE_ACTION, 'cycle': cycle['id'],
-        **entry,
+            f'(`policies.{hit["line"]}`): a node is inserted between the just-closed {closed[:8]} '
+            f'and the {target.get("title") or target["id"]} it had picked. No session was opened, '
+            f'and the inserted node is not pinned: which node the next dispatch picks is the usual '
+            f'ranking\'s call (on a line that fills several slots, this same close may have pinned '
+            f'the rest of its fill). After committing and pushing: '
+            f'`pf next --cycle {cycle["id"]} --spawn --json`.')
+    steps = [f'insert a node with the generated spec '
+             f'({node_spec_path(project, insertion.NEW_NODE)}), between {closed} and {target["id"]}',
+             'no session was opened and the inserted node is not pinned: the next dispatch picks it '
+             'by the usual ranking (on a line that fills several slots, this same close may pin the '
+             'rest of its fill)']
+    return _insert_node(cycle, edit, f'{note}; {extra_note}' if extra_note else note, steps, {
         'metric': hit['reading'], 'reading': shown, 'line': line,
         'deferred_node': target['id'], 'deferred_title': target.get('title', ''),
-        # `extra_note` is the line that would have ridden on the dispatch this action replaces (a
-        # hand-named node outside the filter set, for one). It has to keep riding along: the caller
-        # never sees the action it displaced.
-        'note': f'{note}; {extra_note}' if extra_note else note,
-        'steps': [f'write prompt text to {entry["prompt"]}',
-                  f'insert a maintenance node with the generated spec '
-                  f'({node_spec_path(project, node_id)}), between {closed} and {target["id"]}',
-                  'DSH: spawn one session with prompt.txt (`dispatch <cycle>` does this)'],
-        # `add` is not in `commands`: it is handed over on its own, because its stdout carries the
-        # uuid the rest of the list is written in terms of (`writer._capture_new_node`), and `spec_of`
-        # is the generated spec, texted for the node that uuid turns out to name.
-        'add_command': edit['add_command'],
-        'spec_of': hit['spec_of'],
-        'commands': edit['commands'],
-    }
+    })
 
 
 def _ticket_wait(cycle: dict, node_id: str, holding=None) -> dict:
@@ -304,7 +321,11 @@ def _action_lines(action: dict) -> str:
         lines.append(f"  - {step}")
     if action.get('prompt'):
         lines.append(f"prompt: {action['prompt']}")
-    if action.get('action') in ('dispatch', maintenance.MAINTENANCE_ACTION):
+    if action.get('spec'):
+        # An insertion's landing spot: the file the node's own session will read. It has no prompt,
+        # because nothing was opened -- this line and the one above are exactly that difference.
+        lines.append(f"spec:   {action['spec']}")
+    if action.get('action') == 'dispatch':
         lines.append(f"mode:   {action.get('mode')}")
     # The maintenance channel's own fields: which measurement crossed, what it read, where the line
     # was, and the node the close had picked before this one was put in front of it. A reader who is

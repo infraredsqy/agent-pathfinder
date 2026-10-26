@@ -1,8 +1,10 @@
 """The `next` command: the one command that drives the pipeline.
 
 Owns cmd_next: the `--plan` preview, the `--after` closing call and the dispatch/spawn tail -- and
-cmd_dispatch, the standalone half of that tail (`dispatch <cycle>` starts the session whose prompt
-the closing call already wrote). The decision logic itself lives in `conduct_pipeline.py`, loaded via
+cmd_dispatch, the standalone half of that tail (`dispatch <cycle>` starts the session for the node
+the line holds, from the prompt the step that pinned that node wrote). That step is not always the
+close: an insertion pins nothing and writes no prompt, so the prompt lands with whatever step picks
+the node up later. The decision logic itself lives in `conduct_pipeline.py`, loaded via
 `_load_pipeline()`.
 
 `dispatch` lives next to `next` on purpose: it is the same spawn call, under the same drill switch
@@ -199,12 +201,14 @@ def cmd_dispatch(args) -> None:
 
     `args` is the parsed `dispatch` line (state-manage's namespace), read here field by field.
 
-    The closing call (`next --after <node> --json`) deliberately stops short of starting anything --
-    it settles the node, picks the next one and writes its prompt to
-    `.pf/meta/launch/<cycle>/<node_id>/prompt.txt`. The worker that closed its node still has to
-    commit and push its own work, and the next session boots in the SAME worktree and pulls on its
-    first line, so starting it before the push would hand it a half-finished tree. The two halves are
-    therefore two commands:
+    The prompt this verb starts is written by whichever step PINS the node, never by this one: the
+    step that picks a node pins it and writes its prompt to
+    `.pf/meta/launch/<cycle>/<node_id>/prompt.txt`. Usually that is the closing call
+    (`next --after <node> --json`); after an insertion it is a later `next`, because the insertion's
+    close pins nothing and writes no prompt. The worker that closed its node still has to commit and
+    push its own work, and the next session boots in the SAME worktree and pulls on its first line,
+    so starting it before the push would hand it a half-finished tree. The two halves are therefore
+    two commands:
 
         pf next --after <node> --json     settle it, write the next prompt
         git commit … && git push                       the worker's own work
@@ -256,8 +260,9 @@ def cmd_dispatch(args) -> None:
             continue
         prompt = pipeline.launch_prompt_path(root, cycle_id, node_id)
         if not prompt.is_file():
-            print(f'Error: no prompt file at {prompt}. That file is written by the closing call '
-                  f'that settled this node: `pf next --after {node_id} --json`.',
+            print(f'Error: no prompt file at {prompt}. That file is written by the step that pinned '
+                  f'this node: usually the closing call (`pf next --after {node_id} --json`), and '
+                  f'after an insertion the later `next` that picks the node up.',
                   file=sys.stderr)
             sys.exit(2)
         prompts.append((node_id, prompt))

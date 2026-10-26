@@ -311,7 +311,7 @@ def node_spec_path(project: Path, node_id: str) -> str:
     """`<project>/.pf/nodes/<id>/spec.md`, written the way a human reads it (forward slashes).
 
     This is the one place this path is worked out: the generated spec reports it at the end,
-    `maintenance.write_spec` writes to it, and the maintenance node's directory is made next to it.
+    `insertion.write_spec` writes to it, and the inserted node's directory is made next to it.
     `.pf` and the `nodes/` under it are settled by `shared/ledger.py`.
     """
     return (_ledger().nodes_dir_for(project) / node_id / 'spec.md').as_posix()

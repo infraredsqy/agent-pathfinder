@@ -407,12 +407,14 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
     if due is not None:
         # The maintenance action is a close that also edits the graph, so it carries the same close
         # commands (`_close_commands` with no successor) ahead of its own: the graph edit runs after
-        # the closed node is marked, and the pin of the maintenance node comes last in the list.
+        # the closed node is marked. The graph edit itself pins no node -- it mints one, writes its
+        # spec and wires its edges -- and no dispatch follows it.
         return _maintenance_due(project, cycle, node_id, due, filled[0],
-                                # park=False: the line is NOT parked by this close -- the
-                                # maintenance node is pinned in its place and dispatched right
-                                # after, so a `cycle status inactive` here would strand it.
-                                # `filled[0]` is the node parked behind the maintenance node; the
+                                # park=False: the insertion pins nothing and no dispatch follows
+                                # it, so a `cycle status inactive` here would take the line out of
+                                # service and the next pick would never reach the inserted node.
+                                # The line has to stay in service for the usual ranking to pick it
+                                # up. `filled[0]` is the pick the new node stands in front of; the
                                 # rest of the fill is pinned here like any other close's fill.
                                 close_commands=_close_commands(project, cycle, node_id, outcome,
                                                                'continue', filled[1:], park=False),

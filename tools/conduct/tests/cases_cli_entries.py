@@ -51,7 +51,7 @@ class TestPipelineModuleEntries(Base):
         proc = run_argv([PIPELINE_PATH, 'contract'], check=False)
         self.assertEqual(proc.returncode, 0,
                          f'conduct_pipeline.py contract failed:\n{proc.stdout}\n{proc.stderr}')
-        for name in ('dispatch', 'open_node', 'maintenance_due', 'stop_pipeline', 'wait', 'no_cycle'):
+        for name in ('dispatch', 'open_node', 'insert_node', 'stop_pipeline', 'wait', 'no_cycle'):
             self.assertIn(name, proc.stdout)
         for gone in ('verify_round', 'open_round', 'stage'):
             self.assertNotIn(gone, proc.stdout)

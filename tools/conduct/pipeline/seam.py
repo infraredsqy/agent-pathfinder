@@ -57,9 +57,10 @@ def capture(argv, cwd) -> str:
     """The entry's `_capture`: run one command and hand back its stdout.
 
     `run` throws stdout away, which is right for every command whose effect IS the point. Two callers
-    need the text: the maintenance channel's `dag-manage add` (the uuid it mints is only ever
-    printed) and `nodes._rank_ready_nodes` (the DAG's own ranking). Same bound, same loud failure on
-    a non-zero exit.
+    need the text: `insertion.read_new_node_id` (the uuid `dag-manage add` mints is only ever printed
+    on that command's stdout, and every insertion source goes through that one function) and
+    `nodes._rank_ready_nodes` (the DAG's own ranking). Same bound, same loud failure on a non-zero
+    exit.
 
     **A child process has exactly two roads, `run` and `capture`**: every module in the package goes
     through here, and none calls `subprocess` on its own -- patching these two names in the entry

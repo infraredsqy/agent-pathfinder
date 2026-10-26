@@ -13,8 +13,10 @@ because those are what a caller patches. The machinery is here:
                  from the step being built")
     nodes.py     the DAG ready set, the tag filter, and "which node next"
     prompts.py   what a dispatch prompt says (the invocation line, and the node's text)
+    insertion.py the core mechanism that puts a node into the graph: mint its uuid, write its spec,
+                 wire its edges -- a graph edit only, never a session
     maintenance.py the maintenance channel: the reading, the lines it is measured
-                 against, and the graph edit that puts a maintenance node in between
+                 against, and the declaration of the node it inserts
     actions.py   state -> an action package (dispatch / wait / ask_user / stop)
     planner.py   `plan()`: the pure decision, including the node's own close
     writer.py    `apply()` / `record()`: run the commands, and enforce the apply contract
@@ -34,6 +36,7 @@ from . import store  # noqa: F401
 from . import instruct  # noqa: F401
 from . import nodes  # noqa: F401
 from . import prompts  # noqa: F401
+from . import insertion  # noqa: F401
 from . import maintenance  # noqa: F401
 from . import actions  # noqa: F401
 from . import planner  # noqa: F401
@@ -45,7 +48,8 @@ from . import writer  # noqa: F401
 #: package -- the layers keep none of their own, so there is no second list to drift from this one.
 __all__ = [
     # the layers themselves, for a caller that wants to poke at one of them
-    'seam', 'store', 'instruct', 'nodes', 'prompts', 'maintenance', 'actions', 'planner', 'writer',
+    'seam', 'store', 'instruct', 'nodes', 'prompts', 'insertion', 'maintenance', 'actions',
+    'planner', 'writer',
 
     # store: the read layer, and the door to the session notes under `.pf/meta/sessions/`
     'ledger_dir', 'meta_dir', 'load_state', 'load_signal', 'load_dag',
@@ -71,15 +75,20 @@ __all__ = [
     # prompts: what a dispatch prompt says
     'write_prompt_file', 'build_prompt_text', 'mode_for', 'started_marker', 'launch_prompt_path',
 
+    # insertion: the core mechanism behind every inserted node (mint the id, write the spec, wire
+    # the edges) -- one implementation, whatever the source
+    'INSERT_ACTION', 'NEW_NODE', 'ADD_MARKER', 'insert', 'mint', 'read_new_node_id', 'write_spec',
+    'is_add_slot', 'fill', 'fill_all',
+
     # maintenance: the maintenance channel
-    'READING_KEYS', 'MAINTENANCE_ACTION', 'METRICS', 'crossed', 'reading_of',
-    'thresholds_for', 'asked_readings', 'pool_weight', 'insertion', 'read_new_node_id',
-    'maintenance_spec', 'maintenance_title', 'substitute',
+    'READING_KEYS', 'METRICS', 'crossed', 'reading_of', 'insert_into',
+    'thresholds_for', 'asked_readings', 'pool_weight',
+    'maintenance_spec', 'maintenance_title', 'maintenance_tag',
     'ISSUE_REPAIR_KEY', 'ISSUE_REPAIR_OFF', 'ISSUE_REPAIR_VALUES', 'ISSUE_REPAIR_DEFAULT',
     'issue_repair_on',
 
     # actions: state -> an action package, and an action package as the caller reads it
-    '_ask', '_dispatch_many', '_maintenance_due', 'attention_items', '_ticket_wait',
+    '_ask', '_dispatch_many', '_insert_node', '_maintenance_due', 'attention_items', '_ticket_wait',
     '_retry_wait', '_sessions_wait', '_close_commands', '_stop_action', 'render_action',
 
     # planner: plan() and the node's own close
@@ -96,7 +105,7 @@ __all__ = [
 # with `__all__`, and a name that appears in one and not the other is exactly the drift this split
 # has to avoid -- so a name nobody defines is a loud ImportError at load time, not a missing
 # attribute later.
-_LAYERS = (store, instruct, nodes, prompts, maintenance, actions, planner, writer)
+_LAYERS = (store, instruct, nodes, prompts, insertion, maintenance, actions, planner, writer)
 
 for _name in __all__:
     if _name in globals():

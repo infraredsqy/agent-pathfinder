@@ -6,7 +6,7 @@ module is the one place that gives it an entrance.
 
 **The judgement happens at the close.** `_close_own_node` asks this module, once, at the `--after`
 settle: read each metric's number, compare it with the lines this line carries in its own policies,
-and, if a line is crossed, hand back the action that puts a maintenance node between the node just
+and, if a line is crossed, hand back the insertion that puts a maintenance node between the node just
 closed and the node the close picked. Where a number comes from is the metric's own `source`: the
 test suite's wall clock travels in the worker's ticket (`reading.test_seconds`), while the issue
 pool's weighted debt is read from the tool that owns the pool (`pf issue weight`).
@@ -21,30 +21,20 @@ crossed line inserts nothing (`issue_repair_on`, the key `pf config` owns). Defa
 project that never writes the key keeps the behaviour above byte for byte. This module owns what the
 words mean; the layers, the default and the words `set` accepts are `pf config`'s.
 
-**The graph edit is commands, and never a write from here.** `insertion()` builds them in the DAG
-tool's own vocabulary (`undepend` / `add` / `depend` / `cycle hold`) and `writer.apply` runs
-them: `plan()` stays a pure reader, and running the commands in one place is what keeps it that way. The
-new node's uuid does not exist until `dag-manage add` has run, so the commands are written against
-the `NEW_NODE` placeholder and the uuid is filled in afterwards -- `writer._capture_new_node` runs
-that one command through the seam's `capture`, the same read-the-child's-stdout move
-`nodes._rank_ready_nodes` already makes for the ranking.
+**The graph edit is commands, and never a write from here.** What this channel inserts is declared
+in `insert_into` (its title, its tags, its generated spec, and the place between the node just closed
+and the node the close had picked) and built by `insertion.insert`, the core mechanism every
+insertion source shares; `writer.apply` is the one thing that runs it. `plan()` stays a pure reader,
+which is what running the commands in one place buys. **An insertion is a graph edit only**: no
+session is opened and the line's hand is not moved (`insertion.py`) -- the pick, one step later,
+decides whether this node is the next one to run.
 """
 
 from __future__ import annotations
 
-import json
-import re
-from pathlib import Path
-
-from . import seam
+from . import insertion, seam
 from .nodes import node_spec_path
 from .store import POLICY_NUMBERS, cycle_policy, load_config, load_dag
-
-
-#: The action this module's insertion is handed over as. Registered in `conduct_pipeline.ACTIONS` and
-#: handled by `writer.apply` / `writer.record` exactly like `dispatch` -- the difference is only
-#: WHICH node is pinned (the one just inserted, not the one the close picked first).
-MAINTENANCE_ACTION = 'maintenance_due'
 
 
 def _reading_key(metric: dict) -> str:
@@ -107,24 +97,6 @@ METRICS = (
 #: The ticket-sourced readings, in METRICS order: the ones a worker is asked for. `asked_readings`
 #: narrows this to the lines a given cycle actually carries.
 READING_KEYS = tuple(metric['reading'] for metric in METRICS if metric['source'] == 'ticket')
-
-#: `dag-manage` prints its own uuid; nothing on this side can know it before the child has run, so the
-#: maintenance node starts life under this placeholder name. The chain from here to the sweep, and it
-#: is this long on purpose:
-#:
-#:   1. `insertion` writes the graph edit in terms of it (`depend` / `undepend` / `cycle hold`), and
-#:      `actions._maintenance_due` builds the action around it -- `node_id`, the prompt file's path
-#:      (`meta/launch/<cycle>/%DUID%/prompt.txt`) and the invocation line all name the placeholder.
-#:   2. `writer.apply` writes that placeholder prompt, then runs `add` in the slot `ADD_MARKER` marks.
-#:      `_capture_new_node` reads the uuid off its stdout and rebinds `node_id` / `prompt` to it.
-#:   3. The action is a maintenance_due, which `apply` re-plans into the dispatch behind it: that
-#:      recursion is what writes the REAL node's prompt file (`meta/launch/<cycle>/<uuid>/prompt.txt`).
-#:   4. The placeholder's launch directory stays behind. `writer._prune_launch_dirs` sweeps the launch
-#:      dirs of the nodes a cycle no longer holds, on the next successful spawn.
-NEW_NODE = '%DUID%'
-#: The slot marker `insertion` leaves where `add` belongs in the command list.
-ADD_MARKER = '%ADD%'
-_UUID_PRINTED = re.compile(r'Node created:\s*([0-9a-fA-F-]{8,})')
 
 
 # ── the reading: what the worker reported ────────────────────────────────────
@@ -294,7 +266,7 @@ def crossed(project, cycle: dict | None, sig: dict | None, dag: dict | None = No
             hit = {**metric, 'value': value, 'at': line}
             hit['title'] = maintenance_title(hit)
             # A CALLABLE, not the text: the node's uuid decides where its spec lands, and the uuid
-            # does not exist until `dag-manage add` has run (`writer._capture_new_node`).
+            # does not exist until `dag-manage add` has run (`insertion.mint`).
             hit['spec_of'] = lambda node_id, _hit=hit: maintenance_spec(
                 _hit, node_spec_path(project, node_id))
             return hit
@@ -427,98 +399,33 @@ def maintenance_spec(hit: dict, spec_path: str) -> str:
     )
 
 
-def write_spec(project, node_id: str, spec: str) -> Path:
-    """Put the generated spec in the new node's ledger directory.
+# ── the declaration: this channel's insertion, as one call ──────────────────
 
-    `dag-manage add` carries the text (so the graph row's description says what the node is for) but
-    creates only the empty directory: what a node's session reads is `spec.md`, and by the time the
-    session boots the graph edit is long over. Writing it here -- from the same `add` step, with the
-    uuid the child just minted -- is what keeps `plan()` a pure reader: the planner builds the text,
-    `apply` is the only thing that touches a file.
+def insert_into(project, cycle: dict | None, hit: dict, closed: str, target: str,
+                close_commands: list | None = None) -> dict:
+    """This channel's insertion, declared in one place: what to insert, and where it goes.
 
-    `node_id` comes straight from the child process's own output, so it is checked before it reaches
-    a path: a uuid from anywhere is still a uuid.
+    Everything here is this channel's own answer -- the title, the metric's tag (the dedup reads it
+    back), the line's tags, the generated spec, and the place: between the node just closed and the
+    node the close had already picked. The three steps that turn a declaration into a node (mint the
+    uuid, write the spec, wire the edges) are `insertion.py`'s, and every insertion source gets them
+    from there -- a source never re-implements them.
+
+    The line's own tags ride on the node because the pick is a SEPARATE step now: the inserted node
+    is chosen by the usual ranking under some line's filter set, and a node carrying only the metric
+    tag would be invisible to the very line that asked for it. Which lines may take it is not decided
+    here: the tags say exactly what the line that crossed the threshold answers to.
     """
-    if not re.fullmatch(r'[0-9a-fA-F-]{36}', node_id or ''):
-        raise RuntimeError(f'refusing to write a spec under a node id that is not a uuid: '
-                           f'{node_id!r}')
-    path = Path(node_spec_path(project, node_id))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(spec, encoding='utf-8')
-    return path
+    return insertion.insert(
+        project,
+        title=maintenance_title(hit),
+        tags=[maintenance_tag(hit['reading']), *_line_tags(cycle)],
+        spec_of=hit['spec_of'],
+        after=closed, before=target,
+        close_commands=close_commands,
+    )
 
 
-# ── the graph edit, as commands ──────────────────────────────────────────────
-
-def insertion(project, closed: str, target: str, cycle_id: str, hit: dict,
-              spec_of, close_commands: list | None = None) -> dict:
-    """The whole graph edit as one package: the command list, and the `add` at the head of it.
-
-    The list, in order, and it is the order the pipeline and the graph tool both demand rather than
-    the order the picture reads:
-
-      1. `cycle close` / `dag-manage status` -- close the node and mark it in the DAG, BEFORE the new
-         node is created: the dedup judgement reads the graph and an unfinished node must never be
-         what stands between a threshold and its own maintenance node.
-      2. `add` -- the maintenance node, with its title and its generated spec. Its stdout is the only
-         place its uuid appears, so `writer.apply` runs it through `seam.capture` -- which is why the
-         command is also handed back separately, as `add_command`: the caller runs it after the close
-         commands, reads the uuid, and drops it from the list it runs next.
-      3. `undepend <target> <closed>` -- drop the old direct edge. It frequently does not exist
-         (being ready only asks that every dependency be completed or absent), and dropping an edge
-         that is not there is a no-op. It has to come before the new edges: while it is still in
-         place, `closed -> maintenance` plus `maintenance -> target` closes a cycle through the old
-         edge, and `dag-manage` refuses a graph with a cycle in it.
-      4. `depend` -- the two new edges: the maintenance node is the closed node's direct dependent,
-         and the target waits for it. (`add --depends-on` is deliberately not used: those edges go in
-         after the old one is gone, for the same reason.)
-      5. `cycle hold` -- the cycle is pinned on the maintenance node. This is one write into
-         the cycle's hand, and it has to name the maintenance node on the first try; the line's
-         the other nodes it holds are untouched.
-    """
-    title = maintenance_title(hit)
-    spec = spec_of(NEW_NODE)
-    add = seam.dag('add', title, '--tags', maintenance_tag(hit['reading']), '--desc',
-                   # The spec travels as a positional argument rather than as a shell string:
-                   # `seam.dag` returns an argv LIST, so subprocess quotes it. Encoding it by hand
-                   # would put a second quoting convention between the tool and the child, and the
-                   # child is Python.
-                   json.dumps(spec, ensure_ascii=False, separators=(',', ':')))
-    return {
-        'title': title, 'spec': spec, 'add_command': add,
-        'commands': list(close_commands or []) + [
-            [ADD_MARKER],                # where `add` belongs; `writer.apply` runs the real argv here
-            seam.dag('undepend', target, closed),
-            seam.dag('depend', NEW_NODE, '--on', closed),
-            seam.dag('depend', target, '--on', NEW_NODE),
-            seam.cmd('cycle', 'hold', cycle_id, NEW_NODE),
-        ],
-    }
-
-
-def is_add_slot(argv) -> bool:
-    """Is this the marker slot where `add` belongs? (`writer.apply` runs the real argv in its place.)"""
-    return len(argv) == 1 and str(argv[0]) == ADD_MARKER
-
-
-def _new_node_id(stdout: str) -> str:
-    """The uuid `dag-manage add` printed, or a loud failure (the close is half-applied by then)."""
-    found = _UUID_PRINTED.search(stdout or '')
-    if not found:
-        raise RuntimeError(f'dag-manage add did not report a node id; its output was: {stdout!r}')
-    return found.group(1)
-
-
-def substitute(argv, node_id: str) -> list:
-    """The placeholder in an argv, replaced by the uuid the child actually minted."""
-    return [str(part).replace(NEW_NODE, node_id) for part in argv]
-
-
-def read_new_node_id(project, argv) -> str:
-    """Run `add` and read the uuid it printed on its stdout.
-
-    Captured rather than run through the seam's `run`: `run` discards stdout, and the uuid only
-    exists in that stdout. This is the same move `nodes._rank_ready_nodes` makes to read
-    `dag-manage list` -- the tool prints the fact, so the fact is read off the tool.
-    """
-    return _new_node_id(seam.capture(argv, project))
+def _line_tags(cycle: dict | None) -> list:
+    """The filter set of the line that asked for this insertion, read as it is written."""
+    return [t for t in ((cycle or {}).get('tags') or []) if isinstance(t, str)]

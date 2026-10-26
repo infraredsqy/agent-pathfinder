@@ -234,9 +234,8 @@ class TestTheDependencyVerdict(ProjectCase):
         self.assertEqual([self.D1, self.D2], self.deps())
 
     def test_a_dependency_that_is_absent_while_the_node_is_here_is_a_no_op(self):
-        """The pipeline takes out an edge that is often not there when it inserts a maintenance node
-        (`maintenance.insertion` step 3), and that step wants exactly the quiet outcome of "no such
-        edge"."""
+        """The pipeline takes out an edge that is often not there when it inserts a node
+        (`insertion.insert`), and that step wants exactly the quiet outcome of "no such edge"."""
         code, out, err = run(self.root, 'undepend', OTHER, A)
 
         self.assertEqual(0, code, err or out)

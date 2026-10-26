@@ -4,8 +4,10 @@ The rule this file is built around: the judgement happens at the CLOSE, each met
 from wherever its `source` says (`test_seconds` from the ticket's `reading` key, `issue_pool_weight`
 from the issue tool that owns the pool), the lines come from the cycle's own policies, and a
 crossing line puts a maintenance node between the node just closed and the node the close had
-already picked. A project that configures no line gets the close it always got -- that is the
-regression this channel lives or dies by, and it is the first case here.
+already picked. **The insertion is a graph edit and nothing else**: no session is opened, no prompt
+is written and the line's hand is not moved -- the next dispatch picks the new node up by the usual
+ranking. A project that configures no line gets the close it always got -- that is the regression
+this channel lives or dies by, and it is the first case here.
 
 The side where this line really runs (the graph edit through real processes, a whole line walked
 to the end, the form the note's receiver sees) lives in `cases_maintenance_run.py`.
@@ -197,12 +199,14 @@ class TestMaintenanceChannel(Base):
     # ── crossing: the graph really grows a node, the edges are right, the new one is pinned ────────
 
     def test_a_crossed_line_inserts_a_node_between_the_close_and_its_pick(self):
-        """The reading reaches the line: the close's settle inserts a new node between the node just closed and
-        the node it had picked.
+        """The reading reaches the line: the close's settle inserts a new node between the node just closed
+        and the node it had picked -- **the graph and nothing else**.
 
-        One assertion pins four things: the graph grew one node, the two new edges are wired right, the
-        old **direct** edge is gone, and the pinned one is the node just inserted -- while the original
-        pick is still in the graph, still `todo`.
+        One assertion pins five things: the graph grew one node, the two new edges are wired right,
+        the old **direct** edge is gone, the answer is an insertion rather than a dispatch, and the
+        line put down only the node it closed -- its hand is empty, because an insertion pins
+        nothing. Which node runs next is the next dispatch's question
+        (`test_the_next_dispatch_picks_the_inserted_node`).
         """
         sb = coding_line(self, policies=[('test_seconds_limit', LINE)], reading=LINE + 40)
 
@@ -210,7 +214,7 @@ class TestMaintenanceChannel(Base):
 
         nodes = sb.dag()['nodes']
         self.assertEqual(len(nodes), 3, 'the maintenance node was not inserted')
-        made = sb.current_node()
+        made = action['node_id']
         self.assertNotIn(made, (NODE, NODE2))
 
         # the edges: old node → maintenance node → the original pick, and the old direct edge is gone
@@ -224,29 +228,34 @@ class TestMaintenanceChannel(Base):
         self.assertEqual(nodes[made]['status'], 'todo')
         self.assertEqual(sb.path_nodes(), [NODE])
 
-        # the walk is the same as dispatch: the prompt has landed, the action carries prompt_text / node_id
-        self.assertEqual(action['action'], 'dispatch')
-        self.assertEqual(action['node_id'], made)
-        self.assertTrue(action['prompt_text'])
-        self.assertTrue(Path(action['prompt']).is_file())
-        self.assertEqual(Path(action['prompt']).parent.name, made)
+        # an insertion is not a dispatch: no prompt, and the hand stays where the close left it
+        self.assertEqual(action['action'], 'insert_node')
+        self.assertNotIn('prompt', action)
+        self.assertNotIn('prompt_text', action)
+        self.assertEqual(sb.holding_ids(), [], 'an insertion must not pin a node')
+        self.assertEqual(sb.cycle()['status'], 'active', 'an insertion must not park the line')
 
-    def test_the_reported_prompt_path_is_what_the_writer_wrote(self):
-        """The prompt path the maintenance slot reports is word-for-word the one the writer computed.
+    def test_an_insertion_opens_no_session(self):
+        """The whole difference from a dispatch, read off the disk: no prompt file, no started stamp.
 
-        The new node's uuid only exists once `dag-manage add` has run, so this path is computed twice
-        in the closing pass: once when the prompt is written, once when it is reported to the caller.
-        The two must land on the same file.
+        The inserted node's launch directory does not exist at all. The prompt is written by the
+        dispatch that picks the node, one step later -- which is also why `next --after … --spawn`
+        cannot open a session here: the answer is not a dispatch.
         """
         sb = coding_line(self, policies=[('test_seconds_limit', LINE)], reading=LINE + 40)
 
         action = sb.close_round(NODE)
 
-        made = sb.current_node()
-        expected = pipeline.prompts.launch_prompt_path(sb.root, 'cyc', made)
-        self.assertEqual(Path(action['prompt']), expected)
-        self.assertTrue(expected.is_file())
-        self.assertEqual(sb.prompt_of(action), f'/pf-conduct {made} [pipeline]\n')
+        made = action['node_id']
+        launch = sb.root / '.pf' / 'meta' / 'launch' / 'cyc'
+        self.assertFalse((launch / made).exists(),
+                         f'an insertion wrote a prompt file for {made}: {launch / made}')
+        self.assertFalse(pipeline.started_marker(sb.root, 'cyc', made).is_file(),
+                         'an insertion stamped a session as started')
+        # what it DID write: the node's own text, where the one path says it lands
+        self.assertEqual(Path(action['spec']),
+                         Path(pipeline.nodes.node_spec_path(sb.root, made)))
+        self.assertTrue(Path(action['spec']).is_file())
 
     def test_the_generated_spec_lands_where_the_one_path_says(self):
         """Where the generated spec lands is settled in one place, `nodes.node_spec_path`.
@@ -256,9 +265,9 @@ class TestMaintenanceChannel(Base):
         """
         sb = coding_line(self, policies=[('test_seconds_limit', LINE)], reading=LINE + 40)
 
-        sb.close_round(NODE)
+        action = sb.close_round(NODE)
 
-        made = sb.current_node()
+        made = action['node_id']
         landed = Path(pipeline.nodes.node_spec_path(sb.root, made))
         self.assertTrue(landed.is_file(), f'{landed} is not where the writer said it would be')
         self.assertIn(f'(this spec lands at: {landed.as_posix()})',
@@ -273,12 +282,14 @@ class TestMaintenanceChannel(Base):
         self.assertEqual(['nodes.py'], sites)
 
     def test_a_crossed_line_only_defers_the_node_it_picked(self):
-        """A multi-slot line meets maintenance: only the picked slot is deferred, and the rest of the fill that
-        came up in the same pass is pinned as usual.
+        """A multi-slot line meets maintenance: only the picked slot is deferred, the rest of the fill that
+        came up in the same pass is pinned as usual, and the insertion takes no slot at all.
 
         The fill list is handed over whole (`parallel` minus what is still held), and the maintenance
         node stands in only for the picked slot; if nobody pins the rest of the list it just sits
-        empty -- those nodes are ready, yet neither held nor waiting in the graph for anyone.
+        empty -- those nodes are ready, yet neither held nor waiting in the graph for anyone. The
+        inserted node itself is NOT held: it waits in the graph for the next pick, which is what keeps
+        "insert" and "start running" apart.
         """
         sb = self.make()
         sb.add_node(NODE, 'Write code A', mode='auto', tags=['coding'])
@@ -295,23 +306,23 @@ class TestMaintenanceChannel(Base):
 
         nodes = sb.dag()['nodes']
         self.assertEqual(len(nodes), 4, 'the maintenance node was not inserted')
-        made = [u for u in nodes if u not in (NODE, NODE2, NODE3)][0]
+        made = action['node_id']
+        self.assertNotIn(made, (NODE, NODE2, NODE3))
         deferred = [u for u in (NODE2, NODE3) if nodes[u]['dependencies'] == [made]]
         self.assertEqual(len(deferred), 1, 'exactly one fill node waits behind the maintenance node')
         keep = [u for u in (NODE2, NODE3) if u != deferred[0]][0]
         self.assertEqual(nodes[keep]['dependencies'], [NODE], 'the rest of the fill is untouched')
         self.assertEqual(nodes[keep]['status'], 'todo')
-        self.assertEqual(sorted(sb.holding_ids()), sorted([keep, made]),
-                         'the maintenance node takes the freed slot; the rest of the fill stays')
-        self.assertEqual(sorted(n['node_id'] for n in action['nodes']), sorted([keep, made]))
+        self.assertEqual(sb.holding_ids(), [keep],
+                         'the rest of the fill keeps its slot, and the inserted node takes none')
 
     def test_the_inserted_node_carries_why_what_scope_and_a_mechanical_verdict(self):
         """The maintenance node's spec is generated by the tool: why it was inserted, the scope of this pass,
         and a mechanically judgeable completion rule."""
         sb = coding_line(self, policies=[('test_seconds_limit', LINE)], reading=LINE + 40)
 
-        sb.close_round(NODE)
-        made = sb.current_node()
+        action = sb.close_round(NODE)
+        made = action['node_id']
         spec = (sb.root / '.pf' / 'nodes' / made / 'spec.md').read_text(encoding='utf-8')
         node = sb.dag()['nodes'][made]
 
@@ -341,7 +352,7 @@ class TestMaintenanceChannel(Base):
         them, and that is where a human looks them up."""
         sb = coding_line(self, policies=[('test_seconds_limit', LINE)], reading=LINE + 5)
         action = sb.close_round(NODE)
-        made = sb.current_node()
+        made = action['node_id']
         spec = (sb.root / '.pf' / 'nodes' / made / 'spec.md').read_text(encoding='utf-8')
 
         self.assertEqual(len(sb.dag()['nodes']), 3)
@@ -357,17 +368,24 @@ class TestMaintenanceChannel(Base):
 
         self.assertEqual(len(sb.dag()['nodes']), 3)
 
-    def test_the_inserted_node_is_the_one_the_next_step_dispatches(self):
-        """Keep walking after the insert: ask the pipeline again and it dispatches the maintenance node, while
-        the deferred node still waits."""
-        sb = coding_line(self, policies=[('test_seconds_limit', LINE)], reading=LINE + 40)
-        sb.close_round(NODE)
-        made = sb.current_node()
+    def test_the_next_dispatch_picks_the_inserted_node(self):
+        """Keep walking after the insert: the next dispatch picks the maintenance node by the usual
+        ranking and writes its prompt, while the deferred node still waits.
 
-        again = sb.plan()
+        This is the other half of the split the insertion made: the graph grew a node, and WHICH node
+        runs next is a decision of the picking rules -- not of whoever inserted it.
+        """
+        sb = coding_line(self, policies=[('test_seconds_limit', LINE)], reading=LINE + 40)
+        inserted = sb.close_round(NODE)
+        made = inserted['node_id']
+
+        again = sb.next()
+
         self.assertEqual(again['action'], 'dispatch')
         self.assertEqual(again['node_id'], made)
+        self.assertEqual(sb.holding_ids(), [made], 'the pick is what pins it')
         self.assertIn(made, sb.prompt_of(again))
+        self.assertTrue(Path(again['prompt']).is_file())
         self.assertEqual(sb.dag()['nodes'][NODE2]['status'], 'todo')
 
 
@@ -401,15 +419,15 @@ class TestIssueRepairSwitch(Base):
         return sb
 
     def assert_inserted(self, sb, action):
-        """It was inserted: the graph grew a node, the two edges are wired right, and the pinned one is it."""
+        """It was inserted: the graph grew a node, the two edges are wired right, no hand moved."""
         nodes = sb.dag()['nodes']
         self.assertEqual(len(nodes), 3, 'the maintenance node was not inserted')
-        made = sb.current_node()
+        made = action['node_id']
         self.assertNotIn(made, (NODE, NODE2))
         self.assertEqual(nodes[made]['dependencies'], [NODE])
         self.assertEqual(nodes[NODE2]['dependencies'], [made])
-        self.assertEqual(action['action'], 'dispatch')
-        self.assertEqual(action['node_id'], made)
+        self.assertEqual(action['action'], 'insert_node')
+        self.assertEqual(sb.holding_ids(), [], 'an insertion pins nothing')
 
     def assert_not_inserted(self, sb, action):
         """Not inserted: the close walks its original pick as usual, and the graph grows nothing."""
@@ -592,9 +610,9 @@ class TestMaintenanceScope(Base):
         sb.write_signal('cyc', NODE, 'completed', 'done', {'deliverable': 'x'})
         seed_pool(sb, {'id': 'debt-p0', 'severity': 'P0'}, {'id': 'debt-p2', 'severity': 'P2'})
 
-        sb.close_round(NODE)
+        inserted = sb.close_round(NODE)
 
-        made = sb.current_node()
+        made = inserted['node_id']
         nodes = sb.dag()['nodes']
         self.assertEqual(len(nodes), 3)
         self.assertEqual(nodes[made]['dependencies'], [NODE])
@@ -622,13 +640,15 @@ class TestMaintenanceDedup(Base):
         more -- the fixer is one."""
         sb = coding_line(self, policies=[('test_seconds_limit', LINE)], reading=LINE + 40)
         first = sb.close_round(NODE)
-        self.assertEqual(first['action'], 'dispatch')
-        made = sb.current_node()
+        self.assertEqual(first['action'], 'insert_node')
+        made = first['node_id']
         self.assertNotIn(made, (NODE, NODE2))
         self.assertEqual(sb.node(made)['status'], 'todo')
 
-        # this time the maintenance node itself is closed, and its note reports another over-the-line
-        # number: no second insert, and the close walks on.
+        # the next dispatch is what pins it; then its own close reports another over-the-line number:
+        # no second insert, and the close walks on.
+        sb.next()
+        self.assertEqual(sb.holding_ids(), [made])
         sb.write_signal('cyc', made, 'completed', 'still over',
                         {'deliverable': 'x', 'reading': {'test_seconds': LINE + 10}})
         second = sb.close_round(made)
@@ -657,6 +677,8 @@ class TestMaintenanceDedup(Base):
 
         # the maintenance node ran (its reading is under the line) → its work is delivered and this metric
         # is insertable again
+        sb.next()                                  # the dispatch that pins what the insertion created
+        self.assertEqual(sb.holding_ids(), [made])
         sb.write_signal('cyc', made, 'completed', 'fixed',
                         {'deliverable': 'x', 'reading': {'test_seconds': 10}})
         sb.close_round(made)

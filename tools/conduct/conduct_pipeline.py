@@ -126,11 +126,12 @@ def _run(cmd: list, cwd: Path) -> None:
 def _capture(cmd: list, cwd: Path) -> str:
     """Run one command and hand back its stdout.
 
-    `_run` discards stdout on purpose -- a command's effect is what the pipeline wants from it. The
-    maintenance channel's `dag-manage add` is the one command whose EFFECT is a fact that only
-    appears in its output (the uuid it minted), so that one call needs the text as well. Same bound,
-    same loud failure, and it lives here next to `_run` because it is the same seam: a caller
-    patching child processes patches this too.
+    `_run` discards stdout on purpose -- a command's effect is what the pipeline wants from it.
+    `dag-manage add` is the one command whose EFFECT is a fact that only appears in its output (the
+    uuid it minted), and `insertion.read_new_node_id` -- the core mechanism every insertion source
+    goes through -- is the one place that needs the text. Same bound, same loud failure, and it lives
+    here next to `_run` because it is the same seam: a caller patching child processes patches this
+    too.
 
     These two functions are **the only two ways to a child process** (two halves of one seam):
     every module in the package reaches them through `seam.run` / `seam.capture`, and none of them
@@ -253,11 +254,10 @@ ACTIONS = {
                      'is what does this; `next --spawn` is the same call done in one go)',
     'open_node':     'the tool is pinning the next node itself -- what the caller reads is already '
                      'that slot\'s dispatch',
-    'maintenance_due': 'a maintenance metric went over the line and the tool has just inserted a '
-                       'maintenance node into the graph and pinned it -- the walk is like '
-                       '`dispatch`: the prompt has landed and it can be dispatched, the only '
-                       'difference being that the pinned node is the newly inserted one (after '
-                       'committing and pushing, `dispatch <cycle>` all the same)',
+    'insert_node':   'a new node has just been put into the graph: it is created, its spec is '
+                     'written and its edges are wired, and **nothing was opened** -- no session, no '
+                     'prompt file, and the new node is not pinned. Which node runs next is the next '
+                     'dispatch\'s decision (`next --spawn` picks it up by the usual ranking)',
     'stop_pipeline': 'nothing left to do / somebody called a halt / this line is not in service -- '
                      'close out and tell the user how it ended',
     'wait':          'it is not yet time to act -- read note / close_with, never poll',

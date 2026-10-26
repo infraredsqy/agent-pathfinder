@@ -28,10 +28,10 @@ NODE3 = 'cccccccc-3333-4333-8333-cccccccccccc'
 # No `pause`: nothing produces one. The vocabulary lives in `conduct_pipeline.ACTIONS`; these names are
 # the ones a caller must be ready to handle, and `test_actions_are_the_whole_vocabulary` keeps the
 # two in step. `open_node` is the planner's own step (it carries the `cycle hold` command), and
-# `maintenance_due` is the maintenance channel's own step: that one inserts a
-# maintenance node and pins the cycle on it, then `apply` re-plans into its dispatch. No caller ever
-# receives either of them.
-ACTION_VOCABULARY = {'dispatch', 'open_node', 'maintenance_due', 'stop_pipeline', 'wait', 'ask_user',
+# `insert_node` is an insertion source's step (the graph grew a node; nothing was opened and the new
+# node is not pinned). No caller ever receives `open_node`, and `insert_node` reaches one only
+# as the answer to its own closing call -- what follows it is the next dispatch's pick.
+ACTION_VOCABULARY = {'dispatch', 'open_node', 'insert_node', 'stop_pipeline', 'wait', 'ask_user',
                      'no_cycle'}
 
 

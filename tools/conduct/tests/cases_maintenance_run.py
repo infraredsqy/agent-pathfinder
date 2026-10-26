@@ -33,9 +33,12 @@ class TestMaintenanceCli(Base):
     the cases above take that fast path; capturing a child's output is a different thing on the two
     paths -- this one puts the whole closing pass back on the real CLI, so the new node's uuid is
     printed by a real process and read back by `_capture`.
+
+    It also pins the split the whole feature is about, through the shipped surfaces: the closing call
+    inserts and **opens nothing**, and the NEXT call is the one that picks the node up.
     """
 
-    def test_the_graph_edit_runs_through_the_real_processes(self):
+    def test_the_insertion_opens_nothing_and_the_next_dispatch_picks_it(self):
         sb = self.make(cli=True)
         sb.add_node(NODE, 'Write code A', mode='auto', tags=['coding'])
         sb.add_node(NODE2, 'Write code B', mode='auto', tags=['coding'], deps=[NODE])
@@ -47,22 +50,56 @@ class TestMaintenanceCli(Base):
 
         action, proc = sb.next_cli('--after', NODE)
 
+        # 1. the close inserts: the node, its spec, and the two edges, through the real processes
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(action['action'], 'dispatch')
+        self.assertEqual(action['action'], 'insert_node')
         nodes = sb.dag()['nodes']
         self.assertEqual(len(nodes), 3, f'the maintenance node was not inserted: {action}')
         made = action['node_id']
         self.assertEqual(nodes[made]['dependencies'], [NODE])
         self.assertEqual(nodes[NODE2]['dependencies'], [made])
+        self.assertTrue((sb.root / '.pf' / 'nodes' / made / 'spec.md').is_file())
+        # 2. ... and opens nothing: no prompt, no pin, nothing on the line
+        self.assertEqual(sb.holding_ids(), [], 'the insertion pinned a node')
+        self.assertFalse((sb.root / '.pf' / 'meta' / 'launch' / 'cyc' / made).exists())
+        self.assertNotIn('prompt', action)
+        # 3. the NEXT call is what dispatches it -- the pick decides, not the insertion
+        dispatched, proc = sb.next_cli()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(dispatched['action'], 'dispatch')
+        self.assertEqual(dispatched['node_id'], made)
+        self.assertEqual(sb.current_node(), made)
         # Dispatching stops at the prompt file: that is what `dispatch <cycle>` reads, and this case
         # asserts exactly "the file is there, holding the maintenance node's invocation line". **No
         # `dispatch` call and no `--spawn`** -- that path works and would really open a session (the
         # dispatch-semantics layer is guarded by `TestDispatchVerb`'s fake spawner).
-        self.assertTrue(Path(action['prompt']).is_file())
-        self.assertEqual(Path(action['prompt']).parent.name, made)
-        self.assertIn(made, Path(action['prompt']).read_text(encoding='utf-8'))
-        self.assertTrue((sb.root / '.pf' / 'nodes' / made / 'spec.md').is_file())
-        self.assertEqual(sb.current_node(), made)
+        self.assertTrue(Path(dispatched['prompt']).is_file())
+        self.assertEqual(Path(dispatched['prompt']).parent.name, made)
+        self.assertIn(made, Path(dispatched['prompt']).read_text(encoding='utf-8'))
+
+    def test_even_a_spawn_asked_for_opens_nothing(self):
+        """`next --after <node> --spawn` still opens no session when the close inserted a node.
+
+        The one flag that makes a closing call one-and-done keys off the answer being a dispatch, and
+        an insertion is not one: the graph grows, and the dispatch path is never walked. This is the
+        invariant at its sharpest -- not even a caller asking for a session gets one.
+        """
+        sb = self.make()
+        sb.add_node(NODE, 'Write code A', mode='auto', tags=['coding'])
+        sb.add_node(NODE2, 'Write code B', mode='auto', tags=['coding'], deps=[NODE])
+        sb.start_cycle(tags=['coding'])
+        sb.set_policy('cyc', 'test_seconds_limit', 60)
+        sb.next()
+        sb.write_signal('cyc', NODE, 'completed', 'done',
+                        {'deliverable': 'x', 'reading': {'test_seconds': 400}})
+
+        action, proc = sb.spawn_next('--after', NODE)
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(action['action'], 'insert_node')
+        self.assertNotIn('spawned', action, 'the closing call opened a session for an insertion')
+        self.assertEqual(len(sb.dag()['nodes']), 3)
+        self.assertEqual(sb.holding_ids(), [])
 
 
 class TestMaintenanceDrive(Base):
@@ -96,20 +133,20 @@ class TestMaintenanceDrive(Base):
         # the inserted node is an ordinary node: it is dispatched itself and delivers its own note
         self.assertEqual(sb.read_signal('cyc', maintenance_node)['status'], 'completed')
 
-    def test_a_plain_run_never_produces_a_maintenance_action(self):
-        """With no threshold, no maintenance action ever appears on the line: this channel is additive, and
+    def test_a_plain_run_never_produces_an_insertion_action(self):
+        """With no threshold, no insertion ever appears on the line: this channel is additive, and
         shut it leaves no trace at all."""
         sb = self.make()
         sb.add_chain(2)
         sb.start_cycle(tags=['coding'])
         _, driver = self.run_to_stop(sb)
 
-        self.assertNotIn('maintenance_due', driver.kinds())
+        self.assertNotIn('insert_node', driver.kinds())
         self.assertEqual(len(sb.dag()['nodes']), 2)
 
     def test_the_closing_call_keeps_the_worker_out_of_the_graph_edit(self):
-        """The closing call returns only `dispatch` and `stop_pipeline` walks: the graph edit is the tool's
-        business, and the caller holds no command it could run again (invariant 6)."""
+        """The closing call hands back an insertion and no commands the caller could run again
+        (invariant 6): the graph edit is the tool's business."""
         sb = coding_line(self, policies=[('test_seconds_limit', 60)], dispatch=False)
         sb.next()
         sb.write_signal('cyc', NODE, 'completed', 'done',
@@ -117,21 +154,22 @@ class TestMaintenanceDrive(Base):
 
         action = sb.close_round(NODE)
 
-        self.assertEqual(action['action'], 'dispatch')
+        self.assertEqual(action['action'], 'insert_node')
         self.assertFalse(action.get('commands'), 'the caller must have nothing left to run')
         # the tool's own two intermediates do not leak out
         self.assertNotIn('add_command', action)
         self.assertNotIn('spec_of', action)
         self.assertTrue(action['applied'])
         # what this settle did is checkable line by line: create the node, drop the old edge, wire the two
-        # new edges, pin the pointer
+        # new edges -- and NOT one `cycle hold`: the insertion does not move the line's hand
         did = ' '.join(action['did'])
         self.assertIn('dag-manage.py add', did)
         self.assertIn('undepend', did)
         self.assertIn('depend', did)
-        self.assertIn('cycle hold', did)
-        # the inserted node is recorded as the node this pass opened
-        self.assertEqual(action['opened_node'], sb.current_node())
+        self.assertNotIn('cycle hold', did, 'an insertion must not pin a node')
+        # the node it made is the node it reports, and nothing was opened for it
+        self.assertNotIn('opened_node', action, 'an insertion is not an open')
+        self.assertEqual(sb.holding_ids(), [])
 
     def test_the_worker_can_report_a_reading_through_the_real_handoff(self):
         """`reading` is an ordinary `outputs` key on the note: `handoff.py` takes it verbatim.
@@ -151,9 +189,9 @@ class TestMaintenanceDrive(Base):
         ticket = sb.read_signal('cyc', NODE)
         self.assertEqual(ticket['outputs']['reading'],
                          {'test_seconds': 400, 'issue_pool_weight': 3})
-        sb.close_round(NODE)
+        inserted = sb.close_round(NODE)
         self.assertEqual(len(sb.dag()['nodes']), 3)
-        made = sb.current_node()
+        made = inserted['node_id']
         # only the metric that crossed comes in; the one that did not stays where it is
         spec = (sb.root / '.pf' / 'nodes' / made / 'spec.md').read_text(encoding='utf-8')
         self.assertIn('test_seconds', spec)

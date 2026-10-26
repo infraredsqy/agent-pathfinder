@@ -33,9 +33,9 @@
   (`dsh-spawn.ps1` on DSH, `zcode-spawn.ps1` on ZCode) and opens **real sessions** that burn
   tokens; the ZCode one also writes rows into the user's installed
   `~/.zcode/v2/tasks-index.sqlite`. Tests, debugging and sample runs never go through it.
-- To verify advancing logic, stop at "the action came back and the prompt text landed on disk". To
-  assert dispatch semantics, use a fake spawner (precedent: `TestOneSpawner` in
-  `tests/cases_cli_entries.py`).
+- To verify advancing logic, stop at "the action came back and what it wrote landed on disk" — a
+  dispatch's prompt, an insertion's spec. To assert dispatch semantics, use a fake spawner
+  (precedent: `TestOneSpawner` in `tests/cases_cli_entries.py`).
 - A mechanism change is always verified in a **one-shot sandbox project**: copy the graph's records
   into a git repo under temp (or build a fake graph outright), driven by a fake spawner; on a real
   project only read-only queries are allowed (`cycle list` / `cycle current` / `--plan`) — no
