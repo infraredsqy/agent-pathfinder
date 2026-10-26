@@ -219,6 +219,22 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
     """Turn the worker's own closing call into the mechanical close: record the step, fill the
     slots the close freed, or stop.
 
+    **One ladder, one entry.** Every question a close asks -- did it deliver, may the line run on,
+    who fills the freed slots, and why it stopped -- is answered in this one name, for a line that
+    holds one node and for one that holds several alike. How many slots the line holds at once
+    (`parallel`) and how many are still in hand (`others`) are parameters, and they decide four
+    things:
+
+      * how many nodes this close opens -- one per free slot (see the fill below);
+      * where the stop rule sits -- a one-slot line asks it whatever the graph has next (that close
+        is its whole round), a line holding several asks it only when the refill comes up empty (a
+        slot that can be refilled carries the line on);
+      * the shape of the answer -- a one-slot line's open names its one node, a list close's carries
+        the `nodes` list its dispatch is built from;
+      * which reading the blocked reason uses when nothing was filled -- a one-slot close counts
+        this node as delivered, so the dependents it just un-blocked are the work it names, while a
+        list close reads the graph as it stands on disk (the asymmetry is deliberate).
+
     The outcome comes from the signal the worker already wrote ("completed" = it delivered,
     "failed"/"stopped" = it did not), so there is always an answer and nobody to ask. The stop rule
     is computed and enforced here: with no boundary session left, a `--continue` that contradicts
@@ -226,9 +242,9 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
 
     The other nodes this line holds stay in hand -- each one is settled by its own worker's call,
     and a settle only ever moves its own node. What this call adds on top is the FILL: the close
-    frees one slot (`parallel` minus the slots still in hand), and a slot that is free is filled
-    from the ready set
-    right here, so a multi-node line keeps itself running without a second driver.
+    frees one slot per node it puts down (`parallel` minus the slots still in hand), and a slot that
+    is free is filled from the ready set right here, so a multi-node line keeps itself running
+    without a second driver.
 
     `line_active=False` -- this line is not in service (a human turned it inactive): closing is still
     the session's right (otherwise that node would stay pinned forever), but it records only. The
@@ -244,51 +260,55 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
     named = node_arg                    # the name a human typed; it may not travel on below
     spoken_name = named                 # the reason names it; clearing below does not affect it
     delivered = sig.get('status') == 'completed'
+    policy = cycle_policy(cycle)
     # A node that did not deliver is always shelved; whether to carry on is decided by this line's
     # `when_shelved` policy alone (default: stop).
-    policy_carries = cycle_policy(cycle).get('when_shelved') == 'continue'
+    policy_carries = policy.get('when_shelved') == 'continue'
     carry_on = delivered or policy_carries
     others = [x for x in _holding_ids(cycle) if x != node_id]
     if not line_active:
-        decision, node_arg, carry_on = 'stop', None, False
+        decision, named, carry_on = 'stop', None, False
     decision = decision or ('continue' if carry_on else 'stop')
     tags = cycle.get('tags') or []
-    slots = max(cycle_policy(cycle)['parallel'] - len(others), 0)
-    if not others and slots <= 1:
-        # A single-slot line (or one already full): there is no slot to fill, so take the single-node
-        # path -- it owns the human-readable sentence about whether the graph still has work. The
-        # multi-node path takes over only when there is a real move to make (fill one slot, or report
-        # who else is in hand).
-        return _close_last_node(project, cycle, node_id, sig, decision, named, note,
-                                policy_carries, line_active, decision_given, dag)
+    # How many slots this close may open, and whether this line fills them one at a time or several
+    # at once: the line's own `parallel` minus what is still in hand. These two numbers are the
+    # whole of the difference between a one-slot close and a list close.
+    parallel = policy['parallel']
+    slots = max(parallel - len(others), 0)
+    several = parallel > 1
 
+    # The close commands have not run yet, so the DAG still has this node `todo`. Reading it as
+    # completed is what un-blocks its dependents for this one question -- excluding it would only
+    # hide the node, and the fill would then miss the very nodes it just un-blocked.
+    assumed = [node_id] if delivered else []
+
+    # ── the fill: every free slot gets one node ──────────────────────────────
     filled: list = []
     spoke = ''
     if carry_on and decision == 'continue' and slots:
-        # The close commands have not run yet, so the DAG still has this node `todo`. Reading it as
-        # completed is what un-blocks its dependents for this one question -- excluding it would
-        # only hide the node, and the fill would then miss the very nodes it just un-blocked.
-        assumed = [node_id] if delivered else []
         if named:
+            # A hand-named node is taken whether or not the filter set covers it, and the note says
+            # so out loud: a filter silently swallowing a node somebody typed in full would hide the
+            # one decision a human just made.
             chosen = pick_node(project, named, exclude=node_id, exclude_many=others,
                                assume_completed=assumed, tags=tags, dag=dag)
+            if chosen is not None:
+                filled = [chosen]
             if chosen and not node_in_tag_scope(chosen, tags):
                 spoke = (f'Note: the named {chosen.get("title") or chosen["id"]}'
                          f' ({chosen["id"]}) is not in this cycle\'s filter set {list(tags)};'
                          f' you named it by hand, so it is taken as named.')
         else:
-            chosen = None
-            ranked = ranked_ready_nodes(project, limit=slots, exclude=node_id, exclude_many=others,
-                                        assume_completed=assumed, tags=tags, dag=dag)
-            filled = ranked
-        if chosen is not None:
-            filled = [chosen]
+            filled = ranked_ready_nodes(project, limit=slots, exclude=node_id,
+                                        exclude_many=others, assume_completed=assumed,
+                                        tags=tags, dag=dag)
 
+    # ── the stop rule: where it sits is the parameter above ──────────────────
     stop_why = ''
-    if carry_on and not filled:
-        # Nothing is being filled this round: either the close says stop, or the ready set has
-        # nothing. Only then does the stop rule decide -- a line with nodes still in hand and a slot
-        # to fill carries on regardless.
+    if carry_on and (not several or not filled):
+        # A one-slot line's close is its whole round, so the gate is asked whatever the graph has
+        # next. A line holding several asks only when nothing was filled: a slot that CAN be
+        # refilled carries the line on regardless.
         must_stop, why = stop_criterion(project, cycle, node_row(dag, node_id), dag=dag)
         if must_stop:
             decision, stop_why = 'stop', why
@@ -327,13 +347,16 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
             reason = f'this node did not deliver ({outcome}): {slipped}'
         elif stop_why:
             reason = f'{stop_why} ({note})' if note else stop_why
+            # The middle tier stops to wait for a human's "continue" -- stopping turns the line
+            # inactive, so hand over both commands (back in service, and carry on); otherwise
+            # "continue" would have to guess how to continue.
             if mode_for(node_id, dag) == 'checkpoint':
                 reason += (f'; to carry on: pf cycle status {cycle["id"]} active, '
                            f'then pf next --cycle {cycle["id"]} --spawn --json')
         elif named:
-            reason = (f'the node {node_arg} named by the instruction is not a ready node; '
+            reason = (f'the node {named} named by the instruction is not a ready node; '
                       f'stopping here')
-            outside = _named_node_outside_scope(dag, node_arg, tags)
+            outside = _named_node_outside_scope(dag, named, tags)
             if outside:
                 reason += (f'; it is also not in this cycle\'s filter set {list(tags)}'
                            f' (its tags={outside})')
@@ -343,17 +366,23 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
             reason = ('the human chose to stop at the close (--stop): the line goes back to you'
                       + (f' ({note})' if note else ''))
         elif not filled and carry_on:
-            # The fill came up empty: say which of the two reasons it was.
+            # Nothing is being filled: either this line still holds work (the baton is on those
+            # closes), or the graph has nothing it can pick -- and then say which of the two.
             if others:
                 reason = (f'{node_id[:8]} is closed; still holding '
                           f'{", ".join(x[:8] for x in others)}, their notes are collected as they '
                           f'arrive (pf next --after <node id> --json) -- this line stays in '
                           f'service, and on its own close that slot fills and dispatches.')
             else:
+                # What a one-slot line's close counts as delivered is this node: the dependents it
+                # just unblocked are the work the reader is looking for. A list close reads the
+                # graph as it stands on disk.
+                blocked_assumed = assumed if not several else ()
                 tagged = tag_blocked_ready_nodes(project, tags, exclude=node_id,
-                                                 exclude_many=others, dag=dag)
+                                                 exclude_many=others,
+                                                 assume_completed=blocked_assumed, dag=dag)
                 holding = holding_ready_nodes(project, exclude=node_id, exclude_many=others,
-                                              dag=dag)
+                                              assume_completed=blocked_assumed, dag=dag)
                 if tagged or holding:
                     reason = blocked_reason(project, tags, tagged, holding)
                 else:
@@ -388,155 +417,21 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
                                 close_commands=_close_commands(project, cycle, node_id, outcome,
                                                                'continue', filled[1:], park=False),
                                 extra_note=spoke)
-    return {'action': 'open_node', 'cycle': cycle['id'], 'node_id': filled[0]['id'],
-            'node_title': filled[0].get('title', ''),
-            'nodes': [n['id'] for n in filled],
-            'note': f'{node_id[:8]} closed; opening '
-                    + ', '.join(n.get('title') or n['id'] for n in filled)
-                    + (f'; {spoke}' if spoke else ''),
-            'follow': {'action': 'dispatch', 'cycle': cycle['id'],
-                       'node_id': filled[0]['id'], 'node_title': filled[0].get('title', '')},
-            'commands': cmds}
-
-
-def _close_last_node(project: Path, cycle: dict, node_id: str, sig: dict,
-                     decision: str | None, named: str | None, note: str,
-                     policy_carries: bool, line_active: bool,
-                     decision_given: bool = False, dag: dict | None = None) -> dict:
-    """Close the last node in a line's hand -- the fork away from the multi-node path: here the
-    question is whether the graph still has work.
-
-    The judgements match the multi-node path (the stop rule, the blocked reason,
-    `blocked_reason`/the stop on the last sentence), and an empty `others` comes here: the two cases
-    read separately and neither masks the other. `dag` is the one graph read at the close entry,
-    handed all the way down here.
-    """
-    dag = dag if dag is not None else load_dag(project)
-    delivered = sig.get('status') == 'completed'
-    tags = cycle.get('tags') or []
-    carry_on = delivered or policy_carries
-    spoken_name = named                 # the name a human typed: the reason names it; clearing
-                                        # below does not affect it
-    if not line_active:
-        decision, named, carry_on = 'stop', None, False
-    decision = decision or ('continue' if carry_on else 'stop')
-    # The close commands have not run yet, so the DAG still has this node `todo`. Reading it as
-    # completed is what un-blocks its dependents for this one question -- excluding it would only
-    # hide the node, and the close would then answer "nothing left" for the very graph whose next
-    # node it was supposed to pick. A node that did NOT deliver is shelved instead: it un-blocks
-    # nothing, so that read must leave it out of the ready set rather than assume it completed.
-    assumed = [node_id] if delivered else []
-    remaining = (ranked_ready_nodes(project, exclude=node_id, assume_completed=assumed, tags=tags,
-                                    dag=dag)
-                 if carry_on else [])
-    tagged = (tag_blocked_ready_nodes(project, tags, exclude=node_id, assume_completed=assumed,
-                                      dag=dag)
-              if carry_on and not remaining else [])
-    holding = (holding_ready_nodes(project, exclude=node_id, assume_completed=assumed, dag=dag)
-               if carry_on and not remaining else [])
-    blocked = tagged + holding
-
-    stop_why = ''
-    if carry_on:
-        must_stop, why = stop_criterion(project, cycle, node_row(dag, node_id), dag=dag)
-        if must_stop:
-            decision, stop_why = 'stop', why
-    next_node = None
-    spoke = ''
-    if carry_on and decision == 'continue':
-        next_node = pick_node(project, named, exclude=node_id, assume_completed=assumed, tags=tags,
-                              dag=dag)
-        if next_node is None:
-            decision = 'stop'
-        elif named and not node_in_tag_scope(next_node, tags):
-            spoke = (f'Note: the named {next_node.get("title") or next_node["id"]}'
-                     f' ({next_node["id"]}) is not in this cycle\'s filter set {list(tags)};'
-                     f' you named it by hand, so it is taken as named.')
-
-    # What the ticket said, kept verbatim on the path; every outcome that is not `completed` is a
-    # non-delivery for the DAG -- the node is shelved (its dependents stay parked) so a human decides
-    # whether to revive it. `stopped` is not a lesser failure: the work is equally not there.
-    outcome = 'completed' if delivered else (sig.get('status') or 'failed')
-    # The node this close shelves has to be named by this package itself: the DAG command has not
-    # run yet, so on disk it is still todo.
-    # (`outcome` is the note's verdict, `shelved` is a node status -- each has its own recipient, so
-    # do not mix them.)
-    shelved = [] if delivered else [node_id]
-
-    if not line_active:
-        # A line that is not in service: records only. Close this node, mark the DAG, then stop --
-        # not even the line's status is written.
-        reason = (f'cycle {cycle["id"]!r} is not active ({cycle.get("status")}): a close on this '
-                  f'line only records -- it closes {node_id[:8]} and marks the DAG, picks no next '
-                  f'node and dispatches nothing; the line keeps the status it was given.')
-        if spoken_name:
-            reason += f' The named node {spoken_name} was not opened.'
-        reason += f' To carry on: pf cycle status {cycle["id"]} active'
-        cmds = _close_commands(project, cycle, node_id, outcome, 'stop', None, park=False)
-        return _stop_action(project, cycle, reason, cmds, node_id=node_id, shelved_nodes=shelved,
-                            dag=dag)
-
-    cmds = _close_commands(project, cycle, node_id, outcome, decision,
-                           [next_node] if next_node else None)
-    if decision == 'stop' or next_node is None:
-        if not delivered and not policy_carries:
-            slipped = note or sig.get('summary') or '(no reason written)'
-            reason = f'this node did not deliver ({outcome}): {slipped}'
-        elif stop_why:
-            reason = f'{stop_why} ({note})' if note else stop_why
-            # The middle tier stops to wait for a human's "continue" -- stopping turns the line
-            # inactive, so hand over both commands (back in service, and carry on); otherwise
-            # "continue" would have to guess how to continue.
-            if mode_for(node_id, dag) == 'checkpoint':
-                reason += (f'; to carry on: pf cycle status {cycle["id"]} active, '
-                           f'then pf next --cycle {cycle["id"]} --spawn --json')
-        elif named:
-            reason = (f'the node {named} named by the instruction is not a ready node; '
-                      f'stopping here')
-            outside = _named_node_outside_scope(dag, named, tags)
-            if outside:
-                reason += (f'; it is also not in this cycle\'s filter set {list(tags)}'
-                           f' (its tags={outside})')
-        elif decision_given:
-            # A hand-given --stop: this reason has to say a human stopped it, and must not read as
-            # "the graph has no work left".
-            reason = ('the human chose to stop at the close (--stop): the line goes back to you'
-                      + (f' ({note})' if note else ''))
-        elif blocked:
-            reason = blocked_reason(project, tags, tagged, holding)
-        elif not remaining:
-            reason = 'the graph has no ready node left'
-        else:
-            reason = f'stopping at the close: {note or "(no reason written)"}'
-        # `shelved` is empty for a node that closed as completed: naming it here would hand the
-        # reader a revive hint for work that succeeded.
-        return _stop_action(project, cycle, reason, cmds, node_id=node_id, shelved_nodes=shelved,
-                            dag=dag)
-
     # The pointer is NOT pinned here: the returned `open_node` is what `apply` runs, and it re-plans
-    # into the dispatch through the same `_open` path a cycle with no node in hand uses.
-    # The maintenance channel's one judgement, at the one moment it can be made: the settle that
-    # closes a node is the only place a reading and a freshly picked successor are both in hand.
-    # With nothing configured it answers `None` and this whole feature costs one dict lookup.
-    due = _maintenance_hit(project, cycle, sig, dag)
-    if due is not None:
-        # The maintenance action is a close that also edits the graph, so it carries the same close
-        # commands (`_close_commands` with no successor) ahead of its own: the graph edit runs after
-        # the closed node is marked, and the pin of the maintenance node comes last in the list.
-        return _maintenance_due(project, cycle, node_id, due, next_node,
-                                # park=False: the line is NOT parked by this close -- the
-                                # maintenance node is pinned in its place and dispatched right
-                                # after, so a `cycle status inactive` here would strand it.
-                                close_commands=_close_commands(project, cycle, node_id, outcome,
-                                                               'stop', None, park=False),
-                                extra_note=spoke)
-    return {'action': 'open_node', 'cycle': cycle['id'], 'node_id': next_node['id'],
-            'node_title': next_node.get('title', ''),
-            'note': f'{node_id[:8]} closed; opening {next_node.get("title", "")}'
-                    + (f'; {spoke}' if spoke else ''),
-            'follow': {'action': 'dispatch', 'cycle': cycle['id'],
-                       'node_id': next_node['id'], 'node_title': next_node.get('title', '')},
-            'commands': cmds}
+    # into the dispatch through the same `_open` path a cycle with no node in hand uses. The shape
+    # follows the line: a one-slot close names its one node, a list close carries `nodes`.
+    opened = {'action': 'open_node', 'cycle': cycle['id'], 'node_id': filled[0]['id'],
+              'node_title': filled[0].get('title', '')}
+    if several:
+        opened['nodes'] = [n['id'] for n in filled]
+        opening = ', '.join(n.get('title') or n['id'] for n in filled)
+    else:
+        opening = filled[0].get('title', '')
+    opened['note'] = f'{node_id[:8]} closed; opening {opening}' + (f'; {spoke}' if spoke else '')
+    opened['follow'] = {'action': 'dispatch', 'cycle': cycle['id'],
+                        'node_id': filled[0]['id'], 'node_title': filled[0].get('title', '')}
+    opened['commands'] = cmds
+    return opened
 
 
 def _maintenance_hit(project: Path, cycle: dict, sig: dict | None, dag: dict):

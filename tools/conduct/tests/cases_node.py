@@ -1010,6 +1010,161 @@ class TestTheCloseReadsTheGraphOnce(Base):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  the closing decision: one entry, whatever the line holds
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestTheCloseHasOneEntry(Base):
+    """The judge that ends a node -- the stop rule, the close's commands, the stop answer, and the
+    maintenance channel's insertion -- is asked from exactly one function, for a line holding one
+    node and for a line holding several alike.
+
+    How many slots a line holds at once is a *parameter* of that one function; when it is answered
+    in two places instead, every new judgement has to be hung twice, and the two ladders drift apart
+    in exactly the corners no case looks at. This is the case that looks: it drives the closes that
+    between them walk every branch, and records who asked.
+    """
+
+    #: The machinery a close is built from: the stop rule, the mechanical close list, the stop
+    #: answer, and the maintenance channel's two halves (the judgement and the action it becomes).
+    MACHINERY = ('stop_criterion', '_close_commands', '_stop_action', '_maintenance_hit',
+                 '_maintenance_due')
+
+    def machinery_callers(self):
+        """Replace that machinery with a wrapper recording its caller's function name, in **every**
+        layer that bound a copy of it, and put them back when the case exits.
+
+        The layers are found the same way `graph_readers` finds the graph readers, and for the same
+        reason: this package gets a fresh set of module objects every time it is loaded, and a
+        binding made by `from .actions import ...` lives in the importing layer, not in the entry
+        module. What is recorded is the caller's function name (no line numbers: editing a comment
+        must not turn it red).
+        """
+        callers, real = [], {}
+        layers = [value for value in vars(pipeline).values()
+                  if isinstance(value, types.ModuleType)
+                  and any(hasattr(value, name) for name in self.MACHINERY)]
+        self.assertGreaterEqual(len(layers), 2, f'did not find the close machinery: {layers}')
+        for layer in layers:
+            for name in self.MACHINERY:
+                if not hasattr(layer, name):
+                    continue
+                real[(layer, name)] = getattr(layer, name)
+
+                def counted(*a, _fn=real[(layer, name)], _name=name, **kw):
+                    frame = next(f for f in reversed(traceback.extract_stack())
+                                 if Path(f.filename).parent == _IMPL_DIR and f.name != 'counted')
+                    callers.append((_name, frame.name))
+                    return _fn(*a, **kw)
+
+                setattr(layer, name, counted)
+        self.addCleanup(lambda: [setattr(layer, name, fn) for (layer, name), fn in real.items()])
+        return callers
+
+    def one_slot_closes(self):
+        """The closes a one-slot line can take: stop, open, the gate, a record-only close, a
+        non-delivery, and a name that is not a ready node."""
+        def stop_empty(sb):
+            sb.add_node(NODE, 'UI design')
+            sb.start_cycle()
+            sb.write_signal('cyc', NODE, 'completed', 'done')
+            return {'node': NODE}
+
+        def open_next(sb):
+            sb.add_node(NODE, 'UI design')
+            sb.add_node(NODE2, 'the next one')
+            sb.start_cycle()
+            sb.write_signal('cyc', NODE, 'completed', 'done')
+            return {'node': NODE}
+
+        def checkpoint_gate(sb):
+            sb.add_node(NODE, 'UI design', mode='checkpoint')
+            sb.add_node(NODE2, 'the next one')
+            sb.start_cycle()
+            sb.write_signal('cyc', NODE, 'completed', 'done')
+            return {'node': NODE}
+
+        def line_out_of_service(sb):
+            open_next(sb)
+            sb.set_cycle_status('cyc', 'inactive')
+            return {'node': NODE}
+
+        def not_delivered(sb):
+            sb.add_node(NODE, 'UI design')
+            sb.add_node(NODE2, 'the next one')
+            sb.start_cycle()
+            sb.write_signal('cyc', NODE, 'failed', 'broke')
+            return {'node': NODE}
+
+        def named_not_ready(sb):
+            sb.add_node(NODE, 'UI design')
+            sb.add_node(NODE2, 'already done', status='completed')
+            sb.start_cycle()
+            sb.write_signal('cyc', NODE, 'completed', 'done')
+            return {'node': NODE, 'node_arg': NODE2}
+
+        return (('one slot, nothing left', stop_empty),
+                ('one slot, the next one opens', open_next),
+                ('one slot, the checkpoint gate', checkpoint_gate),
+                ('one slot, the line out of service', line_out_of_service),
+                ('one slot, not delivered', not_delivered),
+                ('one slot, a node named by hand that is not ready', named_not_ready))
+
+    def several_slot_closes(self):
+        """The closes a line holding several slots can take: a refill, a slot still in flight with
+        nothing to refill with, and the maintenance channel's insertion."""
+        def fill_one(sb):
+            sb.add_node(NODE, 'UI design')
+            sb.add_node(NODE2, 'the next one')
+            sb.start_cycle()
+            sb.set_policy('cyc', 'parallel', 2)
+            sb.write_signal('cyc', NODE, 'completed', 'done')
+            return {'node': NODE}
+
+        def in_flight_no_fill(sb):
+            sb.add_node(NODE, 'UI design')
+            sb.add_node(NODE2, 'still running')
+            sb.start_cycle()
+            sb.set_policy('cyc', 'parallel', 2)
+            sb.set_current_node(NODE2)
+            sb.write_signal('cyc', NODE, 'completed', 'done')
+            return {'node': NODE}
+
+        def maintenance_due(sb):
+            sb.add_node(NODE, 'UI design')
+            sb.add_node(NODE2, 'the next one', deps=[NODE])
+            sb.start_cycle()
+            sb.set_policy('cyc', 'parallel', 2)
+            sb.set_policy('cyc', 'test_seconds_limit', 120)
+            sb.write_signal('cyc', NODE, 'completed', 'done',
+                            {'deliverable': 'x', 'reading': {'test_seconds': 200}})
+            return {'node': NODE}
+
+        return (('several slots, the freed slot is refilled', fill_one),
+                ('several slots, a slot still in flight', in_flight_no_fill),
+                ('several slots, the maintenance node goes in', maintenance_due))
+
+    def test_every_close_decision_hangs_from_one_function(self):
+        """One slot or several, stop or open: the close's whole judgement is asked from the one
+        entry, so a new judgement point has one place to be hung -- and a second close ladder, of
+        whatever shape, would show up here as a second caller."""
+        cases = list(self.one_slot_closes()) + list(self.several_slot_closes())
+        callers = self.machinery_callers()
+
+        for name, build in cases:
+            sb = self.make()
+            close = build(sb)
+            action = sb.close_round(close['node'], node=close.get('node_arg'))
+            self.assertTrue(action.get('action'), f'{name}: the close returned no action')
+
+        asked = {who for _, who in callers}
+        self.assertEqual({'_close_own_node'}, asked,
+                         f'something else is making the close decision: {sorted(callers)}')
+        self.assertEqual(set(self.MACHINERY), {what for what, _ in callers},
+                         'a piece of the close machinery was never asked -- the pin above is '
+                         f'then one branch short: {sorted(callers)}')
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  the ready set: the read side does not truncate for its caller
 # ═══════════════════════════════════════════════════════════════════════════════
 
