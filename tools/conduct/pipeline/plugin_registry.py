@@ -4,15 +4,17 @@
 A plugin is a folder under the plugins directory, and the folder is its identity: remove it and
 the plugin is gone, with no second place remembering it. The folder carries two files -- a
 declaration (`plugin.json`: the data, which timing it takes, which names it claims, which action it
-produces, and per metric the dedupe tag and the method whose skill a session reads) and an
-implementation (`impl.py`: the code, called once at the timing it claimed) -- and, when a method it
-names has a skill, the skill itself under `skills/<lang>/<method>/`. The names the outside writes down
-to name one of its debts live in that declaration, never here.
+produces, per metric the dedupe tag and the method whose skill a session reads, and the commands
+`pf` itself hands to it) and an implementation (`impl.py`: the code, called once at the timing it
+claimed, or run as a script by one of those commands) -- and, when a method it names has a skill, the
+skill itself under `skills/<lang>/<method>/`. The names the outside writes down to name one of its
+debts, and the words `pf` routes to it, live in that declaration, never here.
 
 This module is the core's whole knowledge of plugins: the four knob kinds, the three timings, the
-two actions, and the rules a declaration has to satisfy. No installed plugin's name appears here:
-names arrive from the declarations and are merged here for every reader (the writing side's
-validation, the candidates `--help` shows, the ticket form, the doctor).
+two actions, the shape of a declared command, and the rules a declaration has to satisfy. No installed
+plugin's name appears here: names arrive from the declarations and are merged here for every reader
+(the writing side's validation, the candidates `--help` shows, the words `pf` routes, the ticket form,
+the doctor).
 
 The declaration is a data file of its own because listing a plugin must not mean executing it: a
 broken declaration that took the help, the listing and the doctor down with it would take exactly the
@@ -40,6 +42,7 @@ import importlib.util
 import json
 import os
 import re
+import sys
 import tempfile
 from pathlib import Path
 
@@ -63,6 +66,20 @@ CELLS = (('close', 'insert'), ('pick', 'insert'), ('dispatch', 'block'))
 
 #: Where a reading's number comes from: the worker's ticket, or the pool a tool computes itself.
 SOURCES = ('ticket', 'pool')
+
+#: The name group a declaration claims when it brings words of its own: `pf <word>` hands the rest of
+#: the line to the folder's implementation, run as a script. A command is not a timing -- it happens
+#: when a human types it, not at one of the three moments the pipeline serves -- so a plugin that
+#: carries commands and nothing else occupies no cell of the two-axis table at all, which is why
+#: `timing` and `action` are stated together or neither is (see `_problems_of`).
+COMMANDS = 'commands'
+
+#: The two cells one command states beside its word: the line `pf --help` prints, and whether the word
+#: goes along in the argv handed to the implementation. Both are defaults when the cell is absent --
+#: the word does go along, so a folder answering several commands can tell which one it was -- and a
+#: cell that is there and not of its type is a declaration problem (`_problems_of`).
+COMMAND_SUMMARY = 'summary'
+COMMAND_KEEP_NAME = 'keep_name'
 
 #: The layers a knob's resolution chain walks, narrowest first. `state/knobs.py` owns the chain, and
 #: this file restates the names because it is loaded by path from two packages and imports neither:
@@ -210,15 +227,32 @@ def _decl_of(plugin: dict):
 
 
 def _names(decl: dict) -> dict:
-    """The three name groups of one declaration, each as a mapping (`{}` when absent or malformed)."""
+    """The name groups of one declaration, each as a mapping (`{}` when absent or malformed)."""
     def group(key):
         value = decl.get(key)
         return value if isinstance(value, dict) else {}
-    return {'knobs': group('knobs'), 'readings': group('readings'), 'metrics': group('metrics')}
+    return {'knobs': group('knobs'), 'readings': group('readings'), 'metrics': group('metrics'),
+            'commands': group(COMMANDS)}
 
 
-def _problems_of(plugin: dict) -> list:
-    """One declaration's own problems: the shape of its cells, and the references between them."""
+def _command_word(key) -> bool:
+    """Whether one declared key is a word `pf` could be handed as its first argv.
+
+    One token, no blanks -- `pf` matches its first argv against the word as it stands, so anything a
+    shell would split is not one -- and it does not open with a dash: that spelling is an option, and
+    the table the word joins says nothing about options.
+    """
+    return (isinstance(key, str) and bool(key) and not any(ch.isspace() for ch in key)
+            and not key.startswith('-'))
+
+
+def _declaration_problems(plugin: dict) -> list:
+    """One declaration's own problems: the shape of its cells, and the references between them.
+
+    The implementation file's presence is not one of them. A word belongs to the declaration, so a
+    folder whose code is gone still lists and routes the word it claims -- typing that word is where
+    the missing file is found out. `_problems_of` adds that check back for the doctor.
+    """
     name = plugin['name']
     out = list(plugin.get('problems') or [])
     decl = _decl_of(plugin)
@@ -229,10 +263,18 @@ def _problems_of(plugin: dict) -> list:
         out.append(f'plugin {name!r} declares the name {declared!r}: the folder is its identity, '
                    f'so the two have to agree')
     timing = decl.get('timing')
-    if timing not in TIMINGS:
-        out.append(f'plugin {name!r}: timing {timing!r} is not one of {list(TIMINGS)}')
     action = decl.get('action')
-    if action not in ACTIONS:
+    # The pair is one cell: stated whole, or not at all. The one declaration that may state neither is
+    # the one that brings `pf` a word of its own -- it is asked at no moment of the pipeline -- and a
+    # half-stated pair there would name a thing nothing ever asks for. Every other declaration occupies
+    # the cell it was written for, and an absent half is named the way it always was.
+    spared = bool(commands_of(plugin))
+    if spared and (timing is None) != (action is None):
+        out.append(f'plugin {name!r}: timing and action travel together -- {timing!r} and '
+                   f'{action!r} state only one of the two (state both, or neither)')
+    if timing not in TIMINGS and not (spared and timing is None):
+        out.append(f'plugin {name!r}: timing {timing!r} is not one of {list(TIMINGS)}')
+    if action not in ACTIONS and not (spared and action is None):
         out.append(f'plugin {name!r}: action {action!r} is not one of {list(ACTIONS)}')
     if timing in TIMINGS and action in ACTIONS and (timing, action) not in CELLS:
         served = ', '.join(f'{act} at {when}' for when, act in CELLS)
@@ -241,6 +283,7 @@ def _problems_of(plugin: dict) -> list:
 
     groups = _names(decl)
     knobs, readings, metrics = groups['knobs'], groups['readings'], groups['metrics']
+    commands = groups['commands']
     for key, cell in knobs.items():
         if not isinstance(cell, dict):
             out.append(f'plugin {name!r}: knob {key!r} must be an object '
@@ -299,6 +342,23 @@ def _problems_of(plugin: dict) -> list:
                 out.append(f'plugin {name!r}: metric {key!r} needs a {field} (the string the '
                            f'outside writes down to name this debt)')
 
+    for key, cell in commands.items():
+        if not isinstance(cell, dict):
+            out.append(f'plugin {name!r}: command {key!r} must be an object '
+                       f'({COMMAND_SUMMARY}, {COMMAND_KEEP_NAME})')
+            continue
+        if not _command_word(key):
+            out.append(f'plugin {name!r}: command {key!r} is not a word `pf` could be given (one '
+                       f'word, no blanks, not opening with a dash)')
+        summary = cell.get(COMMAND_SUMMARY)
+        if not isinstance(summary, str) or not summary.strip():
+            out.append(f'plugin {name!r}: command {key!r} needs a {COMMAND_SUMMARY} (the one line '
+                       f'`pf --help` prints beside the word)')
+        keep = cell.get(COMMAND_KEEP_NAME)
+        if keep is not None and not isinstance(keep, bool):
+            out.append(f'plugin {name!r}: command {key!r} takes {COMMAND_KEEP_NAME} as true or '
+                       f'false (whether the word goes along in the argv)')
+
     enable = decl.get('enable_knob')
     if enable:
         cell = knobs.get(enable)
@@ -309,19 +369,33 @@ def _problems_of(plugin: dict) -> list:
             out.append(f'plugin {name!r}: switches on {enable!r}, whose kind is '
                        f'{cell.get("kind")!r}; only a switch names on/off')
 
+    return out
+
+
+def _problems_of(plugin: dict) -> list:
+    """`_declaration_problems`, plus whether the implementation file is there.
+
+    This is the doctor's whole reading of one folder (`validate()` asks it) and the runtime's own gate
+    (`_usable`, which the timing doors read): a folder with no code is one the timing doors skip, and
+    the doctor names the missing file. The command face is the one reader that comes through
+    `_declaration_problems` instead -- a word is the declaration's, and it stays on the list and on the
+    route while the folder's code is missing.
+    """
+    out = _declaration_problems(plugin)
     if not (plugin['folder'] / IMPLEMENTATION).is_file():
-        out.append(f'plugin {name!r}: no {IMPLEMENTATION} in {plugin["folder"]}')
+        out.append(f'plugin {plugin["name"]!r}: no {IMPLEMENTATION} in {plugin["folder"]}')
     return out
 
 
 def _conflicts(plugins: list) -> list:
-    """The names two plugins may not share: plugin names, knobs, readings, and dedupe tags."""
+    """The names two plugins may not share: plugin names, knobs, readings, dedupe tags, commands."""
     out = []
     for label, values in (
         ('plugin name', [(plugin['name'], plugin['name']) for plugin in plugins]),
         ('knob', _declared(plugins, 'knobs')),
         ('reading', _declared(plugins, 'readings')),
         ('dedupe tag', _declared(plugins, 'metrics', 'tag')),
+        ('command', _declared(plugins, COMMANDS)),
     ):
         out.extend(_first_claim(label, values))
     return out
@@ -609,6 +683,10 @@ def verify() -> list:
         project: it must answer (an offer, a reason) or "not known this pass", it must never raise,
         and it may not carry a command-shaped list in a key the core reads (`_live_call_problems`).
 
+    The commands a declaration claims have no door of their own here: their shape is `validate()`'s
+    (a word, a line, whether the word goes along) and their routing is `pf`'s. Running one to see
+    whether it answers would mean starting a child process, which this file never does.
+
     Nothing here raises on a broken plugin -- a broken plugin is a sentence, not an exception. The
     two callers are the test suite and `pf doctor`; the pipeline's route never asks: somebody's
     project must not be stopped mid-run by a plugin that is broken, which is failure isolation and
@@ -717,6 +795,39 @@ def tags_of(plugin: dict) -> list:
     return out
 
 
+def _command_summary(cell: dict) -> str:
+    """One command cell's line for `--help`, or `''` when it does not carry a usable one."""
+    summary = cell.get(COMMAND_SUMMARY)
+    return summary.strip() if isinstance(summary, str) else ''
+
+
+def _command_keep_name(cell: dict) -> bool:
+    """Whether the word goes along in the argv: the declaration's cell, defaulting to yes.
+
+    Yes is the default because one folder answers all of its commands with the one implementation:
+    without the word, a folder carrying two of them could not tell which one was asked for.
+    """
+    keep = cell.get(COMMAND_KEEP_NAME)
+    return True if keep is None else keep is True
+
+
+def commands_of(plugin: dict) -> list:
+    """The words one plugin claims for `pf`, in declaration order.
+
+    What the declaration says, not what the router would take: a word the core already owns, or one a
+    second plugin claims too, is still listed here -- both are somebody else's to report (the doctor
+    holds the core's table, `_conflicts` the other declarations). A cell that could not become a
+    command at all (not an object, a key that is not a word, no line for the help to print) is not a
+    word here either: `_problems_of` says why, and the runtime skips it.
+    """
+    decl = _decl_of(plugin) or {}
+    out = []
+    for key, cell in _names(decl)['commands'].items():
+        if isinstance(cell, dict) and _command_word(key) and _command_summary(cell) and key not in out:
+            out.append(key)
+    return out
+
+
 def methods_of(plugin: dict) -> list:
     """One plugin's method names, in declaration order (the skill skills it points a node at)."""
     decl = _decl_of(plugin) or {}
@@ -745,6 +856,46 @@ def methods() -> list:
         for method in methods_of(plugin):
             if method not in out:
                 out.append(method)
+    return out
+
+
+def commands() -> list:
+    """Every command the installed plugins contribute, as the words `pf` hands to a folder.
+
+    One entry per word, of a plugin whose declaration is sound (`_declaration_problems`): the word is
+    the declaration's, and nothing here loads an implementation to ask whether the code behind it
+    starts. Listing must not mean executing -- an import that prints, writes, reaches the network or
+    sleeps would otherwise land on every `pf` call -- so a word stays on this list even when the code
+    behind it is broken or gone, and typing that word is where it is found out: `pf` runs the folder's
+    script and names the plugin if it will not start. A declaration that cannot be read, or one with a
+    problem of its own, contributes nothing here -- there is no data to list -- and `pf doctor` is where
+    it is named. In folder order then declaration order: `{name, plugin, target, keep_name, summary}`.
+
+    `target` is the folder's implementation, run as a script -- a plugin is a folder with one
+    implementation, and having it run by a command is the second way in it has beside being called at
+    its timing. The word two plugins both claim is `_conflicts`' problem, and the first folder keeps
+    it, the same way a knob's first claim does. A word the core's own table already carries is NOT
+    judged here: this file does not know that table, and copying it in would be a second home for those
+    words -- the doctor, which holds both, reports it.
+    """
+    out = []
+    seen = set()
+    for plugin in load_all():
+        if _decl_of(plugin) is None or _declaration_problems(plugin):
+            continue
+        decl = _decl_of(plugin)
+        for key in commands_of(plugin):
+            if key in seen:
+                continue
+            seen.add(key)
+            cell = _names(decl)['commands'][key]
+            out.append({
+                'name': key,
+                'plugin': plugin['name'],
+                'target': Path(plugin['folder']) / IMPLEMENTATION,
+                'keep_name': _command_keep_name(cell),
+                'summary': _command_summary(cell),
+            })
     return out
 
 
@@ -778,12 +929,21 @@ def impl_of(name: str):
     by contract -- it is called at its timing with the context it is handed and keeps nothing between
     calls -- so every caller shares the one copy. A load failure is recorded and reported by
     `validate()` instead of raised: a broken plugin must not stop the project that is running it.
+
+    A failure leaves nothing registered behind. The loader registers a module before it executes it --
+    which a package needs and a plain module does not -- so a run that raised would leave a half-built
+    module under the name, and the next `reuse` call would hand it back as a success: within one
+    process, a broken plugin's second scan would look healthy. Dropping it makes the next call really
+    try the file again, which is what "a later load works" means.
     """
     path = plugins_dir() / name / IMPLEMENTATION
     module_name = 'pf_feature_' + re.sub(r'\W', '_', name) + '_impl'
     try:
         module = _loader().load_by_path(module_name, path, register=True, reuse=True)
     except (Exception, SystemExit) as e:      # noqa: BLE001 -- a broken plugin must not raise here
+        for stale in [key for key in sys.modules
+                      if key == module_name or key.startswith(module_name + '.')]:
+            del sys.modules[stale]
         _RUNTIME_PROBLEMS[name] = f'plugin {name!r}: {IMPLEMENTATION} failed to load: {e!r}'
         return None
     _RUNTIME_PROBLEMS.pop(name, None)

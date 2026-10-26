@@ -153,6 +153,87 @@ class TestTheValidator(Base):
         self.assertIn("plugin 'probe'", '\n'.join(problems))
         self.assertIn('is not a cell this core serves', '\n'.join(problems))
 
+    def test_a_half_stated_cell_names_the_feature(self):
+        """The timing and the action are one cell: stated whole, or not at all.
+
+        Half of it is not a smaller declaration -- it names a thing nothing ever serves -- so the
+        validator names the half that is missing rather than taking it for "no timing at all". This is
+        the reading of a declaration that brings `pf` a word of its own: it is asked at no moment of the
+        pipeline, so stating neither half is legal, and stating one half alone is what this names. A
+        declaration that brings no word keeps occupying the cell it was written for (the case below).
+        """
+        word = {'probe-cmd': {'summary': 'the fixture line'}}
+        missing_action = self.one(action=None, commands=word)
+        missing_timing = self.one(timing=None, commands=word)
+
+        self.assertIn('timing and action travel together', '\n'.join(missing_action))
+        self.assertIn('timing and action travel together', '\n'.join(missing_timing))
+
+    def test_a_declaration_that_brings_no_word_still_occupies_a_cell(self):
+        """Only a declaration that brings `pf` a word of its own is spared the cell.
+
+        With no word to bring it is asked at a moment of the pipeline, so stating neither half is the
+        two problems it always was: the three shapes a declaration can have without a word -- knobs
+        only, a name and nothing else, a metric -- are each named, and what is named is the half that
+        is absent.
+        """
+        for problems in (
+            self.one(name='knob-only', timing=None, action=None, readings={}, metrics={}),
+            self.one(name='name-only', timing=None, action=None, knobs={}, readings={}, metrics={}),
+            self.one(name='metric-only', timing=None, action=None, knobs={}, readings={},
+                     metrics={'probe_minutes': {'line': 'probe_limit', 'tag': 'probe:minutes',
+                                                'method': None, 'order': 0}}),
+        ):
+            text = '\n'.join(problems)
+            self.assertIn("timing None is not one of ['close', 'pick', 'dispatch']", text)
+            self.assertIn("action None is not one of ['insert', 'block']", text)
+
+    # ── (a3) the command face: a word, a line, whether it travels ───────────
+    def test_a_command_only_feature_occupies_no_cell_and_is_legal(self):
+        """A declaration may carry words for `pf` instead of a timing: it is asked at no moment of the
+        pipeline, so there is no cell to serve, and the validator has nothing to say about it.
+        """
+        problems = self.one(timing=None, action=None,
+                            commands={'probe-cmd': {'summary': 'the fixture line'}})
+
+        self.assertEqual([], problems)
+
+    def test_a_command_cell_that_cannot_become_one_names_the_feature(self):
+        """Four ways a declared command is not a command, each one named: the cell is not an object,
+        the key is not a word `pf` could be handed, there is no line for the help to print, and the
+        `keep_name` cell is not the true/false it has to be.
+        """
+        problems = self.one(timing=None, action=None, commands={
+            'probe-cmd': 'go',
+            'two words': {'summary': 'the fixture line'},
+            'silent': {'summary': '   '},
+            'loud': {'summary': 'the fixture line', 'keep_name': 'yes'},
+        })
+
+        text = '\n'.join(problems)
+        self.assertIn("plugin 'probe'", text)
+        self.assertIn("command 'probe-cmd' must be an object", text)
+        self.assertIn("command 'two words' is not a word", text)
+        self.assertIn("command 'silent' needs a summary", text)
+        self.assertIn("command 'loud' takes keep_name as true or false", text)
+
+    def test_a_word_pf_could_never_be_handed_is_not_a_command(self):
+        """The word's shape is the one `pf` matches its first argv against: one token, and not an
+        option. A well-shaped cell passes either way -- whether the word travels is the declaration's
+        own cell -- while a blank inside a word and a word opening with a dash are each named.
+        """
+        self.assertEqual([], self.one(timing=None, action=None,
+                                      commands={'probe-cmd': {'summary': 'the fixture line'}}))
+        self.assertEqual([], self.one(timing=None, action=None,
+                                      commands={'probe-cmd': {'summary': 'the fixture line',
+                                                              'keep_name': False}}))
+
+        text = '\n'.join(self.one(timing=None, action=None, commands={
+            '-probe': {'summary': 'the fixture line'},
+            'probe cmd': {'summary': 'the fixture line'}}))
+        self.assertIn("command '-probe' is not a word", text)
+        self.assertIn("command 'probe cmd' is not a word", text)
+
     # ── (b) two declarations, one name ──────────────────────────────────────
     def test_two_plugins_may_not_claim_one_name(self):
         """A knob, a reading, a dedupe tag and a skill belong to one plugin each; every sentence names

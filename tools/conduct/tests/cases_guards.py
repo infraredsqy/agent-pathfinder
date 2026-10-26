@@ -219,7 +219,7 @@ class TestTheCoreNamesNoFeature(Base):
     """
 
     def installed_names(self) -> set:
-        """The five name groups every installed declaration owns, as one set of strings."""
+        """The six name groups every installed declaration owns, as one set of strings."""
         registry = pipeline.registry()
         names = set()
         for plugin in registry.load_all():
@@ -227,7 +227,7 @@ class TestTheCoreNamesNoFeature(Base):
             decl = plugin.get('decl')
             if not isinstance(decl, dict):
                 continue
-            for group in ('knobs', 'readings'):
+            for group in ('knobs', 'readings', 'commands'):
                 cells = decl.get(group)
                 if isinstance(cells, dict):
                     names |= set(cells)
@@ -267,14 +267,14 @@ class TestTheSkillsNameNoFeature(Base):
     """
 
     def outside_names(self) -> set:
-        """The five name groups a declaration owns: name, knobs, readings, tags, methods."""
+        """The six name groups a declaration owns: name, knobs, readings, commands, tags, methods."""
         names = set()
         for plugin in pipeline.registry().load_all():
             names.add(plugin['name'])
             decl = plugin.get('decl')
             if not isinstance(decl, dict):
                 continue
-            for group in ('knobs', 'readings'):
+            for group in ('knobs', 'readings', 'commands'):
                 cells = decl.get(group)
                 if isinstance(cells, dict):
                     names |= set(cells)

@@ -5,8 +5,9 @@ Every skill says `pf next`, `pf handoff`, `pf issue top`: where the tools live i
 from this file's own location, so the prose reads the same on every machine.
 
 Everything else forwards to a tool, keeping the tool's own subcommand names so the docs stay
-greppable. Which words those are is the table further down, and `--help` prints that same table. A
-forwarded verb's flags are its tool's: `pf <verb> --help` is where they are. `pf init` and
+greppable. Which words those are is the table further down, with the installed plugins' own commands
+merged in behind it: `--help` prints that one table and the router walks it, so the two cannot come
+apart. A forwarded verb's flags are its tool's: `pf <verb> --help` is where they are. `pf init` and
 `pf register` are forwards too: the registration logic lives next to the ledger it serves, in
 `conduct/state/initledger.py`.
 """
@@ -98,6 +99,10 @@ SELF_VERBS = (
 #:
 #: A forwarded verb's flags live in the tool's own parser, and `pf <verb> --help` prints them: that
 #: parser is the authority, so no flags are kept here.
+#:
+#: These two tables are static: the words this checkout owns. An installed plugin contributes words of
+#: its own, and `_routing()` merges them in behind these -- one table, printed by `usage()` and walked
+#: by `main()`, with the core's row keeping its name where the two collide.
 FORWARD_VERBS = (
     ('init', STATE_MANAGE, True, 'put the ledger in place (run once per project)'),
     ('register', STATE_MANAGE, True, "write the ledger's git merge driver into this project"),
@@ -130,8 +135,64 @@ UNROUTED_TOOLS = (CONDUCT_PIPELINE, SESSION_NOTE, PLUGIN_REGISTRY)
 TOOL_FILES = tuple(dict.fromkeys(
     [row[1] for row in (*FORWARD_VERBS, *FORWARD_GROUPS)] + list(UNROUTED_TOOLS)))
 
-#: `main()`'s routing table: the names are the ones the three tables above carry, taken as they are.
+#: The handlers `pf` itself answers, by the name the router matches.
 _SELF_HANDLERS = {row[0]: row[3] for row in SELF_VERBS}
+
+#: The words `pf` answers before it consults any table. One home for them: the router reaches these
+#: first, so a plugin's command spelling one of them could never run, and `pf doctor` reports that as
+#: it reports any other word this checkout already owns.
+HELP_WORDS = ('-h', '--help', 'help')
+
+
+def _core_words() -> set:
+    """Every word this checkout already answers: the tables above, and the help forms."""
+    return set(HELP_WORDS) | {row[0] for row in (*SELF_VERBS, *FORWARD_VERBS, *FORWARD_GROUPS)}
+
+
+def _plugin_commands() -> list:
+    """The commands the installed plugins declare, or nothing.
+
+    Nothing, never an exception: the help and the router must answer even when the registry itself
+    cannot be read (a missing file, a half-written copy). A declaration that cannot be read, or one
+    with a problem of its own, contributes nothing either -- the registry's own `commands()` is where
+    that is decided -- and `pf doctor` is where the declaration, the code, or the whole registry is
+    named.
+    """
+    try:
+        return _plugin_registry().commands()
+    except Exception:                          # noqa: BLE001 -- the door answers, always
+        return []
+
+
+def _routing() -> dict:
+    """The one table `pf` routes by: the core's own rows, with the plugins' commands merged in behind.
+
+    `usage()` prints exactly these rows and `main()` walks exactly these rows, so a word a declaration
+    contributes shows up in the help and reaches its folder's implementation in the same breath --
+    there is no second list for the two readers to drift apart on.
+
+    Static priority is applied here, once: a plugin's word this checkout already owns is dropped from
+    the table, so both readers see the core's row and no other. `cmd_doctor` -- the one door holding
+    both tables -- names the declaration that lost; the registry cannot, since it does not know this
+    checkout's words and a copy of them there would be a second home for them.
+    """
+    own = _core_words()
+    plugins = tuple((entry['name'], entry['target'], entry['keep_name'], entry['summary'])
+                    for entry in _plugin_commands() if entry['name'] not in own)
+    return {'verbs': FORWARD_VERBS, 'plugins': plugins, 'groups': FORWARD_GROUPS}
+
+
+def _command_clashes() -> list:
+    """The plugin commands whose word this checkout already answers: one sentence per declaration.
+
+    Static priority keeps the core's row, so such a word routes nowhere and the help does not print it
+    either -- it is unreachable, and that is what the sentence says.
+    """
+    own = _core_words()
+    return [f'plugin {entry["plugin"]!r}: command {entry["name"]!r} is a word this checkout already '
+            f'answers, so the core keeps it and this one never routes'
+            for entry in _plugin_commands() if entry['name'] in own]
+
 
 _USAGE_SHAPE = """\
 pf -- the agent pipeline's own command
@@ -143,33 +204,86 @@ pf -- the agent pipeline's own command
 """
 
 
+#: The listing's numbers: the column the word column opens at, the sense column the static tables use
+#: (a table whose widest word does not fit under it opens the sense column further right -- see
+#: `_usage_column`), and the width the sense wraps into: what is left of it after the word column.
+#: One home for them: `_usage_rows` lays every row out by these.
+USAGE_MARGIN, USAGE_COLUMN, USAGE_WIDTH = 12, 42, 100
+
+
+def _usage_column(pairs) -> int:
+    """Where one table's sense column opens: the word column takes the widest word in this table plus
+    one blank.
+
+    `USAGE_COLUMN` is the floor, so the tables this checkout ships are laid out as they always were. A
+    word a declaration contributes has no length bound -- one token without a blank is a word `pf` can
+    be handed, and a word the router takes is not refused over the listing's layout -- so the word
+    column grows with the widest word of its own table, keeping one blank between that word and its
+    sense: glued together, the row reads back as a single token no table carries.
+    """
+    widest = max((len(left) for left, _right in pairs), default=0)
+    return USAGE_MARGIN + max(USAGE_COLUMN - USAGE_MARGIN, widest + 1)
+
+
+def _sense_lines(text: str, column: int) -> list:
+    """One sense (or the plugin section's title) as the lines it prints beside the word column.
+
+    It wraps in what is left of `USAGE_WIDTH` after `column`. A word so wide that nothing is left
+    stands with its sense unwrapped rather than with a column of one character or an error: a
+    declaration's word is of no bounded length, and the listing answers for every one of them.
+    """
+    room = USAGE_WIDTH - column
+    return textwrap.wrap(text, room) if room > 0 else [text]
+
+
 def _usage_rows(pairs) -> str:
-    """The word column and the sense column, one row per pair; a long sense wraps under itself."""
-    left_margin, column, width = 12, 42, 100
+    """The word column and the sense column, one row per pair; a long sense wraps under itself.
+
+    The sense column is the table's own (`_usage_column`) and the sense wraps in the room left of it
+    (`_sense_lines`), so a word wider than the floor narrows the sense beside it instead of pushing
+    the row past the listing's width.
+    """
+    column = _usage_column(pairs)
     out = []
     for left, right in pairs:
-        body = textwrap.wrap(right, width - column) or ['']
-        out.append(f'{" " * left_margin}{left:<{column - left_margin}}{body[0]}')
+        body = _sense_lines(right, column) or ['']
+        out.append(f'{" " * USAGE_MARGIN}{left:<{column - USAGE_MARGIN}}{body[0]}')
         out += [f'{" " * column}{line}' for line in body[1:]]
     return '\n'.join(out)
 
 
 def usage() -> str:
-    """`pf --help`: the shape of the command, then the words the tables above carry.
+    """`pf --help`: the shape of the command, then the words the routing table carries.
 
-    The listing is grown from those tables, so a verb added to one shows up here by itself and the
-    router and this text cannot come apart.
+    The listing is grown from that table, so a verb added to one shows up here by itself, a plugin's
+    command shows up with the declaration's own line beside it, and the router and this text cannot
+    come apart. A project with no plugin installed gets the listing this checkout always printed: the
+    plugin section is only there when there is a word to put in it.
     """
+    table = _routing()
     own = _usage_rows([(display, blurb) for _n, display, blurb, _f in SELF_VERBS])
-    verbs = _usage_rows([(name, blurb) for name, _t, _k, blurb in FORWARD_VERBS])
-    groups = _usage_rows([(f'{name} <verb>', blurb) for name, _t, _k, blurb in FORWARD_GROUPS])
-    return (
+    verbs = _usage_rows([(name, blurb) for name, _t, _k, blurb in table['verbs']])
+    groups = _usage_rows([(f'{name} <verb>', blurb) for name, _t, _k, blurb in table['groups']])
+    text = (
         _USAGE_SHAPE
         + '\n  pf itself:\n' + own
         + '\n\n  verbs:    (each one hands the rest of the line to a tool)\n' + verbs
         + "\n\n  groups:   (a group's verbs are that tool's: `pf <group> --help`)\n" + groups
-        + '\n\n  Run `pf <verb> --help` for the verb\'s own flags and values, or `pf <group> --help`\n'
-          "  for a group's verbs.\n"
+    )
+    if table['plugins']:
+        # The title's second line stands at this table's sense column and wraps like a sense, so it
+        # reads as the rest of the title rather than as a word in the column under it.
+        rows = [(name, blurb) for name, _t, _k, blurb in table['plugins']]
+        column = _usage_column(rows)
+        title = ('(a word an installed plugin contributes, answered by that plugin: '
+                 '`pf <word> --help`\n'
+                 + '\n'.join(' ' * column + line for line
+                             in _sense_lines('is its own, and `pf doctor` lists what is installed)',
+                                             column)))
+        text += ('\n\n  plugins:  ' + title + '\n' + _usage_rows(rows))
+    return text + (
+        '\n\n  Run `pf <verb> --help` for the verb\'s own flags and values, or `pf <group> --help`\n'
+        "  for a group's verbs.\n"
     )
 
 
@@ -177,6 +291,51 @@ def _run(*argv: str) -> int:
     """Hand over to a tool with the same interpreter and the same stdio, and keep its exit code."""
     env = dict(os.environ, PYTHONUTF8='1')
     return subprocess.call([sys.executable, '-X', 'utf8', *argv], env=env)
+
+
+#: The bootstrap one plugin's word is run through. It hands the folder's implementation the argv, the
+#: `__name__` and the `sys.path` entry a plain `python impl.py …` gives it, and turns a folder that
+#: will not start -- no `impl.py`, a syntax error, a raise, a `sys.exit` in its own body -- into one
+#: sentence on stderr naming the plugin and the error. Nothing of this runs in `pf`'s own process:
+#: listing and routing read the declaration, and the folder's code is executed exactly once, here.
+_PLUGIN_BOOTSTRAP = """\
+import os
+import runpy
+import sys
+import traceback
+
+_path, _plugin = sys.argv[1], sys.argv[2]
+_name = os.path.basename(_path)
+# The argv a plain `python impl.py …` gives the folder: the path first, then the rest of the line.
+sys.argv = [_path, *sys.argv[3:]]
+sys.path.insert(0, os.path.dirname(os.path.abspath(_path)))
+try:
+    runpy.run_path(_path, run_name='__main__')
+except SystemExit as stop:
+    # A stop is an answer: the code that came this far keeps its exit code, named so a human reading
+    # stderr knows which folder stopped.
+    if stop.code not in (None, 0):
+        sys.stderr.write('plugin %r: %s stopped with exit code %s\\n' % (_plugin, _name, stop.code))
+    raise
+except BaseException as exc:
+    traceback.print_exc()
+    sys.stderr.write('plugin %r: %s failed to load: %r\\n' % (_plugin, _name, exc))
+    sys.exit(1)
+"""
+
+
+def _plugin_run(plugin: str, target, keep_name: bool, verb: str, rest) -> int:
+    """Hand one plugin's word to its folder, and let a folder that will not start say so by name.
+
+    The word reached this table from the declaration alone, so it is routed even when the code behind
+    it is broken or gone: this is where that is found out. `target` is the folder's implementation and
+    the folder is the plugin's identity, so the sentence a failure prints names the plugin and the
+    error, with a non-zero exit. A folder that starts and exits with a code of its own keeps that code
+    -- `pf <word>`'s exit is the plugin's answer -- and the word travels in the argv unless the
+    declaration's cell says otherwise.
+    """
+    return _run('-c', _PLUGIN_BOOTSTRAP, str(target), plugin,
+                *((verb, *rest) if keep_name else rest))
 
 
 def _project_root(start: Path) -> Path:
@@ -250,8 +409,8 @@ def _knob_line(name: str, spec: dict) -> str:
 
 def _report_features() -> int:
     """Say which plugins are installed and how each one works -- its own summary, the knobs it
-    declares, the tags and methods the outside writes down -- print every problem the validator
-    found, and count those problems for the doctor's exit code.
+    declares, the tags and methods the outside writes down, the commands it contributes -- print
+    every problem the validator found, and count those problems for the doctor's exit code.
 
     Zero plugin folders is a legal project and is reported as such: the core is whole without any
     plugin, and that sentence is what makes it visible.
@@ -264,6 +423,9 @@ def _report_features() -> int:
     one real call of every implementation against a stand-in project -- a plugin whose code cannot
     even compile, or whose door raises, has to be named on this list, not discovered at the next
     close. The one road a project's pipeline takes never asks any of this.
+
+    Two questions are this door's own, because it is the only one holding both tables: a declared knob
+    claiming a built-in setting's name, and a declared command claiming a word `pf` already answers.
     """
     registry = _plugin_registry()
     plugins = registry.load_all()
@@ -286,18 +448,22 @@ def _report_features() -> int:
                 print(lead + _knob_line(name, spec))
             tags = registry.tags_of(plugin)
             methods = registry.methods_of(plugin)
+            words = registry.commands_of(plugin)
             if tags:
                 print('      tags: ' + ', '.join(tags))
             if methods:
                 print('      methods: ' + ', '.join(methods))
+            if words:
+                print('      commands: ' + ', '.join(words))
     problems = registry.verify()
     try:
         shadows = _knob_shadows()
     except Exception as e:                     # noqa: BLE001 -- a health check must answer, not die
         shadows = [f'the knob table could not be read: {e}']
-    for problem in (*problems, *shadows):
+    clashes = _command_clashes()
+    for problem in (*problems, *shadows, *clashes):
         print(f'  ✗ {problem}')
-    return len(problems) + len(shadows)
+    return len(problems) + len(shadows) + len(clashes)
 
 
 def cmd_doctor(fix: bool = False) -> int:
@@ -370,7 +536,7 @@ def main(argv: list[str]) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, 'reconfigure'):
             stream.reconfigure(encoding='utf-8', errors='replace')
-    if not argv or argv[0] in ('-h', '--help', 'help'):
+    if not argv or argv[0] in HELP_WORDS:
         print(usage())
         return 0
     verb, rest = argv[0], argv[1:]
@@ -378,9 +544,16 @@ def main(argv: list[str]) -> int:
     own = _SELF_HANDLERS.get(verb)
     if own is not None:
         return own(rest)
-    for name, target, keep_name, _blurb in (*FORWARD_VERBS, *FORWARD_GROUPS):
+    table = _routing()
+    for name, target, keep_name, _blurb in (*table['verbs'], *table['groups']):
         if name == verb:
             return _run(str(target), *((verb, *rest) if keep_name else rest))
+    # The plugin rows come last: static priority already dropped every word this checkout owns, so a
+    # word reaching here is the folder's own. It is run through the bootstrap rather than handed to the
+    # file directly, so a folder whose code is gone or broken answers with one sentence naming it.
+    for name, target, keep_name, _blurb in table['plugins']:
+        if name == verb:
+            return _plugin_run(Path(target).parent.name, target, keep_name, verb, rest)
 
     print(f'pf: does not recognize `{verb}`.\n', file=sys.stderr)
     print(usage(), file=sys.stderr)

@@ -13,9 +13,10 @@
 - A **plugin** is a folder under `plugins/` with two files in it — its declaration (`plugin.json`)
   and its implementation (`impl.py`) — with the folder's name as its identity.
   `pipeline/plugin_registry.py` is the core's whole knowledge of them — four knob kinds, three
-  timings, two actions, and the rules a declaration has to satisfy — and it is loaded by path from
-  both packages (`plugin_host.py` asks it for actions, `state/knobs.py` merges the knobs they
-  declare), one copy per process. Its `verify()` is the validator over both sides (the declaration's
+  timings, two actions, the shape of a command a declaration may claim, and the rules a declaration
+  has to satisfy — and it is loaded by path by every reader (`plugin_host.py` asks it for actions,
+  `state/knobs.py` merges the knobs they declare, `pf`'s own entry takes the words they contribute),
+  one copy per process. Its `verify()` is the validator over both sides (the declaration's
   skills, and one real call of each implementation against a stand-in project): the suite and
   `pf doctor` are its only callers, never the pipeline's route. A plugin's names live in its
   declaration only: adding or removing one is a folder move, and no core file names one. The

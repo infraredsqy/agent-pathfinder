@@ -9,10 +9,14 @@ reader by `pipeline/plugin_registry.py` and asked at its timing by `pipeline/plu
 What this file pins, in the order the criteria are stated:
 
   * **the registry**: what is installed, which names it merges (knobs, dedupe tags, methods, ticket
-    readings), and that the core's own files name none of them;
+    readings, command words), and that the core's own files name none of them;
   * **a fake second plugin**: a hand-written folder plugs in through `PF_PLUGINS_DIR` with the core
     untouched -- and an ill-formed or duplicated declaration is reported by `validate()` while the
     runtime skips it;
+  * **the command face**: a folder may carry words instead of a timing -- `commands()` is where they
+    are merged for `pf`, a declaration that cannot be read contributes none of them, a folder whose
+    code will not start keeps its word there (the word is the declaration's, and the failure is named
+    when the word is typed), and removing the folder removes them;
   * **the deleted folder**: with no plugin installed at all the pipeline still closes and still
     dispatches, and the close is byte-for-byte the one it always gave (no pool child process, no
     reading asked on the form);
@@ -37,6 +41,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import shutil
 import sys
 import tempfile
 from contextlib import ExitStack
@@ -303,8 +308,8 @@ class TestTheRegistry(FeatureBase):
 
     @requires_plugin('maintenance')
     def test_the_core_names_no_installed_feature(self):
-        """The shipped core spells none of the plugin's names: not a knob, not a dedupe tag, not a
-        method, not the plugin's own name.
+        """The shipped core spells none of the plugin's names: not a knob, not a reading, not a
+        dedupe tag, not a method, not a command word, not the plugin's own name.
 
         The names are read off the declaration, never restated here: a rename inside the folder is a
         folder-local edit, and this guard follows it. The scan is the tree's own list of what ships
@@ -315,6 +320,7 @@ class TestTheRegistry(FeatureBase):
         names = {'maintenance'}
         names |= set(decl.get('knobs') or {})
         names |= set(decl.get('readings') or {})
+        names |= set(decl.get('commands') or {})
         for metric in (decl.get('metrics') or {}).values():
             if isinstance(metric, dict):
                 names |= {metric.get('tag'), metric.get('method')}
@@ -361,6 +367,7 @@ class TestTheRegistry(FeatureBase):
         self.assertEqual([], registry.dedupe_tags())
         self.assertEqual([], registry.methods())
         self.assertEqual([], registry.readings())
+        self.assertEqual([], registry.commands())
         self.assertEqual({'max_agents', 'test_tier', 'worktree_mode'}, set(pipeline.knob_specs()),
                          'the core knob table is not the core\'s own')
 
@@ -518,6 +525,112 @@ class TestTheRegistry(FeatureBase):
                          if 'claimed by both' in problem], registry.validate())
         self.assertEqual(registry.knob_specs()['audit_limit']['plugin'], 'a-one',
                          'the merged cell does not follow folder order')
+
+    def test_a_command_only_feature_is_just_a_folder(self):
+        """The word a declaration contributes is merged for the router the way its knobs are merged for
+        the chain: the folder's own words come out of `commands()`, and a folder that brings a word is
+        asked at no timing of the pipeline -- only a declaration that brings none has to occupy a cell.
+
+        The whole declaration is one command and a summary -- no timing, no action, no metric -- which
+        is the smallest plugin `pf <word>` can be handed to.
+        """
+        root = self.plugins()
+        folder = write_plugin(root, 'probe', {
+            'name': 'probe', 'summary': 'a plugin that carries a word', 'commands': {
+                'probe-cmd': {'summary': 'the fixture line it prints beside the word'}},
+        }, 'def offer(ctx):\n    return None\n')
+
+        registry = pipeline.registry()
+        self.assertEqual([], registry.validate(), 'a command-only declaration is not a problem')
+        self.assertEqual(['probe-cmd'], registry.commands_of(registry.load_all()[0]))
+        self.assertEqual([], registry.by_timing('close'), 'a plugin with no cell was asked at a close')
+        self.assertEqual([], registry.by_action('insert'))
+
+        answer = registry.commands()
+        self.assertEqual(1, len(answer), answer)
+        self.assertEqual(
+            {'name': 'probe-cmd', 'plugin': 'probe', 'target': folder / 'impl.py',
+             'keep_name': True, 'summary': 'the fixture line it prints beside the word'},
+            answer[0])
+
+        # the word the router hands over travels with the argv unless the cell says otherwise
+        write_plugin(root, 'quiet', {
+            'name': 'quiet', 'summary': 'a word that takes the rest of the line only', 'commands': {
+                'quiet-cmd': {'summary': 'no word in its argv', 'keep_name': False}},
+        }, 'def offer(ctx):\n    return None\n')
+        self.assertEqual({'probe-cmd': True, 'quiet-cmd': False},
+                         {entry['name']: entry['keep_name'] for entry in registry.commands()})
+
+    def test_a_broken_declaration_contributes_no_command(self):
+        """The word is the declaration's, so a declaration with a problem of its own contributes no
+        word: the folder is still installed and its commands are still on the doctor's listing (the
+        listing reads what the declaration says, broken or not), while `commands()` -- the router's
+        door -- answers nothing. Fixing the declaration brings it back, which is what says the
+        declaration, not the folder, was the thing that was broken.
+        """
+        root = self.plugins()
+        decl = {'name': 'probe', 'summary': 'a plugin that carries a word', 'timing': 'lunch',
+                'commands': {'probe-cmd': {'summary': 'the fixture line'}}}
+        write_plugin(root, 'probe', decl, 'def offer(ctx):\n    return None\n')
+
+        registry = pipeline.registry()
+        self.assertEqual([], registry.commands(), 'a broken declaration routed a word')
+        self.assertIn('probe-cmd', registry.commands_of(registry.load_all()[0]),
+                      'the doctor\'s listing is what the declaration says, broken or not')
+        self.assertTrue([problem for problem in registry.validate() if "timing 'lunch'" in problem])
+
+        write_plugin(root, 'probe', {**decl, 'timing': None, 'action': None},
+                     'def offer(ctx):\n    return None\n')
+        self.assertEqual(['probe-cmd'], [entry['name'] for entry in registry.commands()])
+
+    def test_an_implementation_that_cannot_load_still_carries_its_word(self):
+        """The word is the declaration's, and `commands()` reads declarations only: code that cannot be
+        loaded keeps its word on the list, while the validator still names the plugin and says the code
+        is what broke -- typing the word is where `pf` finds that out.
+        """
+        root = self.plugins()
+        write_plugin(root, 'syntax', {
+            'name': 'syntax', 'summary': 'a plugin whose code is broken',
+            'commands': {'syntax-cmd': {'summary': 'the fixture line'}},
+        }, 'def offer(ctx)\n    return None\n')
+
+        registry = pipeline.registry()
+        self.assertEqual(['syntax-cmd'], [entry['name'] for entry in registry.commands()],
+                         'unloadable code took the word off the router\'s list')
+        self.assertIn('failed to load', '\n'.join(registry.verify()))
+
+    def test_a_deleted_folder_takes_its_command_with_it(self):
+        """The folder is the plugin's identity: the same scan answers a word while it is there and
+        nothing once it is gone, with no second place remembering it."""
+        root = self.plugins()
+        folder = write_plugin(root, 'probe', {
+            'name': 'probe', 'summary': 'a plugin that carries a word',
+            'commands': {'probe-cmd': {'summary': 'the fixture line'}},
+        }, 'def offer(ctx):\n    return None\n')
+        registry = pipeline.registry()
+        self.assertEqual(['probe-cmd'], [entry['name'] for entry in registry.commands()])
+
+        shutil.rmtree(folder)
+
+        self.assertEqual([], registry.load_all())
+        self.assertEqual([], registry.commands())
+        self.assertEqual([], registry.validate())
+
+    def test_two_features_may_not_claim_one_command_word(self):
+        """A command word belongs to one plugin, like a knob or a tag: the doctor names both claimants,
+        and the first folder in order is the one the router would hand it to."""
+        root = self.plugins()
+        decl = {'name': 'x', 'summary': 'a plugin that carries a word', 'commands': {
+            'probe-cmd': {'summary': 'the fixture line'}}}
+        write_plugin(root, 'a-one', {**decl, 'name': 'a-one'}, 'def offer(ctx):\n    return None\n')
+        write_plugin(root, 'b-two', {**decl, 'name': 'b-two'}, 'def offer(ctx):\n    return None\n')
+
+        registry = pipeline.registry()
+        problems = '\n'.join(registry.validate())
+        self.assertIn("command 'probe-cmd' is claimed by both 'a-one' and 'b-two'", problems)
+        self.assertEqual([('probe-cmd', 'a-one')],
+                         [(entry['name'], entry['plugin']) for entry in registry.commands()],
+                         'two folders claiming one word reached the router twice')
 
 
 class TestTheDeletedFeatureFolder(FeatureBase):
