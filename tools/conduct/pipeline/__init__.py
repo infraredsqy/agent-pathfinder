@@ -15,16 +15,16 @@ because those are what a caller patches. The machinery is here:
     prompts.py   what a dispatch prompt says (the invocation line, and the node's text)
     insertion.py the core mechanism that puts a node into the graph: mint its uuid, write its spec,
                  wire its edges -- a graph edit only, never a session
-    feature_host.py  the generic feature host: the Context a feature is handed, and the two questions
-                 asked of the folders under `features/` (an insertion now, a gate at the dispatch)
+    plugin_host.py  the generic plugin host: the Context a plugin is handed, and the two questions
+                 asked of the folders under `plugins/` (an insertion now, a gate at the dispatch)
     actions.py   state -> an action package (dispatch / wait / ask_user / stop)
     planner.py   `plan()`: the pure decision, including the node's own close
     writer.py    `apply()` / `record()`: run the commands, and enforce the apply contract
 
 There is no stage table and no per-round file: one cycle picks one DAG node at a time, and how that
-node splits its own work is the session's business. No feature is a part of this package: a feature is
-a folder under `features/` -- a declaration and an implementation, with the declaration naming the
-dedupe tag and the method card the outside sees -- and the names this core feeds to every reader come
+node splits its own work is the session's business. No plugin is a part of this package: a plugin is
+a folder under `plugins/` -- a declaration and an implementation, with the declaration naming the
+dedupe tag and the method skill the outside sees -- and the names this core feeds to every reader come
 from those declarations, not from here.
 
 This package is loaded by PATH, never by name: `conduct_pipeline.py` registers it under `pf_pipeline`
@@ -40,7 +40,7 @@ from . import instruct  # noqa: F401
 from . import nodes  # noqa: F401
 from . import prompts  # noqa: F401
 from . import insertion  # noqa: F401
-from . import feature_host  # noqa: F401
+from . import plugin_host  # noqa: F401
 from . import actions  # noqa: F401
 from . import planner  # noqa: F401
 from . import writer  # noqa: F401
@@ -51,7 +51,7 @@ from . import writer  # noqa: F401
 #: package -- the layers keep none of their own, so there is no second list to drift from this one.
 __all__ = [
     # the layers themselves, for a caller that wants to poke at one of them
-    'seam', 'store', 'instruct', 'nodes', 'prompts', 'insertion', 'feature_host', 'actions',
+    'seam', 'store', 'instruct', 'nodes', 'prompts', 'insertion', 'plugin_host', 'actions',
     'planner', 'writer',
 
     # store: the read layer, and the door to the session notes under `.pf/meta/sessions/`
@@ -64,12 +64,12 @@ __all__ = [
     'session_note', 'session_notes', 'note_session', 'SESSION_NOTE_PY',
 
     # store: the settings -- one knob read through the whole chain, and the readings a ticket's
-    # form asks for (both merged from the features' declarations on the way)
+    # form asks for (both merged from the plugins' declarations on the way)
     'CONFIG_NAME', 'global_config_path', 'project_config_path',
     'knob_specs', 'resolve_knob', 'knob_sources', 'ticket_readings',
 
-    # feature_host: the Context a feature is handed, and the two questions the core asks of it
-    'Context', 'insertions', 'gates', 'registry', 'FEATURE_REGISTRY_PY',
+    # plugin_host: the Context a plugin is handed, and the two questions the core asks of it
+    'Context', 'insertions', 'gates', 'registry', 'PLUGIN_REGISTRY_PY',
 
     # instruct: the account, and the scope judgement
     'instruction_is_live', 'SCOPES', 'DEFAULT_SCOPE', 'entry_scope',
@@ -107,7 +107,7 @@ __all__ = [
 # with `__all__`, and a name that appears in one and not the other is exactly the drift this split
 # has to avoid -- so a name nobody defines is a loud ImportError at load time, not a missing
 # attribute later.
-_LAYERS = (store, instruct, nodes, prompts, insertion, feature_host, actions, planner, writer)
+_LAYERS = (store, instruct, nodes, prompts, insertion, plugin_host, actions, planner, writer)
 
 for _name in __all__:
     if _name in globals():

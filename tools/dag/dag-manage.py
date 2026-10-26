@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manage a dependency graph (DAG) of project ideas/features.
+"""Manage a dependency graph (DAG) of project ideas/plugins.
 
 The verbs, their flags and their values are this file's parser: `dag-manage.py --help` and
 `dag-manage.py help` print them.
@@ -1171,7 +1171,7 @@ def cmd_validate(args):
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog='dag-manage.py',
-        description='Manage a dependency graph (DAG) of project ideas/features.',
+        description='Manage a dependency graph (DAG) of project ideas/plugins.',
     )
     subs = parser.add_subparsers(dest='command', metavar='<command>')
     subs.required = True

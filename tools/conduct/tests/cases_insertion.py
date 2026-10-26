@@ -2,18 +2,18 @@
 
 Two things are pinned here, and they are the two halves of one claim:
 
-  * **it works for a source that is not the shipped feature** -- the fixture below is a hand-written
-    feature folder (a declaration plus an implementation) plugged in through `PF_FEATURES_DIR`, and
+  * **it works for a source that is not the shipped plugin** -- the fixture below is a hand-written
+    plugin folder (a declaration plus an implementation) plugged in through `PF_PLUGINS_DIR`, and
     it gets the graph edit without re-implementing any of it: the uuid, the `spec.md` and the two
     edges all come out of `insertion.py`;
   * **there is only one implementation of each step** -- a second one reads perfectly well on its
     own, which is exactly why the guard exists. `insertion.py` is the one file allowed to spell the
-    placeholder, read the uuid off `add`, build the edge edits or write the text; no feature folder
+    placeholder, read the uuid off `add`, build the edge edits or write the text; no plugin folder
     may carry a second copy either.
 
 What an insertion deliberately does NOT do (open no session, write no prompt, move no hand) is a
 property of the action, and the cases that pin it drive a close or a pick:
-`cases_maintenance.py` and `cases_feature.py`.
+`cases_maintenance.py` and `cases_plugin.py`.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import Base, NODE, NODE2, pipeline  # noqa: E402
-from harness import CONDUCT_DIR, features_dir, write_feature  # noqa: E402
+from harness import CONDUCT_DIR, plugins_dir, write_plugin  # noqa: E402
 
 __all__ = ['TestTheInsertionMechanism']
 
@@ -43,13 +43,13 @@ def offer(ctx):
         'tags': ['coding', TAG],
         'spec_of': lambda node_id: f'# Inserted by a second source\\n\\nwritten for {node_id}\\n',
         'fields': {'metric': 'second_source'},
-        'note': 'a hand-written feature folder asked for this node',
+        'note': 'a hand-written plugin folder asked for this node',
     }
 '''
 
 
 def second_source_decl(name='second'):
-    """A close-timing insertion declaration: the smallest one that is a legal feature."""
+    """A close-timing insertion declaration: the smallest one that is a legal plugin."""
     return {
         'name': name,
         'summary': 'a hand-written second insertion source (the fixture)',
@@ -77,8 +77,8 @@ class TestTheInsertionMechanism(Base):
     def test_a_second_source_gets_the_same_mint_spec_and_edges(self):
         """The declaration is the source's; all three steps come out of the one mechanism.
 
-        The source is a folder with a `feature.json` and an `impl.py` and nothing else: it is plugged
-        in by pointing the scan at it, so the core is untouched (the same move the shipped feature
+        The source is a folder with a `plugin.json` and an `impl.py` and nothing else: it is plugged
+        in by pointing the scan at it, so the core is untouched (the same move the shipped plugin
         makes), and what lands is the core's own graph edit.
         """
         sb = self.a_pair()
@@ -87,8 +87,8 @@ class TestTheInsertionMechanism(Base):
         sb.next()                                  # the dispatch for NODE
         sb.write_signal('cyc', NODE, 'completed', 'done', {'deliverable': 'x'})
 
-        with features_dir(sb.root / 'features'):
-            write_feature(sb.root / 'features', 'second', second_source_decl(),
+        with plugins_dir(sb.root / 'plugins'):
+            write_plugin(sb.root / 'plugins', 'second', second_source_decl(),
                           SECOND_SOURCE_IMPL)
             action = sb.close_round(NODE)
 
@@ -113,7 +113,7 @@ class TestTheInsertionMechanism(Base):
 
         A second copy of any of them reads perfectly well on its own -- and that is the reason this
         guard is here: two copies drift, and the drifted one is whichever the next source copies. A
-        feature folder is where such a copy would appear first, so it is scanned too: a feature
+        plugin folder is where such a copy would appear first, so it is scanned too: a plugin
         declares, it never re-implements.
         """
         impl = CONDUCT_DIR / 'pipeline'
@@ -125,13 +125,14 @@ class TestTheInsertionMechanism(Base):
             'def write_spec': 'the spec writer',
         }
 
-        def files_with(needle: str, folder: Path) -> list:
-            return sorted(path.relative_to(CONDUCT_DIR).as_posix()
+        def files_with(needle: str, folder: Path, base: Path = CONDUCT_DIR) -> list:
+            return sorted(path.relative_to(base).as_posix()
                           for path in folder.rglob('*.py')
                           if path.parent.name != 'tests' and needle in path.read_text(encoding='utf-8'))
 
+        plugins = CONDUCT_DIR.parents[1] / 'plugins'
         for needle, what in needles.items():
             self.assertEqual(['pipeline/insertion.py'], files_with(needle, impl),
                              f'{what} is spelled somewhere else in the package')
-            self.assertEqual([], files_with(needle, CONDUCT_DIR / 'features'),
-                             f'a feature folder carries its own copy of {what}')
+            self.assertEqual([], files_with(needle, plugins, CONDUCT_DIR.parents[1]),
+                             f'a plugin folder carries its own copy of {what}')

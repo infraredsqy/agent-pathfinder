@@ -9,9 +9,9 @@ development discipline (the dispatch path is live ammunition).
   filtering (read before changing conduct's behaviour)
 - skills/ — one skill tree per language, `skills/<lang>/`: the `pf-*` skills plus one copy of the
   `shared/pf/` common cards each; `install.ps1 -Lang` picks a tree and links it into
-  `~/.agents/skills` by junction. A card bound to a feature is not here: it lives in that feature's
-  own folder (`tools/conduct/features/<name>/cards/<lang>/<method>/`) and is linked too, so it is
-  installed and removed with the feature.
+  `~/.agents/skills` by junction. A skill bound to a plugin is not here: it lives in that plugin's
+  own folder (`plugins/<name>/skills/<lang>/<method>/`) and is linked too, so it is
+  installed and removed with the plugin.
   Common cards are named after themselves (`subagents.md`, `pool.md`, `toolcraft.md`, …) —
   `AGENTS.md` / `CLAUDE.md` are host-reserved names, case-insensitive: whichever directory one
   falls into, the host injects it as instructions into every session that starts work there
@@ -21,6 +21,16 @@ development discipline (the dispatch path is live ammunition).
 - install.ps1 — install and self-check: link the skills, put `pf` on PATH; idempotent, re-running
   repairs it
 - .gitignore — the blocklist for workspace litter
+
+## This checkout is the running tool
+
+- `pf` is on PATH and `~/.agents/skills` holds junctions into here: saving a file under `tools/` or
+  `skills/` changes what every other project's session reads, at that moment. Do that work in a
+  worktree instead (`git worktree add`), run the suite there, and merge back; the main tree stays a
+  version that works. A pipeline node already forks (`worktree_mode` defaults to `fork`) — this is
+  about a session that works here outside a node.
+- Inside a worktree, run this checkout's own entry by path (`python <worktree>\tools\bin\pf.py`):
+  the `pf` on PATH still runs the main tree's copy.
 
 ## Documentation discipline
 

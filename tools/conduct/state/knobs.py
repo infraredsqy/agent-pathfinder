@@ -3,9 +3,9 @@
 A **knob** is one named setting this tree reads. There are four kinds and no others: `number` (a
 decimal), `integer` (a positive whole number), `word` (one of a small vocabulary, when the knob names
 one), and `switch` (`on` / `off`). Which knobs exist is two tables merged: `BUILTIN` below -- the
-settings the core itself needs -- and whatever the installed features declare, which `specs` takes
-from `pipeline/feature_registry.py` and merges in. No feature's name appears in this file: a
-feature's knobs arrive as data, and the merge is what makes one name reachable from every door
+settings the core itself needs -- and whatever the installed plugins declare, which `specs` takes
+from `pipeline/plugin_registry.py` and merges in. No plugin's name appears in this file: a
+plugin's knobs arrive as data, and the merge is what makes one name reachable from every door
 (writing-side validation, `--help`'s candidates, the ticket form, the doctor).
 
 **Narrow beats wide.** A value lives on one chain, and the first layer that states it wins:
@@ -24,16 +24,16 @@ pair, and the labels the command line prints come from `source_label`.
 **Which layers a knob takes is the knob's own cell** (`layers`), not a property of the chain. A
 built-in *setting* is how this project and this machine behave -- `max_agents` is not a property of
 one line or of one node's run, and neither reader asks those layers -- so it takes the two wide ones
-only (`SETTING_LAYERS`). A knob a feature declares is read through the whole chain by the feature
+only (`SETTING_LAYERS`). A knob a plugin declares is read through the whole chain by the plugin
 host, so it takes all four unless its own declaration narrows the set (`layers`, copied in by
-`feature_registry.knob_specs`). A value hand-written into a layer the knob does not take is
+`plugin_registry.knob_specs`). A value hand-written into a layer the knob does not take is
 *reported* when that layer file is read and never quietly ignored: a setting nobody reads is exactly
 the complaint this table exists to end. The line's own three policies (`parallel` / `when_shelved` /
 `spawner`) are not knobs at all -- they live on the line record, and `state/cycles.py` owns them.
 
 `worktree_mode`'s factory value is a condition rather than a constant (`fork` in a git project, `off`
 otherwise), so its cell states no default and `default_of` computes it. A knob with no default at all
-(a feature's threshold) has no factory value: "not configured" is its resting state, and it reads as
+(a plugin's threshold) has no factory value: "not configured" is its resting state, and it reads as
 `None` until some layer states it.
 
 The two write-side rules that are not obvious:
@@ -50,7 +50,7 @@ The two write-side rules that are not obvious:
 
 This file is loaded by path from the pipeline package too (which borrows `specs`, `resolve_knob`,
 `knob_sources`, `ticket_readings` and `shadowed` through `pipeline/store.py`), so it keeps its imports
-inside the `state` package and takes the one foreign file (`feature_registry.py`) by path.
+inside the `state` package and takes the one foreign file (`plugin_registry.py`) by path.
 """
 
 from __future__ import annotations
@@ -92,7 +92,7 @@ LAYER_LABELS = {
 #: The settings the core itself reads. One cell per knob: `kind` is `parse`'s whole dispatch,
 #: `default` is the factory value (`None` means "no factory value" -- see `default_of`), `values` is
 #: the vocabulary a word knob names (absent means "any word"), `layers` is which override layers may
-#: state it (see `SETTING_LAYERS`), and `summary` is what `--help` prints. A feature's knobs are
+#: state it (see `SETTING_LAYERS`), and `summary` is what `--help` prints. A plugin's knobs are
 #: merged on top of these by `specs`, and a built-in name always keeps its cell: a broken declaration
 #: must never be able to change what the core's own settings mean (`shadowed` is where a declaration
 #: that tried is reported).
@@ -122,21 +122,21 @@ BUILTIN = {
 }
 
 
-# ── the one foreign file this package takes: the feature declarations ────────
+# ── the one foreign file this package takes: the plugin declarations ────────
 
 CONDUCT = Path(__file__).resolve().parent.parent
 
 
 def _registry():
-    """`pipeline/feature_registry.py` loaded by path -- the tree's one scan of installed features.
+    """`pipeline/plugin_registry.py` loaded by path -- the tree's one scan of installed plugins.
 
     By path, not by import: this package and the pipeline package are each loaded by path, and
     importing one into the other would wind a cycle. `register` + `reuse` gives every caller in this
     process the same module object, and the registry caches nothing of its own.
     """
     from .store import _loader
-    return _loader().load_by_path('pf_feature_registry',
-                                  CONDUCT / 'pipeline' / 'feature_registry.py',
+    return _loader().load_by_path('pf_plugin_registry',
+                                  CONDUCT / 'pipeline' / 'plugin_registry.py',
                                   register=True, reuse=True)
 
 
@@ -188,8 +188,8 @@ def _parse_cell(spec: dict, value):
 def layers_of(spec: dict) -> tuple:
     """The override layers one cell takes, narrowest first -- the cell's `layers`, `LAYERS` if absent.
 
-    A declared cell may name a narrower set (a feature that wants only the project layer, say); the
-    default is the whole chain, because a feature's knob is read by the host through all of it.
+    A declared cell may name a narrower set (a plugin that wants only the project layer, say); the
+    default is the whole chain, because a plugin's knob is read by the host through all of it.
     """
     return tuple(spec.get('layers') or LAYERS)
 
@@ -197,15 +197,15 @@ def layers_of(spec: dict) -> tuple:
 # ── the tables ──────────────────────────────────────────────────────────────
 
 def specs() -> dict:
-    """Every knob this tree knows: `BUILTIN`, with the installed features' declarations merged in.
+    """Every knob this tree knows: `BUILTIN`, with the installed plugins' declarations merged in.
 
     The merge is the one place two sources meet, so it is where the precedence is decided: a built-in
-    name keeps its own cell (a feature may not redefine what the core's settings mean -- that would be
+    name keeps its own cell (a plugin may not redefine what the core's settings mean -- that would be
     a core change discussed on its own), and `shadowed` is where the doctor reports a declaration that
-    tried. Features' knobs are added in declaration order, for a listing that does not move between
+    tried. Plugins' knobs are added in declaration order, for a listing that does not move between
     runs, and each takes the layers its own declaration names (the registry validates that cell and
     copies it in); a declaration naming none takes the whole chain, node and line included, because
-    the feature host reads its knobs through all of it.
+    the plugin host reads its knobs through all of it.
     """
     out = {name: dict(cell) for name, cell in BUILTIN.items()}
     for name, cell in _registry().knob_specs().items():
@@ -228,7 +228,7 @@ def shadowed() -> list:
     out = []
     for name, cell in _registry().knob_specs().items():
         if name in BUILTIN:
-            out.append(f'feature {cell.get("feature")!r} declares the knob {name!r}, which is already '
+            out.append(f'plugin {cell.get("plugin")!r} declares the knob {name!r}, which is already '
                        f'a built-in setting: the built-in cell stays in force, so the declared one '
                        f'can never be read -- give it a name of its own')
     return out

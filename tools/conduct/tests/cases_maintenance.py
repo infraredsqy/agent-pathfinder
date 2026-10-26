@@ -1,7 +1,7 @@
-"""The maintenance feature: a crossed debt line inserts a node at the close.
+"""The maintenance plugin: a crossed debt line inserts a node at the close.
 
-This file drives the feature the way the core does -- through the declaration, not through a name the
-core holds. The declaration (`features/maintenance/feature.json`) supplies the knobs
+This file drives the plugin the way the core does -- through the declaration, not through a name the
+core holds. The declaration (`plugins/maintenance/plugin.json`) supplies the knobs
 (`test_seconds_limit`, `issue_pool_weight_limit`, and the `maintenance` switch), the dedupe tag and
 the method name; its `impl.py` is the judgement; and the graph edit is the core's `insertion.py`.
 Nothing here reads a `pipeline.maintenance` any more -- that module is gone, and this is the
@@ -14,13 +14,13 @@ whole resolution chain (node -> line -> project -> machine -> factory), and a cr
 maintenance node between the node just closed and the node the close had already picked. **The
 insertion is a graph edit and nothing else**: no session is opened, no prompt is written and the
 line's hand is not moved -- the next dispatch picks the new node up by the usual ranking. A project
-that configures no line gets the close it always got -- that is the regression this feature lives or
+that configures no line gets the close it always got -- that is the regression this plugin lives or
 dies by, and it is the first case here.
 
-Every case that needs the shipped declaration carries `requires_feature('maintenance')`: deleting
+Every case that needs the shipped declaration carries `requires_plugin('maintenance')`: deleting
 that folder is a supported state of this tree (the core keeps closing and dispatching), so the
 behaviour cases skip rather than fail there. The mechanism cases that must run without it point
-`PF_FEATURES_DIR` at their own folder -- `cases_feature.py`.
+`PF_PLUGINS_DIR` at their own folder -- `cases_plugin.py`.
 
 The side where this line really runs (the graph edit through real processes, a whole line walked to
 the end, the form the note's receiver sees) lives in `cases_maintenance_run.py`.
@@ -35,13 +35,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import Base, NODE, NODE2, NODE3, pipeline, normalise
 from harness import (CONDUCT_DIR, InProcessDagManage, STATE_MANAGE, TOOLS_DIR, WorkerSession,
-                     _fresh_module, _run_proc, requires_feature, run_state_manage)
+                     _fresh_module, _run_proc, requires_plugin, run_state_manage)
 
 __all__ = ['TestMaintenanceDedup', 'TestMaintenanceChannel', 'TestMaintenanceThresholds',
            'TestMaintenanceScope', 'TestMaintenanceSwitch', 'ReadingWorker', 'SelfHealingWorker',
            'coding_line']
 
-#: The tool that owns the issue pool; the feature asks it for the pool's number through the same CLI.
+#: The tool that owns the issue pool; the plugin asks it for the pool's number through the same CLI.
 ISSUE_MANAGE = TOOLS_DIR / 'issue' / 'issue_manager.py'
 
 #: The line the maintenance cases write onto a cycle (`test_seconds_limit`, a declared knob), and the
@@ -56,7 +56,7 @@ TEST_TAG = 'maint:test_seconds'
 
 
 def seed_pool(sb, *issues) -> None:
-    """Put items into the pool through its own command (the same source the feature reads)."""
+    """Put items into the pool through its own command (the same source the plugin reads)."""
     for item in issues:
         _run_proc(sb.root, [ISSUE_MANAGE, 'add', '--id', item['id'], '--title', item['id'],
                             '--severity', item['severity'],
@@ -64,7 +64,7 @@ def seed_pool(sb, *issues) -> None:
 
 
 def set_config(sb, key, value, *extra):
-    """Write a knob into the project through its own command (the same chain this feature reads).
+    """Write a knob into the project through its own command (the same chain this plugin reads).
 
     `--global` goes through the sandbox's own home directory (`Sandbox.home`), and `--node <id>` /
     `--cycle <id>` at the layer each names: the layer a case writes is the layer `pf config` writes.
@@ -100,7 +100,7 @@ def coding_line(test, *, policies=(), reading=None, dispatch=True, pair=True):
 
 
 def close_offers(sb, *, target=None, ticket=None):
-    """What the features offer at this close, through the core's own door.
+    """What the plugins offer at this close, through the core's own door.
 
     The judgement is asked exactly the way `_close_own_node` asks it: one `Context` carrying the line,
     the node being closed, that node's ticket and the graph. No graph edit is made here -- the offer
@@ -136,7 +136,7 @@ class SelfHealingWorker(ReadingWorker):
     A maintenance node exists because a measurement crossed its line, and its whole scope is to pull
     THAT measurement back under it. A worker that reported the same over-the-line number after doing
     the work would be saying it delivered while the debt stood -- so it reports the fixed number,
-    which is also the only way to tell a feature that inserts one node from one that inserts forever.
+    which is also the only way to tell a plugin that inserts one node from one that inserts forever.
     """
 
     #: The reading the maintenance node reports: back under the line it was inserted for.
@@ -151,7 +151,7 @@ class SelfHealingWorker(ReadingWorker):
 
     def work(self, action):
         # Every `add` the tool runs mints exactly one node, and that node is an inserted one (a
-        # feature's insertion is the only caller). `Sb.next()` answers in-process here, so the uuid
+        # plugin's insertion is the only caller). `Sb.next()` answers in-process here, so the uuid
         # the graph just grew is readable without parsing anything.
         if InProcessDagManage.last_added:
             self.maintenance_nodes.add(InProcessDagManage.last_added)
@@ -163,15 +163,15 @@ class SelfHealingWorker(ReadingWorker):
         return dict(self.reading)
 
 
-@requires_feature(SWITCH)
+@requires_plugin(SWITCH)
 class TestMaintenanceChannel(Base):
-    """The feature itself: a project with nothing configured, a crossed line, and a reading under
+    """The plugin itself: a project with nothing configured, a crossed line, and a reading under
     its line."""
 
     # ── the regression floor: with no number configured, the close carries not one word more ─────
 
     def test_without_a_threshold_the_close_and_the_graph_are_untouched(self):
-        """With not one number configured in the project, this feature is wholly inert: the return value, the
+        """With not one number configured in the project, this plugin is wholly inert: the return value, the
         graph and the ledger are byte-for-byte what they are without it.
 
         Two projects walk the same line, the one difference being that one of them wrote one more line
@@ -355,7 +355,7 @@ class TestMaintenanceChannel(Base):
                          'the rest of the fill keeps its slot, and the inserted node takes none')
 
     def test_the_inserted_node_carries_why_what_scope_and_a_mechanical_verdict(self):
-        """The maintenance node's spec is generated by the feature: why it was inserted, the scope of this
+        """The maintenance node's spec is generated by the plugin: why it was inserted, the scope of this
         pass, and a mechanically judgeable completion rule."""
         sb = coding_line(self, policies=[(TEST_LINE, LINE)], reading=LINE + 40)
 
@@ -372,7 +372,7 @@ class TestMaintenanceChannel(Base):
         self.assertIn('Why this node was inserted', spec)
         # scope: this pass does one thing only
         self.assertIn('this pass does one thing only', spec)
-        # how: name which method card owns this kind of debt -- the declaration's own method
+        # how: name which method skill owns this kind of debt -- the declaration's own method
         self.assertIn('How to do it', spec)
         self.assertIn('method: pf-test-audit', spec)
         self.assertIn('~/.agents/skills/pf-test-audit/SKILL.md', spec)
@@ -437,13 +437,13 @@ class TestMaintenanceChannel(Base):
         self.assertEqual(sb.dag()['nodes'][NODE2]['status'], 'todo')
 
 
-@requires_feature(SWITCH)
+@requires_plugin(SWITCH)
 class TestMaintenanceSwitch(Base):
-    """The feature's switch: an ordinary word knob on the resolution chain, and never set = on.
+    """The plugin's switch: an ordinary word knob on the resolution chain, and never set = on.
 
     The switch used to be a settings key with a second copy of its name on the reading side. Now it is
     the declaration's own `enable_knob`, merged into the one knob table and enforced by
-    `feature_host` for every feature alike -- so this class drives the same close through each layer of
+    `plugin_host` for every plugin alike -- so this class drives the same close through each layer of
     the chain, differing only in which layer states `off`.
     """
 
@@ -492,11 +492,11 @@ class TestMaintenanceSwitch(Base):
         self.assertEqual(sb.path_nodes(), [NODE])
         self.assertEqual(len(sb.dag()['nodes']), 2, 'nothing may be inserted')
         self.assertEqual(sb.dag()['nodes'][NODE2]['dependencies'], [NODE],
-                         'the edge the feature would have rewritten is untouched')
+                         'the edge the plugin would have rewritten is untouched')
 
     def test_a_project_that_never_set_it_inserts_the_node(self):
         """A project that never set this knob: a crossed line still inserts -- that is the factory default
-        in the declaration, and the behaviour since this feature appeared."""
+        in the declaration, and the behaviour since this plugin appeared."""
         sb = self.crossed_line()
 
         self.assertEqual(pipeline.resolve_knob(sb.root, SWITCH, cycle=sb.cycle(), node=NODE), 'on')
@@ -570,7 +570,7 @@ class TestMaintenanceSwitch(Base):
         self.assert_inserted(sb, sb.close_round(NODE))
 
 
-@requires_feature(SWITCH)
+@requires_plugin(SWITCH)
 class TestMaintenanceThresholds(Base):
     """The lines behind the two metrics are knobs, and they resolve on the whole chain -- not just in
     the cycle's own `policies` slot."""
@@ -592,7 +592,7 @@ class TestMaintenanceThresholds(Base):
 
     def test_a_line_without_them_carries_none(self):
         """A line that never configured them does not carry these two keys at all: both resolve to nothing,
-        and the feature is simply inert for it."""
+        and the plugin is simply inert for it."""
         sb = self.make()
         sb.add_node(NODE, 'Write code', mode='auto', tags=['coding'])
         sb.start_cycle(tags=['coding'])
@@ -641,9 +641,9 @@ class TestMaintenanceThresholds(Base):
         self.assertIn('over the line 60s', action['note'])
 
 
-@requires_feature(SWITCH)
+@requires_plugin(SWITCH)
 class TestMaintenanceScope(Base):
-    """What the feature reads, and from where: the ticket, the pool tool, and the code branch only."""
+    """What the plugin reads, and from where: the ticket, the pool tool, and the code branch only."""
 
     def test_a_line_that_is_not_about_code_reads_the_number_and_does_nothing(self):
         """Another line reads the same number (both the line and the reading are in hand) but does nothing --
@@ -673,7 +673,7 @@ class TestMaintenanceScope(Base):
         a maintenance node.
 
         This slot asks no session for a number: the fixture lays out the pool, and the issue tool
-        computes it on the spot at the close -- through `ctx.capture`, the feature's own child process.
+        computes it on the spot at the close -- through `ctx.capture`, the plugin's own child process.
         """
         sb = self.make()
         sb.add_node(NODE, 'Write code A', mode='auto', tags=['coding'])
@@ -695,7 +695,7 @@ class TestMaintenanceScope(Base):
         spec = (sb.root / '.pf' / 'nodes' / made / 'spec.md').read_text(encoding='utf-8')
         self.assertIn('issue_pool_weight', spec)
         self.assertIn(POOL_LINE, spec)
-        # the "how" points at the pool-clearing card, and names the tool along with it
+        # the "how" points at the pool-clearing skill, and names the tool along with it
         self.assertIn('How to do it', spec)
         self.assertIn('method: pf-issue-repair', spec)
         self.assertIn('pf issue weight', spec)
@@ -716,7 +716,7 @@ class TestMaintenanceScope(Base):
         sb.write_signal('cyc', NODE, 'completed', 'done', {'deliverable': 'x'})
         seed_pool(sb, {'id': 'debt-p2', 'severity': 'P2'})
 
-        # nothing configured: the feature contributes nothing and starts no child
+        # nothing configured: the plugin contributes nothing and starts no child
         ticket = sb.read_signal('cyc', NODE)
         calls = []
         real = pipeline._capture
@@ -740,7 +740,7 @@ class TestMaintenanceScope(Base):
                         f'the pool number did not come from the pool tool: {calls}')
 
 
-@requires_feature(SWITCH)
+@requires_plugin(SWITCH)
 class TestMaintenanceDedup(Base):
     """One metric may hold only one unsettled maintenance node at a time: once somebody is already
     repaying the debt, no second one is inserted."""
@@ -811,7 +811,7 @@ class TestMaintenanceDedup(Base):
 
     def test_only_a_todo_node_holds_the_metric(self):
         """The dedup read is "still open", and `shelved` is not: a human who never revives one would leave
-        the feature mute forever if it counted."""
+        the plugin mute forever if it counted."""
         sb = self.make()
         sb.add_node(NODE, 'Write code A', mode='auto', tags=['coding'])
         sb.add_node(NODE2, 'Write code B', mode='auto', tags=['coding'], deps=[NODE])
@@ -830,7 +830,7 @@ class TestMaintenanceDedup(Base):
         self.assertEqual(len(sb.dag()['nodes']), 4)
 
     def test_the_switch_has_no_second_table_of_its_own(self):
-        """The writing side keeps no copy of this feature's switch: the name reaches every door through
+        """The writing side keeps no copy of this plugin's switch: the name reaches every door through
         the one merged table.
 
         A missing key used to be a `KeyError` in a copied spec table; now the door that used to copy it

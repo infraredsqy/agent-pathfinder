@@ -9,16 +9,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import feature_host, insertion, seam
+from . import plugin_host, insertion, seam
 from .nodes import mode_for, node_row, node_spec_path
 from .prompts import build_prompt_text, launch_dir, launch_prompt_path
 from .store import load_dag
 
-#: The action's own cells. A feature's `fields` is its own data (`metric`, and whatever it wants a
+#: The action's own cells. A plugin's `fields` is its own data (`metric`, and whatever it wants a
 #: reader to see beside the action), never a door into the answer itself: an offer saying `cycle`
 #: would name another line, one saying `action` another kind of action, and `prompt` / `nodes` would
 #: pretend an insertion is a dispatch. `_insertions_due` drops each of these with one `WARNING:`
-#: naming the key, so a copy-paste into `fields` costs the feature that key and nothing else.
+#: naming the key, so a copy-paste into `fields` costs the plugin that key and nothing else.
 RESERVED_FIELDS = frozenset({
     'action', 'cycle', 'node_id', 'node_title', 'note', 'steps',
     'spec', 'add_command', 'spec_of', 'commands', 'insertions',
@@ -52,7 +52,7 @@ def _dispatch_many(project: Path, cycle: dict, node_ids: list, dag: dict | None 
     together. A single-node line still gets the same shape, with exactly one entry in `nodes`.
 
     `dag` is the already-read graph when the caller has one (the close and the pick each read it
-    once, and a feature gate is asked with that same copy).
+    once, and a plugin gate is asked with that same copy).
     """
     dag = dag if dag is not None else load_dag(project)
     nodes = [_node_entry(project, cycle, node_row(dag, node_id), mode_for(node_id, dag))
@@ -111,7 +111,7 @@ def _insert_node(cycle: dict, edit: dict, note: str, steps, fields: dict | None 
 def _insertion_steps(project: Path, closed: str | None, target: dict) -> list:
     """What this action does, in the order a reader needs it: it is a graph edit, not a session.
 
-    The words are the core's, not a feature's: they name the mechanism's own place (the generated
+    The words are the core's, not a plugin's: they name the mechanism's own place (the generated
     spec's landing spot, which is `insertion.NEW_NODE` until `apply` has minted the uuid) and the two
     things an insertion deliberately does not do.
 
@@ -133,7 +133,7 @@ def _insertion_steps(project: Path, closed: str | None, target: dict) -> list:
 def _pick_insertions_due(project: Path, cycle: dict, offers: list, target: dict) -> dict | None:
     """The action that inserts one node per offer at a PICK, in front of the node the pick chose.
 
-    The pick is the other timing an insertion is allowed at (see `feature_registry.TIMINGS`), and it
+    The pick is the other timing an insertion is allowed at (see `plugin_registry.TIMINGS`), and it
     is the same mechanism as the close's: each offer declares a node, `insertion.insert` makes it,
     and the ranking is what decides who runs first. What is different is that there is no node being
     closed: no close commands, no pins, and the place is `after=None` -- the new node has no parent,
@@ -152,10 +152,10 @@ def _pick_insertions_due(project: Path, cycle: dict, offers: list, target: dict)
 def _text_of(offer: dict):
     """One offer's text, evaluated once here, as the builder the graph edit and the mint call.
 
-    The feature's own `spec_of()` runs inside `_insertions_due`'s `try`: `insertion.insert` needs the
+    The plugin's own `spec_of()` runs inside `_insertions_due`'s `try`: `insertion.insert` needs the
     text before the close lands (`add --desc`), so a builder that raises would stop the close. What
     goes on into the action is this function instead -- it hands back that one text with the minted
-    uuid filled in where the placeholder was, so `mint` never asks the feature a second time. A text
+    uuid filled in where the placeholder was, so `mint` never asks the plugin a second time. A text
     that is not a string is refused here too: a builder answering `None` would fail while writing
     `spec.md`, long after the close has run.
     """
@@ -169,7 +169,7 @@ def _text_of(offer: dict):
 def _own_fields(name: str, fields) -> dict:
     """One offer's `fields`, with the action's own cells dropped (one `WARNING:` per key).
 
-    `fields` is the feature's data and nothing else. The shape check in `feature_host` refuses a
+    `fields` is the plugin's data and nothing else. The shape check in `plugin_host` refuses a
     value that is not a dict; this refuses the keys that belong to the action itself
     (`RESERVED_FIELDS`). A warning rather than a silent drop, because a `cycle` that vanishes is a
     bug its author has to see -- a copy-pasted `note` is the plausible accident.
@@ -177,7 +177,7 @@ def _own_fields(name: str, fields) -> dict:
     kept = {}
     for key, value in dict(fields or {}).items():
         if key in RESERVED_FIELDS:
-            feature_host.warn(name, 'field is reserved',
+            plugin_host.warn(name, 'field is reserved',
                               f'{key!r} is the action\'s own cell and was dropped')
             continue
         kept[key] = value
@@ -188,7 +188,7 @@ def _insertions_due(project: Path, cycle: dict, closed: str | None, offers: list
                     close_commands: list, extra_note: str = '') -> dict | None:
     """The action that inserts one node per offer, between the node just closed and the one it picked.
 
-    An insertion source (a feature's `offer`) says what it wants in the graph and the words around
+    An insertion source (a plugin's `offer`) says what it wants in the graph and the words around
     it; this joins those declarations with the core mechanism (`insertion.insert`) -- the uuid, the
     text and the edges have one implementation, and this is the action they are carried in.
 
@@ -202,15 +202,15 @@ def _insertions_due(project: Path, cycle: dict, closed: str | None, offers: list
     the pick decides who runs first -- an insertion never waits for another insertion.
 
     **Each offer is contained on its own.** Building one offer's edit runs its source's `spec_of()`
-    eagerly (`_text_of`), and a feature whose builder raises -- or ends the process with `sys.exit()`,
+    eagerly (`_text_of`), and a plugin whose builder raises -- or ends the process with `sys.exit()`,
     which is not an `Exception` -- must not stop somebody's close: one `WARNING:` line, that offer
     contributes nothing this pass, and the offers after it still land.
     With every offer skipped this returns `None`, and the caller answers the ordinary close -- the
-    node is still settled and the next slot still dispatches, as if no feature had spoken.
+    node is still settled and the next slot still dispatches, as if no plugin had spoken.
 
     **The offer's `fields` is its own data.** The keys the action itself owns (`RESERVED_FIELDS`) are
     dropped from it, each with one warning: the action's identity -- which line, which kind, which
-    node, the note, the steps -- is the core's answer and never something a feature can rewrite.
+    node, the note, the steps -- is the core's answer and never something a plugin can rewrite.
 
     `closed` is `None` for a PICK-time insertion (`_pick_insertions_due`): no node was closed, so
     there are no close commands to carry and the new nodes enter the graph with no parent.
@@ -234,9 +234,9 @@ def _insertions_due(project: Path, cycle: dict, closed: str | None, offers: list
                 close_commands=close_commands if not edits else None,
             )
         except (Exception, SystemExit) as e:     # noqa: BLE001 -- tolerant at runtime, strict in doctor
-            feature_host.warn(offer.get('feature') or '?', 'failed', e)
+            plugin_host.warn(offer.get('plugin') or '?', 'failed', e)
             continue
-        edit['fields'] = _own_fields(offer.get('feature') or '?', offer.get('fields'))
+        edit['fields'] = _own_fields(offer.get('plugin') or '?', offer.get('fields'))
         edit['note'] = str(offer.get('note') or '')
         edit['steps'] = _insertion_steps(project, closed, target)
         edits.append(edit)

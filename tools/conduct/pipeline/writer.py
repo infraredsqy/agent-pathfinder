@@ -484,7 +484,7 @@ def record(project, cycle_id: str | None = None) -> dict:
     **An insertion is where the call stops, at BOTH timings.** The graph edit is the answer: the
     caller commits and pushes, then runs the next step, where the ranking decides who runs first. So
     a pick-time insertion is not re-planned behind the caller's back -- the settle loop ends on the
-    `insert_node` action, exactly as a close's insertion does -- and a feature that answers every
+    `insert_node` action, exactly as a close's insertion does -- and a plugin that answers every
     time it is asked contributes one node per call, never a burst. No caller may assume `record`
     always ends in a dispatch.
 
@@ -503,7 +503,7 @@ def record(project, cycle_id: str | None = None) -> dict:
             return apply(project, cycle_id, action=action)
         if kind == insertion.INSERT_ACTION:
             # One insertion ends the step, whatever timing asked for it: the same answer a close's
-            # insertion gives. Re-planning here is what let a pick feature that keeps offering grow
+            # insertion gives. Re-planning here is what let a pick plugin that keeps offering grow
             # the graph and never reach a dispatch.
             return apply(project, cycle_id, action=action)
         if kind == 'stop_pipeline':

@@ -238,7 +238,7 @@ class TestNodeTags(Base):
         self.assertEqual(sb.cycle()['status'], 'inactive')
 
     def test_an_untagged_cycle_picks_what_it_always_picked(self):
-        """An empty filter set makes a cycle byte-for-byte what it was before this feature: the
+        """An empty filter set makes a cycle byte-for-byte what it was before this plugin: the
         whole graph is in range.
 
         This branch now has only one entry -- **the records already on disk**: `cycle start` /

@@ -82,7 +82,7 @@ thousand (instance: one node's manuscript ran 429 lines and its `report.md` 2017
 
 ## `conduct-execute-dispatches-on-conductor-instructions` — dispatching on the conductor's notes
 
-**Symptom**: the spec or a method card says "batch by change domain, dispatch Fix / Review per
+**Symptom**: the spec or a method skill says "batch by change domain, dispatch Fix / Review per
 batch, commit once a batch passes", and you start dispatching subagents along with it — one layer
 inside another.
 

@@ -32,9 +32,9 @@ LEDGER_MERGE = CONDUCT / 'ledger-merge.py'
 #: Shared plumbing, and every writer treats a missing session note as best effort -- which is exactly
 #: why the doctor has to check it by name.
 SESSION_NOTE = TOOLS / 'shared' / 'session-note.py'
-#: The one scan of installed features: the pipeline entry never names it (each feature's timing goes
+#: The one scan of installed plugins: the pipeline entry never names it (each plugin's timing goes
 #: through it), so it is checked here by name like the other unrouted files.
-FEATURE_REGISTRY = CONDUCT / 'pipeline' / 'feature_registry.py'
+PLUGIN_REGISTRY = CONDUCT / 'pipeline' / 'plugin_registry.py'
 
 # Bootstrap: the loader is fetched by path too, so every file has to carry this paragraph itself
 # (see `shared/loader.py`).
@@ -121,9 +121,9 @@ FORWARD_GROUPS = (
 )
 
 #: The files no verb names: the pipeline entry every verb file loads, the shared session note, and the
-#: registry the installed features are read through. `TOOL_FILES` checks these alongside everything
+#: registry the installed plugins are read through. `TOOL_FILES` checks these alongside everything
 #: the tables above point at.
-UNROUTED_TOOLS = (CONDUCT_PIPELINE, SESSION_NOTE, FEATURE_REGISTRY)
+UNROUTED_TOOLS = (CONDUCT_PIPELINE, SESSION_NOTE, PLUGIN_REGISTRY)
 
 #: What `doctor` insists on finding: the tables' targets, once each, then the two above -- so a verb
 #: added to a table is checked by itself.
@@ -203,14 +203,14 @@ def _registered_driver(root: Path) -> str:
     return _git(root, 'config', '--get', f'merge{_ledger_name()}.driver').stdout.strip()
 
 
-def _feature_registry():
-    """`conduct/pipeline/feature_registry.py` loaded by path: the tree's one scan of installed features.
+def _plugin_registry():
+    """`conduct/pipeline/plugin_registry.py` loaded by path: the tree's one scan of installed plugins.
 
     By path, like every other part of this tree -- `pf` borrows no tool's package. The doctor is where
     "what is installed" is answered without running the pipeline at all, which is exactly why a
-    feature's declaration is data: a broken feature must not take this door down with it.
+    plugin's declaration is data: a broken plugin must not take this door down with it.
     """
-    return _loader().load_by_path('pf_feature_registry', FEATURE_REGISTRY,
+    return _loader().load_by_path('pf_plugin_registry', PLUGIN_REGISTRY,
                                   register=True, reuse=True)
 
 
@@ -233,7 +233,7 @@ def _knob_line(name: str, spec: dict) -> str:
 
     The sentence is the declaration's, read through the registry -- the doctor restates none of it.
     Everything here is data a declaration owns, which is why a listing can answer "how does this
-    feature work" without running it.
+    plugin work" without running it.
     """
     kind = spec.get('kind') or '?'
     details = []
@@ -249,43 +249,43 @@ def _knob_line(name: str, spec: dict) -> str:
 
 
 def _report_features() -> int:
-    """Say which features are installed and how each one works -- its own summary, the knobs it
+    """Say which plugins are installed and how each one works -- its own summary, the knobs it
     declares, the tags and methods the outside writes down -- print every problem the validator
     found, and count those problems for the doctor's exit code.
 
-    Zero feature folders is a legal project and is reported as such: the core is whole without any
-    feature, and that sentence is what makes it visible.
+    Zero plugin folders is a legal project and is reported as such: the core is whole without any
+    plugin, and that sentence is what makes it visible.
 
     This is the door a skill points at when it has to say "go look at what is installed": the listing
-    is the declarations' own words, so no skill has to carry a feature's name, its tags or its method.
+    is the declarations' own words, so no skill has to carry a plugin's name, its tags or its method.
 
-    The questions are the validator's (`feature_registry.verify()`), which is also what the test
-    suite asks: the declarations against the core's closed sets, the method cards each one names, and
-    one real call of every implementation against a stand-in project -- a feature whose code cannot
+    The questions are the validator's (`plugin_registry.verify()`), which is also what the test
+    suite asks: the declarations against the core's closed sets, the method skills each one names, and
+    one real call of every implementation against a stand-in project -- a plugin whose code cannot
     even compile, or whose door raises, has to be named on this list, not discovered at the next
     close. The one road a project's pipeline takes never asks any of this.
     """
-    registry = _feature_registry()
-    features = registry.load_all()
-    if not features:
-        print(f'features: 0 installed (the scan reads {registry.features_dir()}; one folder per '
-              f'feature is where one would come from)')
+    registry = _plugin_registry()
+    plugins = registry.load_all()
+    if not plugins:
+        print(f'plugins: 0 installed (the scan reads {registry.plugins_dir()}; one folder per '
+              f'plugin is where one would come from)')
     else:
-        print(f'features: {len(features)} installed')
+        print(f'plugins: {len(plugins)} installed')
         knobs = registry.knob_specs()
-        for feature in features:
-            decl = feature.get('decl')
+        for plugin in plugins:
+            decl = plugin.get('decl')
             decl = decl if isinstance(decl, dict) else {}
             summary = decl.get('summary')
             summary = summary.strip() if isinstance(summary, str) else ''
-            print(f'  · {feature["name"]}' + (f' — {summary}' if summary else ''))
+            print(f'  · {plugin["name"]}' + (f' — {summary}' if summary else ''))
             mine = [(name, spec) for name, spec in knobs.items()
-                    if spec.get('feature') == feature['name']]
+                    if spec.get('plugin') == plugin['name']]
             for index, (name, spec) in enumerate(mine):
                 lead = '      knobs: ' if index == 0 else '             '
                 print(lead + _knob_line(name, spec))
-            tags = registry.tags_of(feature)
-            methods = registry.methods_of(feature)
+            tags = registry.tags_of(plugin)
+            methods = registry.methods_of(plugin)
             if tags:
                 print('      tags: ' + ', '.join(tags))
             if methods:
@@ -315,7 +315,7 @@ def cmd_doctor(fix: bool = False) -> int:
     try:
         problems += _report_features()
     except Exception as e:                     # noqa: BLE001 -- a health check must answer, not die
-        print(f'  ✗ the feature registry could not be read: {e}')
+        print(f'  ✗ the plugin registry could not be read: {e}')
         problems += 1
 
     root = _project_root(Path.cwd())

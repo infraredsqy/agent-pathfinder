@@ -287,7 +287,7 @@ def main(argv=None) -> None:
         policy_parts.append(part)
     p_cpo.add_argument('value',
                        help='The value, in the key\'s own kind -- ' + '; '.join(policy_parts)
-                            + '. Every knob a feature declares rides on this line too. A core '
+                            + '. Every knob a plugin declares rides on this line too. A core '
                               'setting does not: it takes the project and global layers only, and '
                               '`pf config set` is its door. `off` drops this line\'s entry for a '
                               'number / integer / word, so the next layer of the chain shows '
@@ -443,9 +443,9 @@ def main(argv=None) -> None:
                     'ones, and the same name may be stated on several layers at once: the '
                     'resolution is deterministic, and `list` / `get` always say which layer the '
                     'value in force came from. The table is the built-in settings plus every knob the '
-                    'installed features declare -- `list` prints it, and a name nobody declares is '
+                    'installed plugins declare -- `list` prints it, and a name nobody declares is '
                     'refused. Not every knob takes every layer: a core setting takes the project and '
-                    'global layers, a feature\'s knob takes all four (`set` names the layers a knob '
+                    'global layers, a plugin\'s knob takes all four (`set` names the layers a knob '
                     'takes when it refuses one). The line\'s own policies -- `parallel`, '
                     '`when_shelved`, `spawner` -- are not settings and are not here: they live on '
                     'the line record, written by `pf cycle policy`. '

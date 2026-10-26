@@ -9,8 +9,8 @@ What each group pins, because each fails silently otherwise:
     number normalises an integral float and refuses the non-finite, a word is one of its vocabulary
     when it names one, a switch is exactly `on` / `off`. `parse` states what a value **is**; the
     positive-value rule the CLI adds belongs to the writer, so `-1` is a number here.
-  * `specs` -- the built-in settings plus every installed feature's declaration, merged once. A
-    built-in name keeps its own cell (a feature may not redefine what the core's settings mean), a
+  * `specs` -- the built-in settings plus every installed plugin's declaration, merged once. A
+    built-in name keeps its own cell (a plugin may not redefine what the core's settings mean), a
     declaration whose kind is outside the four is not a knob, and `shadowed()` is where a
     declaration that claimed a built-in name is reported (the built-in cell still wins).
   * `layers` -- which override layers a knob takes is the knob's own cell: a core setting takes the
@@ -23,12 +23,12 @@ What each group pins, because each fails silently otherwise:
     `when_knob` has a value in force on the chain, the line's own policies included: a layer states
     it, or the declaration gives it a factory default (a threshold with neither must not be measured
     for nothing).
-  * `PF_FEATURES_DIR` -- the scan follows that variable and caches nothing, so a feature installed or
+  * `PF_PLUGINS_DIR` -- the scan follows that variable and caches nothing, so a plugin installed or
     taken away inside one process shows up (or disappears) on the next call. The `POLICY_*` tables
     are the one import-time snapshot on this road, so nothing here asks them.
 
-Every case builds its own throwaway features directory and points `PF_FEATURES_DIR` at it: the
-shipped tree's own features are never asserted, because the suite has to stay green with `features/`
+Every case builds its own throwaway plugins directory and points `PF_PLUGINS_DIR` at it: the
+shipped tree's own plugins are never asserted, because the suite has to stay green with `plugins/`
 empty. `PF_HOME_DIR` is a sandbox for the same reason -- the machine's real `~/.pf/config.json` must
 never be read.
 """
@@ -68,18 +68,18 @@ def knobs():
 
     `reuse` hands back the one copy this process already has, so the tables are the ones every other
     in-process caller sees; the module caches no scan of its own, which is what lets a test install a
-    feature inside the process and read it back.
+    plugin inside the process and read it back.
     """
     package = shared_loader().load_by_path('pf_state_knobs_case', STATE_DIR / '__init__.py',
                                            package_dir=STATE_DIR, register=True, reuse=True)
     return package.knobs
 
 
-def write_feature(features: Path, name: str, declaration: dict, impl: bool = True) -> Path:
-    """One feature folder under `features/`: its declaration, and (by default) a trivial impl."""
-    folder = features / name
+def write_plugin(plugins: Path, name: str, declaration: dict, impl: bool = True) -> Path:
+    """One plugin folder under `plugins/`: its declaration, and (by default) a trivial impl."""
+    folder = plugins / name
     folder.mkdir(parents=True)
-    (folder / 'feature.json').write_text(json.dumps(declaration), encoding='utf-8')
+    (folder / 'plugin.json').write_text(json.dumps(declaration), encoding='utf-8')
     if impl:
         (folder / 'impl.py').write_text(
             'def offer(ctx):\n    return None\n\n\ndef check(ctx):\n    return None\n',
@@ -88,7 +88,7 @@ def write_feature(features: Path, name: str, declaration: dict, impl: bool = Tru
 
 
 def auditor_declaration(**knobs_extra) -> dict:
-    """A well-formed feature: one number knob, one metric, and three readings of the two sources."""
+    """A well-formed plugin: one number knob, one metric, and three readings of the two sources."""
     declaration = {
         'name': 'auditor',
         'timing': 'close',
@@ -110,7 +110,7 @@ def auditor_declaration(**knobs_extra) -> dict:
 
 
 class _Sandbox(unittest.TestCase):
-    """A throwaway project, home and features directory, and the two variables pointed at them."""
+    """A throwaway project, home and plugins directory, and the two variables pointed at them."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(prefix='pf-knobs-')
@@ -121,10 +121,10 @@ class _Sandbox(unittest.TestCase):
         self.home = self.base / 'home'
         self.home.mkdir()
         self.ledger = init_markers(self.root)
-        self.features = self.base / 'features'
-        self.features.mkdir()
+        self.plugins = self.base / 'plugins'
+        self.plugins.mkdir()
         env = mock.patch.dict(os.environ, {'PF_HOME_DIR': str(self.home),
-                                           'PF_FEATURES_DIR': str(self.features)})
+                                           'PF_PLUGINS_DIR': str(self.plugins)})
         env.start()
         self.addCleanup(env.stop)
 
@@ -140,9 +140,9 @@ class _Sandbox(unittest.TestCase):
     def state(self, *args):
         return run_argv([STATE_MANAGE, *args], cwd=self.root, check=False)
 
-    def cli(self, *args, features: Path | None = None):
+    def cli(self, *args, plugins: Path | None = None):
         env = _child_env()
-        env['PF_FEATURES_DIR'] = str(self.features if features is None else features)
+        env['PF_PLUGINS_DIR'] = str(self.plugins if plugins is None else plugins)
         return run_argv([STATE_MANAGE, *args], cwd=self.root, env=env, check=False)
 
 
@@ -194,7 +194,7 @@ class TestKnobTable(_Sandbox):
     """`specs`: the built-in settings, with the declarations merged in and the built-in cell kept."""
 
     def test_the_builtin_settings_are_the_core_own_three(self):
-        """With no feature folder installed the table is exactly the three settings the core reads
+        """With no plugin folder installed the table is exactly the three settings the core reads
         itself: the declarations add knobs, they do not have to be there for the core to work.
 
         The line's own three policies are not in it: they are the cycle record's, not settings.
@@ -206,34 +206,34 @@ class TestKnobTable(_Sandbox):
 
     def test_a_setting_takes_the_two_wide_layers_and_a_declared_knob_takes_all_four(self):
         """Which layers a knob takes is its own cell: the settings are how this project and this
-        machine behave, while a declared knob is read through the whole chain by the feature host."""
+        machine behave, while a declared knob is read through the whole chain by the plugin host."""
         self.assertEqual(('project', 'global'), knobs().layers_of(knobs().specs()['max_agents']))
-        write_feature(self.features, 'auditor', auditor_declaration())
+        write_plugin(self.plugins, 'auditor', auditor_declaration())
         self.assertEqual(knobs().LAYERS, knobs().layers_of(knobs().specs()['audit_limit']))
 
     def test_a_declaration_can_narrow_its_own_knob_to_one_layer(self):
-        """A `layers` cell in the declaration is copied into the merged cell, so a knob a feature
+        """A `layers` cell in the declaration is copied into the merged cell, so a knob a plugin
         wants on the project layer alone is not writable (or readable) anywhere else; and the layer
         names the registry checks against are the chain's own -- the registry restates them because
         it is loaded by path from two packages, so the two spellings are pinned together here."""
-        write_feature(self.features, 'auditor',
+        write_plugin(self.plugins, 'auditor',
                       auditor_declaration(audit_limit={'kind': 'number', 'layers': ['project']}))
         self.assertEqual(('project',), knobs().layers_of(knobs().specs()['audit_limit']))
         self.assertEqual(knobs().LAYERS, knobs()._registry().LAYERS)
 
     def test_a_declaration_adds_its_knobs(self):
-        write_feature(self.features, 'auditor', auditor_declaration())
+        write_plugin(self.plugins, 'auditor', auditor_declaration())
         specs = knobs().specs()
         self.assertIn('audit_limit', specs)
         self.assertEqual('number', specs['audit_limit']['kind'])
-        self.assertEqual('auditor', specs['audit_limit']['feature'],
+        self.assertEqual('auditor', specs['audit_limit']['plugin'],
                          'the merged cell says who declared it')
 
     def test_a_feature_cannot_redefine_a_builtin_name(self):
         """The built-in cell is the core's own statement of what that setting means: a declaration
         that claims the name is refused here (the merge is where the precedence lives) and reported
         by `shadowed()`, which is the one door that sees both tables -- the doctor prints it."""
-        write_feature(self.features, 'auditor',
+        write_plugin(self.plugins, 'auditor',
                       auditor_declaration(max_agents={'kind': 'word', 'values': ['one', 'many']}))
         spec = knobs().specs()['max_agents']
         self.assertEqual('integer', spec['kind'])
@@ -246,7 +246,7 @@ class TestKnobTable(_Sandbox):
         self.assertIn("'auditor'", shadows[0], 'the report names the declaration that tried')
 
     def test_a_declaration_with_a_kind_outside_the_four_is_not_a_knob(self):
-        write_feature(self.features, 'auditor', auditor_declaration(odd={'kind': 'colour'}))
+        write_plugin(self.plugins, 'auditor', auditor_declaration(odd={'kind': 'colour'}))
         self.assertNotIn('odd', knobs().specs())
 
 
@@ -260,7 +260,7 @@ class TestKnobChain(_Sandbox):
 
     def setUp(self):
         super().setUp()
-        write_feature(self.features, 'auditor', auditor_declaration())
+        write_plugin(self.plugins, 'auditor', auditor_declaration())
 
     def _record(self):
         return {'id': 'c1', 'policies': {'audit_limit': 2}}
@@ -352,7 +352,7 @@ class TestKnobTicketReadings(_Sandbox):
 
     def setUp(self):
         super().setUp()
-        write_feature(self.features, 'auditor', auditor_declaration())
+        write_plugin(self.plugins, 'auditor', auditor_declaration())
 
     def test_a_reading_whose_threshold_nobody_states_is_not_asked(self):
         self.assertEqual(['always_asked'],
@@ -375,26 +375,26 @@ class TestKnobTicketReadings(_Sandbox):
 
 
 class TestKnobFeaturesDir(_Sandbox):
-    """`PF_FEATURES_DIR`: the scan follows the variable, caches nothing, and is empty for no folders."""
+    """`PF_PLUGINS_DIR`: the scan follows the variable, caches nothing, and is empty for no folders."""
 
     def test_installing_and_removing_a_feature_changes_the_next_call(self):
         self.assertNotIn('audit_limit', knobs().specs())
 
-        folder = write_feature(self.features, 'auditor', auditor_declaration())
+        folder = write_plugin(self.plugins, 'auditor', auditor_declaration())
         self.assertIn('audit_limit', knobs().specs(), 'the scan is uncached: this same process sees it')
 
         shutil.rmtree(folder)
         self.assertNotIn('audit_limit', knobs().specs(),
                          'and the next call sees it gone -- the folder is the whole identity')
 
-    def test_a_missing_features_directory_is_zero_features_not_an_error(self):
+    def test_a_missing_plugins_directory_is_zero_features_not_an_error(self):
         absent = self.base / 'absent'
-        with mock.patch.dict(os.environ, {'PF_FEATURES_DIR': str(absent)}):
+        with mock.patch.dict(os.environ, {'PF_PLUGINS_DIR': str(absent)}):
             self.assertEqual(SETTING_NAMES, set(knobs().specs()) & SETTING_NAMES)
         self.assertFalse(absent.exists(), 'reading the scan must not create the directory')
 
-    def test_the_cli_reads_the_features_directory_the_variable_names(self):
-        write_feature(self.features, 'auditor', auditor_declaration())
+    def test_the_cli_reads_the_plugins_directory_the_variable_names(self):
+        write_plugin(self.plugins, 'auditor', auditor_declaration())
 
         listed = self.cli('config', 'list')
         self.assertEqual(0, listed.returncode, listed.stderr)
@@ -405,11 +405,11 @@ class TestKnobFeaturesDir(_Sandbox):
 
         empty = self.base / 'empty'
         empty.mkdir()
-        gone = self.cli('config', 'list', features=empty)
+        gone = self.cli('config', 'list', plugins=empty)
         self.assertEqual(0, gone.returncode, gone.stderr)
         self.assertNotIn('audit_limit', gone.stdout,
-                         'with no feature folder the knob does not exist at all')
-        refused = self.cli('config', 'set', 'audit_limit', '5', features=empty)
+                         'with no plugin folder the knob does not exist at all')
+        refused = self.cli('config', 'set', 'audit_limit', '5', plugins=empty)
         self.assertNotEqual(0, refused.returncode, 'and a name nobody declares is refused')
         self.assertIn('audit_limit', refused.stderr)
 

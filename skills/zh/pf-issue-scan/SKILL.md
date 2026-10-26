@@ -46,7 +46,7 @@ disable-model-invocation: true
 
 ## 边界
 
-- **只能由用户或指挥者跑**：这份卡要派 subagent；被派来的执行者读到它，停手回报
+- **只能由用户或指挥者跑**：这份技能要派 subagent；被派来的执行者读到它，停手回报
 - 不判 `decision`、不修代码、不改 spec、不进图——挑选与排序是 DAG 的事
 - 撞见「该进图的新功能」记一句给用户，别自己建节点，那是 `/pf-route` 的活
 - 大规模重构信号单独立一条，阈值与判据见 [`../shared/pf/pool.md`](../shared/pf/pool.md)

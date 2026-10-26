@@ -9,12 +9,12 @@ and a behaviour put back the old way turns it red.
      human's whole answer at that gate; `pf dag approve` is the other hand that says the same thing.
      The guard walks the call chain from the one write site outwards and requires the two human doors
      -- and no third caller anywhere in the shipped tree.
-  2. **The core names no installed feature.** The five name groups a declaration owns -- the feature's
+  2. **The core names no installed plugin.** The five name groups a declaration owns -- the plugin's
      own name, its knob keys, its readings, its dedupe tags and its method names -- may not appear in
-     any module of this tool outside `features/`. They are read off the installed declarations, never
+     any module of this tool outside `plugins/`. They are read off the installed declarations, never
      restated here.
-  2b. **The skills name no installed feature either.** The same five groups may not appear in a card
-     under `skills/`: a card bound to a feature lives in that feature's folder, and what a skill says
+  2b. **The skills name no installed plugin either.** The same five groups may not appear in a skill
+     under `skills/`: a skill bound to a plugin lives in that plugin's folder, and what a skill says
      instead is "run the command that lists what is installed".
   3. **Every self-entry has a real door.** A word a tool's own parser registers is either a word `pf`
      routes to it or a door another shipped module really calls (`plan` / `apply` / `record`). An
@@ -43,9 +43,9 @@ from harness import (CONDUCT_DIR, DAG_MANAGE, HANDOFF_PY, SIGNAL_PY, STATE_MANAG
 __all__ = ['TestTheApprovalHasTwoHumanDoors', 'TestTheCoreNamesNoFeature',
            'TestTheSkillsNameNoFeature', 'TestEverySelfEntryHasARealDoor']
 
-#: The skill trees this checkout ships, one directory per language. A card bound to a feature is not
-#: here -- it lives in the feature's own folder -- so everything under this root is a card that has to
-#: work with no feature installed.
+#: The skill trees this checkout ships, one directory per language. A skill bound to a plugin is not
+#: here -- it lives in the plugin's own folder -- so everything under this root is a skill that has to
+#: work with no plugin installed.
 SKILLS_ROOT = TOOLS_DIR.parent / 'skills'
 
 #: The node cell a human's "continue" at a checkpoint gate lands in. Named once: everything below
@@ -207,14 +207,14 @@ def _called_names(expr) -> set:
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
 
 
-# ── 2. the core names no feature ────────────────────────────────────────────
+# ── 2. the core names no plugin ────────────────────────────────────────────
 
 class TestTheCoreNamesNoFeature(Base):
-    """No module of this tool outside `features/` spells a name an installed declaration owns.
+    """No module of this tool outside `plugins/` spells a name an installed declaration owns.
 
     The five groups are read off the declarations, so renaming a knob, a tag or a method inside a
-    feature folder keeps this green with no edit here -- and a core that starts branching on one of
-    them turns it red. `features/` itself is where those names belong, so it is out of scope; the
+    plugin folder keeps this green with no edit here -- and a core that starts branching on one of
+    them turns it red. `plugins/` itself is where those names belong, so it is out of scope; the
     test suite is not shipped code and is out of scope the same way.
     """
 
@@ -222,9 +222,9 @@ class TestTheCoreNamesNoFeature(Base):
         """The five name groups every installed declaration owns, as one set of strings."""
         registry = pipeline.registry()
         names = set()
-        for feature in registry.load_all():
-            names.add(feature['name'])
-            decl = feature.get('decl')
+        for plugin in registry.load_all():
+            names.add(plugin['name'])
+            decl = plugin.get('decl')
             if not isinstance(decl, dict):
                 continue
             for group in ('knobs', 'readings'):
@@ -239,7 +239,7 @@ class TestTheCoreNamesNoFeature(Base):
     def test_the_core_names_no_installed_feature(self):
         names = self.installed_names()
         if not names:
-            self.skipTest('no feature is installed: there is no name for the core to carry')
+            self.skipTest('no plugin is installed: there is no name for the core to carry')
 
         core = [path for path in shipped_sources() if CONDUCT_DIR in path.parents]
         self.assertTrue(core, 'the scan found no module of this tool')
@@ -247,31 +247,31 @@ class TestTheCoreNamesNoFeature(Base):
                 for path in core
                 for name in sorted(names)
                 if name in path.read_text(encoding='utf-8')]
-        self.assertEqual([], hits, f'the core names a feature: {hits}')
+        self.assertEqual([], hits, f'the core names a plugin: {hits}')
 
 
-# ── 2b. the skills name no feature ──────────────────────────────────────────
+# ── 2b. the skills name no plugin ──────────────────────────────────────────
 
 class TestTheSkillsNameNoFeature(Base):
-    """No skill card under `skills/` spells a name an installed declaration owns.
+    """No skill skill under `skills/` spells a name an installed declaration owns.
 
-    The same five name groups the core guard watches -- the feature's name, its knob keys, its
+    The same five name groups the core guard watches -- the plugin's name, its knob keys, its
     readings, its dedupe tags and its method names -- read off the declarations, so a rename inside a
-    feature folder follows with no edit here and a skill that starts carrying one turns this red. A
+    plugin folder follows with no edit here and a skill that starts carrying one turns this red. A
     skill may say "run the command that lists what is installed"; the listing is the declarations'
     own words.
 
-    A card bound to a feature is out of scope by construction: it lives in that feature's own folder
-    (`features/<name>/cards/`), where naming the feature it binds is the point, and where it is
-    installed and removed with that feature.
+    A skill bound to a plugin is out of scope by construction: it lives in that plugin's own folder
+    (`plugins/<name>/skills/`), where naming the plugin it binds is the point, and where it is
+    installed and removed with that plugin.
     """
 
     def outside_names(self) -> set:
         """The five name groups a declaration owns: name, knobs, readings, tags, methods."""
         names = set()
-        for feature in pipeline.registry().load_all():
-            names.add(feature['name'])
-            decl = feature.get('decl')
+        for plugin in pipeline.registry().load_all():
+            names.add(plugin['name'])
+            decl = plugin.get('decl')
             if not isinstance(decl, dict):
                 continue
             for group in ('knobs', 'readings'):
@@ -286,7 +286,7 @@ class TestTheSkillsNameNoFeature(Base):
     def test_the_skills_name_no_installed_feature(self):
         names = self.outside_names()
         if not names:
-            self.skipTest('no feature is installed: there is no name for a skill to carry')
+            self.skipTest('no plugin is installed: there is no name for a skill to carry')
         skills = SKILLS_ROOT
         self.assertTrue(skills.is_dir(), f'{skills} is not there')
 
@@ -295,7 +295,7 @@ class TestTheSkillsNameNoFeature(Base):
                 for name in sorted(names)
                 if name.lower() in path.read_text(encoding='utf-8').lower()]
 
-        self.assertEqual([], hits, f'a skill carries a feature\'s name: {hits}')
+        self.assertEqual([], hits, f'a skill carries a plugin\'s name: {hits}')
 
 
 # ── 3. every self-entry has a real door ─────────────────────────────────────

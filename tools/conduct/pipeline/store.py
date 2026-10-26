@@ -206,7 +206,7 @@ def project_config_path(project: Path) -> Path:
 
 
 def knob_specs() -> dict:
-    """Every knob the core and the installed features declare, from `state/knobs.py`'s one table."""
+    """Every knob the core and the installed plugins declare, from `state/knobs.py`'s one table."""
     return _STATE_KNOBS.specs()
 
 

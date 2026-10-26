@@ -1,4 +1,4 @@
-"""Running the maintenance feature's line: the graph edit through the real processes, the walk, the form.
+"""Running the maintenance plugin's line: the graph edit through the real processes, the walk, the form.
 
 `TestMaintenanceCli` puts the close back on the real `dag-manage` / `state-manage` processes (the new
 node's uuid only exists in that process's stdout), `TestMaintenanceDrive` walks a whole line from the
@@ -6,9 +6,9 @@ crossing to the far end, and `TestTheForm` pins what the line asks a worker for 
 declaration's `ask` text, read back through `ticket_readings`).
 
 Every class here drives the shipped declaration and therefore carries
-`requires_feature('maintenance')`: with that folder deleted the pipeline still closes and dispatches,
-and these behaviour cases skip instead of failing. What the feature does NOT depend on -- the
-mechanism itself -- is pinned in `cases_insertion.py` and `cases_feature.py`.
+`requires_plugin('maintenance')`: with that folder deleted the pipeline still closes and dispatches,
+and these behaviour cases skip instead of failing. What the plugin does NOT depend on -- the
+mechanism itself -- is pinned in `cases_insertion.py` and `cases_plugin.py`.
 
 When the insert happens, which line it happens on, and how many nodes one metric gets all live in
 `cases_maintenance.py`.
@@ -27,12 +27,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cases_base import NODE, NODE2, Base  # noqa: E402
 from cases_maintenance import (SelfHealingWorker, TEST_LINE, coding_line,  # noqa: E402
                                set_config)
-from harness import HANDOFF_PY, _run_proc, requires_feature  # noqa: E402
+from harness import HANDOFF_PY, _run_proc, requires_plugin  # noqa: E402
 
 __all__ = ['TestMaintenanceCli', 'TestMaintenanceDrive', 'TestTheForm']
 
 
-@requires_feature('maintenance')
+@requires_plugin('maintenance')
 class TestMaintenanceCli(Base):
     """The graph edit goes through **the real processes**: the uuid `dag-manage add` prints exists only in
     its stdout.
@@ -42,7 +42,7 @@ class TestMaintenanceCli(Base):
     paths -- this one puts the whole closing pass back on the real CLI, so the new node's uuid is
     printed by a real process and read back by `_capture`.
 
-    It also pins the split the whole feature is about, through the shipped surfaces: the closing call
+    It also pins the split the whole plugin is about, through the shipped surfaces: the closing call
     inserts and **opens nothing**, and the NEXT call is the one that picks the node up.
     """
 
@@ -110,7 +110,7 @@ class TestMaintenanceCli(Base):
         self.assertEqual(sb.holding_ids(), [])
 
 
-@requires_feature('maintenance')
+@requires_plugin('maintenance')
 class TestMaintenanceDrive(Base):
     """A whole line walked to the end: the maintenance node is dispatched as usual, closes as usual,
     then the line goes on to the one it deferred."""
@@ -207,14 +207,14 @@ class TestMaintenanceDrive(Base):
         self.assertIn('"reading": {"test_seconds"', spec)
         self.assertNotIn('issue_pool_weight', (sb.dag()['nodes'][made]['title']))
 
-@requires_feature('maintenance')
+@requires_plugin('maintenance')
 class TestTheForm(Base):
     """`handoff.py --form <cycle>`: what this line wants is printed on the spot by the note's
     receiver, and nothing can be written into it.
 
     The readings a form asks for are the declarations' own: which keys (`ticket_readings`, narrowed by
     each reading's `when_knob`) and which words (the declared `ask`) are merged out of the installed
-    features, so this class is the other end of the declaration from `cases_feature.py`'s registry
+    plugins, so this class is the other end of the declaration from `cases_plugin.py`'s registry
     cases.
     """
 

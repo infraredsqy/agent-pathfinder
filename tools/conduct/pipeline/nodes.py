@@ -67,7 +67,7 @@ def dag_ready_nodes(project: Path, assume_completed=(), dag: dict | None = None)
 def node_in_tag_scope(node: dict, cycle_tags=None) -> bool:
     """Is this node inside this cycle's selection range?
 
-    No filter set means the whole graph is in range, byte-for-byte as it was before the feature
+    No filter set means the whole graph is in range, byte-for-byte as it was before the plugin
     existed; a node with no tag is visible everywhere.
     """
     if not cycle_tags:

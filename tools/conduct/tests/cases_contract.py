@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import ACTION_VOCABULARY, Base, NODE, NODE2, NODE3, pipeline, normalise  # noqa: E402
 from harness import (  # noqa: E402
-    CONDUCT_DIR, Sandbox, WorkerSession, features_dir, patched, write_feature,
+    CONDUCT_DIR, Sandbox, WorkerSession, plugins_dir, patched, write_plugin,
     _dag_hook as harness_dag_hook,
 )
 
@@ -346,7 +346,7 @@ class TestContract(Base):
         default is, which positional swallows the rest, which destinations are cast to `int`, and
         which command a verb reaches.
 
-        The feature that inserts nodes writes the graph through this stand-in (`add` / `depend` /
+        The plugin that inserts nodes writes the graph through this stand-in (`add` / `depend` /
         `undepend`), minting a real uuid and writing real edges, so a drift in the restatement --
         `--mode`'s default becoming `auto`, say -- writes different nodes than the shipped process
         would while every fast-path case stays green. The one case that drives the real processes
@@ -703,12 +703,12 @@ class TestTheInsertionActionShape(Base):
     """
 
     def fixture(self, sb, timing='close'):
-        """Point the feature scan at one hand-written folder for the test's whole life."""
+        """Point the plugin scan at one hand-written folder for the test's whole life."""
         stack = ExitStack()
         self.addCleanup(stack.close)
-        stack.enter_context(features_dir(sb.root / 'features'))
-        write_feature(sb.root / 'features', 'fixture', fixture_decl(timing), FIXTURE_IMPL)
-        return sb.root / 'features'
+        stack.enter_context(plugins_dir(sb.root / 'plugins'))
+        write_plugin(sb.root / 'plugins', 'fixture', fixture_decl(timing), FIXTURE_IMPL)
+        return sb.root / 'plugins'
 
     def test_the_action_vocabulary_is_the_entrys_own_table(self):
         """The caller's list (`cases_base.ACTION_VOCABULARY`) and the tool's table are one list.
@@ -722,7 +722,7 @@ class TestTheInsertionActionShape(Base):
         self.assertEqual('insert_node', pipeline.INSERT_ACTION)
 
     def test_a_previewed_insertion_hands_no_runbook_to_the_caller(self):
-        """`next --plan` on a close a feature answers with an insertion: the JSON carries no
+        """`next --plan` on a close a plugin answers with an insertion: the JSON carries no
         `commands`, no `add_command` and no `spec_of` **anywhere**, at any depth.
 
         A preview is not executable -- that is the invariant `render_action` owns -- and an insertion

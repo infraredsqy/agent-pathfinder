@@ -86,12 +86,12 @@ class TestGitEndToEnd(unittest.TestCase):
         self.write('.pf/instructions.json', instruction())
         self.commit('ledger base', first=True)
 
-        git(self.repo, 'checkout', '-b', 'feature')
+        git(self.repo, 'checkout', '-b', 'plugin')
         self.write('.pf/ideas.json', ideas(aaaa=node('one'), bbbb=node('two')), sort_keys=True)
         self.write('.pf/state.json',
                    cycle([shared, step(NODE2, '2026-10-01T01:00:00Z', '2026-10-01T02:00:00Z')]))
         self.write('.pf/instructions.json', instruction(text='theirs text'))
-        self.commit('feature: a node and a step')
+        self.commit('plugin: a node and a step')
 
         git(self.repo, 'checkout', 'main')
         self.write('.pf/ideas.json', ideas(aaaa=node('one'), cccc=node('three')), sort_keys=True)
@@ -100,7 +100,7 @@ class TestGitEndToEnd(unittest.TestCase):
         self.write('.pf/instructions.json', instruction(note='ours note'))
         self.commit('main: another node and step')
 
-        proc = git(self.repo, 'merge', 'feature', '--no-edit', check=False)
+        proc = git(self.repo, 'merge', 'plugin', '--no-edit', check=False)
 
         self.assertEqual(0, proc.returncode, f'{proc.stdout}\n{proc.stderr}')
         self.assertNotIn('CONFLICT', proc.stdout + proc.stderr)
@@ -122,16 +122,16 @@ class TestGitEndToEnd(unittest.TestCase):
         self.write('.pf/state.json', cycle([]))
         self.commit('ledger base', first=True)
 
-        git(self.repo, 'checkout', '-b', 'feature')
+        git(self.repo, 'checkout', '-b', 'plugin')
         self.write('.pf/ideas.json', ideas(aaaa=node('one', deps=[EDGE_X, EDGE_Y])), sort_keys=True)
-        self.commit('feature: adds an edge')
+        self.commit('plugin: adds an edge')
 
         git(self.repo, 'checkout', 'main')
         self.write('.pf/ideas.json', ideas(aaaa=node('one', deps=[])), sort_keys=True)
         self.commit('main: drops the edge')
         ours_bytes = (self.repo / '.pf/ideas.json').read_bytes()
 
-        proc = git(self.repo, 'merge', 'feature', '--no-edit', check=False)
+        proc = git(self.repo, 'merge', 'plugin', '--no-edit', check=False)
 
         self.assertNotEqual(0, proc.returncode, 'a real conflict must stop the merge')
         self.assertIn('dependencies', proc.stdout + proc.stderr)
@@ -148,22 +148,22 @@ class TestGitEndToEnd(unittest.TestCase):
         self.write('.pf/state.json', cycle([]))
         self.commit('ledger base', first=True)
 
-        git(self.repo, 'checkout', '-b', 'feature')
+        git(self.repo, 'checkout', '-b', 'plugin')
         self.write('.pf/ideas.json', ideas(aaaa=node('one'), cccc=node('three')), sort_keys=True)
-        self.commit('feature: adds a node')
+        self.commit('plugin: adds a node')
 
         git(self.repo, 'checkout', 'main')
         self.write('.pf/ideas.json', ideas(aaaa=node('one', status='completed')), sort_keys=True)
         self.commit('main: marks the first node completed')
 
-        proc = git(self.repo, 'rebase', 'feature', check=False)
+        proc = git(self.repo, 'rebase', 'plugin', check=False)
 
         self.assertEqual(0, proc.returncode, f'{proc.stdout}\n{proc.stderr}')
         self.assertNotIn('CONFLICT', proc.stdout + proc.stderr)
         self.assertEqual('', git(self.repo, 'status', '--porcelain').stdout.strip())
         self.assertFalse((self.repo / '.git' / 'rebase-merge').exists(), 'the rebase is still open')
         merged = _decode(self.repo / '.pf/ideas.json')
-        self.assertEqual({NODE1, NODE3}, set(merged['nodes']))           # feature's node survived
+        self.assertEqual({NODE1, NODE3}, set(merged['nodes']))           # plugin's node survived
         self.assertEqual('completed', merged['nodes'][NODE1]['status'])   # main's edit survived
 
     def test_a_rebase_conflict_tells_the_user_how_to_get_out(self):
@@ -172,15 +172,15 @@ class TestGitEndToEnd(unittest.TestCase):
         self.write('.pf/ideas.json', ideas(aaaa=node('one', deps=[EDGE_X])), sort_keys=True)
         self.commit('ledger base', first=True)
 
-        git(self.repo, 'checkout', '-b', 'feature')
+        git(self.repo, 'checkout', '-b', 'plugin')
         self.write('.pf/ideas.json', ideas(aaaa=node('one', deps=[EDGE_X, EDGE_Y])), sort_keys=True)
-        self.commit('feature: adds an edge')
+        self.commit('plugin: adds an edge')
 
         git(self.repo, 'checkout', 'main')
         self.write('.pf/ideas.json', ideas(aaaa=node('one', deps=[])), sort_keys=True)
         self.commit('main: drops the edge')
 
-        proc = git(self.repo, 'rebase', 'feature', check=False)
+        proc = git(self.repo, 'rebase', 'plugin', check=False)
 
         self.assertNotEqual(0, proc.returncode)
         for hint in ('git rebase --continue', 'git rebase --abort', 'pf conflict'):

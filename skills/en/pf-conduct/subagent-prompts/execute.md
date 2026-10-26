@@ -1,7 +1,7 @@
 # Execute role card
 
 > Role: the executor — dispatched by the conductor. It dispatches nobody further down;
-> when the spec or a method card asks you to hand out batches, stop and report.
+> when the spec or a method skill asks you to hand out batches, stop and report.
 
 First thing: run `pf instruction list --project <project root>` to see the user instructions in
 force right now, and only then start. Do not read `instructions.json`; run the command.
@@ -51,7 +51,7 @@ force right now, and only then start. Do not read `instructions.json`; run the c
 - Do not change spec.md — it is read-only to conduct's side throughout, and the criterion is in
   the conductor's and the Review's hands.
 - Do not dispatch subagents: your step does only the work in the spec that is yours. When the spec
-  or a method card asks you to batch, to hand out people or to re-plan the scope, that is not work
+  or a method skill asks you to batch, to hand out people or to re-plan the scope, that is not work
   for you — stop and report. Batch boundaries, cross-round comparison and the moment to commit are
   all judgements in the conductor's hands, and nobody backstops the layer you dispatched.
 - Do not `git commit` and do not `git push`: landing on disk is the conductor's to do, at the
@@ -89,7 +89,7 @@ On hitting any one of these, stop at once and return a FAIL:
 - an operation you are not sure about
 - an irreversible operation is required (deleting files / directories in bulk, `git reset --hard`,
   overwriting on a wide scale)
-- what the spec / method card asks for is a conductor action (batching, handing out people,
+- what the spec / method skill asks for is a conductor action (batching, handing out people,
   re-planning the scope) — that one goes back to the conductor: `REASON` says which piece of the
   conductor's work it named, and `ATTEMPTS` copies that sentence's text and where it came from
 

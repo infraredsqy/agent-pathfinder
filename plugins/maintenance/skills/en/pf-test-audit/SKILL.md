@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # pf-test-audit
 
-> Feature I bind: `maintenance` — this card is installed and removed with that feature; the feature not installed, this card is not here
+> Plugin I bind: `maintenance` — this skill is installed and removed with that plugin; the plugin not installed, this skill is not here
 > Who runs me: the user (`/pf-test-audit`, type it and it runs itself to the end) / the conductor (named by a node spec's `method: ` line — that is how the maintenance channel's node comes about)
 > What I am for: take the test suite once — delete what verifies nothing real, move out or split what slows the fast lane, and build a tier yourself when the split is missing
 > Do I dispatch subagents: yes, one layer (scan / removal) — an executor dispatched here reads this and stops to report back
@@ -79,7 +79,7 @@ The number of scan subagents follows the number of files: 1 covering everything 
 only when there are so many files that one list cannot be scanned by one. **The cap is not here**
 — before dispatching, count what is in flight against
 [`../shared/pf/subagents.md`](../shared/pf/subagents.md) (`pf config get max_agents`), and when it
-cannot be crossed, merge or batch by that card.
+cannot be crossed, merge or batch by that skill.
 
 Every scan subagent's prompt has to carry:
 

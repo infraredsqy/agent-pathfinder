@@ -1,34 +1,34 @@
 #!/usr/bin/env python3
-"""The registry of installed features: one folder each, and what its declaration says.
+"""The registry of installed plugins: one folder each, and what its declaration says.
 
-A feature is a folder under the features directory, and the folder is its identity: remove it and
-the feature is gone, with no second place remembering it. The folder carries two files -- a
-declaration (`feature.json`: the data, which timing it takes, which names it claims, which action it
-produces, and per metric the dedupe tag and the method whose card a session reads) and an
+A plugin is a folder under the plugins directory, and the folder is its identity: remove it and
+the plugin is gone, with no second place remembering it. The folder carries two files -- a
+declaration (`plugin.json`: the data, which timing it takes, which names it claims, which action it
+produces, and per metric the dedupe tag and the method whose skill a session reads) and an
 implementation (`impl.py`: the code, called once at the timing it claimed) -- and, when a method it
-names has a card, the card itself under `cards/<lang>/<method>/`. The names the outside writes down
+names has a skill, the skill itself under `skills/<lang>/<method>/`. The names the outside writes down
 to name one of its debts live in that declaration, never here.
 
-This module is the core's whole knowledge of features: the four knob kinds, the three timings, the
-two actions, and the rules a declaration has to satisfy. No installed feature's name appears here:
+This module is the core's whole knowledge of plugins: the four knob kinds, the three timings, the
+two actions, and the rules a declaration has to satisfy. No installed plugin's name appears here:
 names arrive from the declarations and are merged here for every reader (the writing side's
 validation, the candidates `--help` shows, the ticket form, the doctor).
 
-The declaration is a data file of its own because listing a feature must not mean executing it: a
+The declaration is a data file of its own because listing a plugin must not mean executing it: a
 broken declaration that took the help, the listing and the doctor down with it would take exactly the
 three doors a human reaches for when something is already wrong.
 
 Runtime is tolerant and the doctor is strict. An unreadable or malformed declaration is a *problem*
 reported by `validate()` and never an exception: a project in the middle of its pipeline must not be
-stopped by a feature that is broken. The scan is not cached -- the folder on disk is the one answer,
-so a feature put back or taken away shows up at the next call, and a features directory with nothing
+stopped by a plugin that is broken. The scan is not cached -- the folder on disk is the one answer,
+so a plugin put back or taken away shows up at the next call, and a plugins directory with nothing
 in it returns nothing from every door here (that is what "the folder was deleted" looks like).
 
 `validate()` asks the declaration alone; `verify()` is the validator and asks both sides: the same
-declaration problems, plus the method cards the declarations name, plus one real call of every
+declaration problems, plus the method skills the declarations name, plus one real call of every
 implementation against a stand-in project (`_StandIn`). The suite and `pf doctor` are its two
 callers, and nothing on the pipeline's route is: a project in the middle of its pipeline must not be
-stopped by a feature that is broken.
+stopped by a plugin that is broken.
 
 Standalone on purpose: this file imports the standard library and fetches `tools/shared/loader.py`
 by path, and it carries no package-relative import, because it is loaded by path from two packages.
@@ -43,16 +43,16 @@ import re
 import tempfile
 from pathlib import Path
 
-#: The knob kinds the core knows. A feature's declaration may only use these -- a fifth kind is a
-#: change to the core, discussed on its own, never smuggled in with a feature.
+#: The knob kinds the core knows. A plugin's declaration may only use these -- a fifth kind is a
+#: change to the core, discussed on its own, never smuggled in with a plugin.
 KINDS = ('number', 'integer', 'word', 'switch')
 
-#: When a feature may act: closing a node out, picking which node runs next, and dispatching (opening
+#: When a plugin may act: closing a node out, picking which node runs next, and dispatching (opening
 #: the session). Two axes: inserting a node is possible at close and at pick, blocking a gate only at
 #: dispatch.
 TIMINGS = ('close', 'pick', 'dispatch')
 
-#: What a feature may do at its timing: put a node into the graph, or stop a gate from opening.
+#: What a plugin may do at its timing: put a node into the graph, or stop a gate from opening.
 ACTIONS = ('insert', 'block')
 
 #: The two axes as one table: which (timing, action) cells the core actually serves. Inserting is
@@ -69,25 +69,25 @@ SOURCES = ('ticket', 'pool')
 #: they are the closed set a declaration's `layers` cell may narrow its own knob to.
 LAYERS = ('node', 'cycle', 'project', 'global')
 
-#: Where a method's card lives: in the folder of the feature that binds it, as
-#: `<feature>/cards/<lang>/<method>/SKILL.md`. One language is enough: the install links the folder
-#: of the language the chosen one lacks and says which language it borrowed, so a card in another
-#: language still reads. The card moves with the folder -- removing a feature removes the card, which
-#: is what "installed and removed with it" means for a card. The install is what turns one of those
+#: Where a method's skill lives: in the folder of the plugin that binds it, as
+#: `<plugin>/skills/<lang>/<method>/SKILL.md`. One language is enough: the install links the folder
+#: of the language the chosen one lacks and says which language it borrowed, so a skill in another
+#: language still reads. The skill moves with the folder -- removing a plugin removes the skill, which
+#: is what "installed and removed with it" means for a skill. The install is what turns one of those
 #: folders into the `~/.agents/skills/<method>` path a session reads; nothing here depends on that
 #: layout.
-CARDS = 'cards'
-CARD = 'SKILL.md'
+SKILLS = 'skills'
+SKILL_FILE = 'SKILL.md'
 
 #: The environment variable that points the scan somewhere else (a sandbox, a drill copy): the
-#: features directory is data, so it gets the same kind of switch every other part of the tree has.
-FEATURES_ENV = 'PF_FEATURES_DIR'
+#: plugins directory is data, so it gets the same kind of switch every other part of the tree has.
+PLUGINS_ENV = 'PF_PLUGINS_DIR'
 
-#: The two files a feature folder holds that this module reads: the declaration, and the implementation
-#: the timing calls. A card a metric names by its `method` is the folder's third kind of thing, and it
-#: lives under `CARDS` in the same folder: the declaration carries the name, the folder carries the
-#: card, and the two move together.
-DECLARATION = 'feature.json'
+#: The two files a plugin folder holds that this module reads: the declaration, and the implementation
+#: the timing calls. A skill a metric names by its `method` is the folder's third kind of thing, and it
+#: lives under `SKILLS` in the same folder: the declaration carries the name, the folder carries the
+#: skill, and the two move together.
+DECLARATION = 'plugin.json'
 IMPLEMENTATION = 'impl.py'
 
 # ── the bootstrap every file outside `tools/shared/` carries (see `shared/loader.py`) ────────────
@@ -106,34 +106,34 @@ def _loader():
     return _LOADER
 
 
-#: The implementation files that would not load, by feature name. `impl_of` writes one entry here when
+#: The implementation files that would not load, by plugin name. `impl_of` writes one entry here when
 #: the load fails (and clears it when a later load works), so `validate()` can report it: the failure
-#: belongs to the runtime, and the doctor is where it becomes visible. One entry per feature keeps a
+#: belongs to the runtime, and the doctor is where it becomes visible. One entry per plugin keeps a
 #: repeated failure from growing a list.
 _RUNTIME_PROBLEMS: dict[str, str] = {}
 
 
 # ── where the folders are ───────────────────────────────────────────────────
 
-def features_dir() -> Path:
-    """The directory the feature folders live under: `<conduct>/features`, or `PF_FEATURES_DIR`.
+def plugins_dir() -> Path:
+    """The directory the plugin folders live under: `<conduct>/plugins`, or `PF_PLUGINS_DIR`.
 
     The shipped location is computed from this file's own place -- the conduct directory is one level
-    up from the package this file sits in -- so a checkout that moves carries its features with it.
+    up from the package this file sits in -- so a checkout that moves carries its plugins with it.
     """
-    override = (os.environ.get(FEATURES_ENV) or '').strip()
+    override = (os.environ.get(PLUGINS_ENV) or '').strip()
     if override:
         return Path(override).expanduser()
-    return Path(__file__).resolve().parent.parent / 'features'
+    return Path(__file__).resolve().parents[3] / 'plugins'
 
 
 def _feature_folders() -> list:
-    """Every folder a feature could be, sorted by folder name; the scan errors are left to the caller.
+    """Every folder a plugin could be, sorted by folder name; the scan errors are left to the caller.
 
-    `__pycache__` and dotted directories are not features: a compiled artefact of an implementation
+    `__pycache__` and dotted directories are not plugins: a compiled artefact of an implementation
     is not a declaration, and calling it one would make the doctor shout about the tree's own litter.
     """
-    root = features_dir()
+    root = plugins_dir()
     if not root.is_dir():
         return []
     return sorted(path for path in root.iterdir()
@@ -141,13 +141,13 @@ def _feature_folders() -> list:
 
 
 def _read_declaration(path: Path):
-    """(declaration, problem): the parsed `feature.json`, or `None` and one sentence saying why.
+    """(declaration, problem): the parsed `plugin.json`, or `None` and one sentence saying why.
 
     A declaration is data and its failures are data too. This never raises: a file that is not UTF-8,
     not JSON, or not a JSON object comes back as a problem string a doctor prints.
     """
     if not path.is_file():
-        return None, f'no {DECLARATION} (a feature is a folder with a declaration in it)'
+        return None, f'no {DECLARATION} (a plugin is a folder with a declaration in it)'
     try:
         decl = json.loads(path.read_text(encoding='utf-8'))
     except OSError as e:
@@ -157,18 +157,18 @@ def _read_declaration(path: Path):
     except json.JSONDecodeError as e:
         return None, f'{path} parse failure: {e}'
     if not isinstance(decl, dict):
-        return None, f'{path} must be a JSON object (one declaration per feature)'
+        return None, f'{path} must be a JSON object (one declaration per plugin)'
     return decl, None
 
 
 # ── the scan ─────────────────────────────────────────────────────────────────
 
 def load_all() -> list:
-    """Every feature folder, in folder-name order: `{name, folder, decl, problems}`.
+    """Every plugin folder, in folder-name order: `{name, folder, decl, problems}`.
 
     `name` is the folder's name -- the folder IS the identity -- and `decl` is the parsed declaration
     (or `None` when it could not be read, in which case `problems` says so). Nothing is cached and
-    nothing raises: an empty features directory answers an empty list, and one broken folder does not
+    nothing raises: an empty plugins directory answers an empty list, and one broken folder does not
     hide its neighbours.
     """
     out = []
@@ -184,17 +184,17 @@ def load_all() -> list:
 
 
 def scan_problems() -> list:
-    """What is wrong with the features directory itself (nothing, for the normal cases).
+    """What is wrong with the plugins directory itself (nothing, for the normal cases).
 
-    A missing directory is not a problem: zero feature folders is a legal project, and every door
+    A missing directory is not a problem: zero plugin folders is a legal project, and every door
     here answers empty for it. A path that exists but cannot be listed IS one, because it would
-    otherwise read as "no features installed" while features are sitting there.
+    otherwise read as "no plugins installed" while plugins are sitting there.
     """
-    root = features_dir()
+    root = plugins_dir()
     if not root.exists():
         return []
     if not root.is_dir():
-        return [f'{root} is not a directory (the features directory holds one folder per feature)']
+        return [f'{root} is not a directory (the plugins directory holds one folder per plugin)']
     try:
         list(root.iterdir())
     except OSError as e:
@@ -204,8 +204,8 @@ def scan_problems() -> list:
 
 # ── the rules a declaration has to satisfy ──────────────────────────────────
 
-def _decl_of(feature: dict):
-    decl = feature.get('decl')
+def _decl_of(plugin: dict):
+    decl = plugin.get('decl')
     return decl if isinstance(decl, dict) else None
 
 
@@ -217,121 +217,121 @@ def _names(decl: dict) -> dict:
     return {'knobs': group('knobs'), 'readings': group('readings'), 'metrics': group('metrics')}
 
 
-def _problems_of(feature: dict) -> list:
+def _problems_of(plugin: dict) -> list:
     """One declaration's own problems: the shape of its cells, and the references between them."""
-    name = feature['name']
-    out = list(feature.get('problems') or [])
-    decl = _decl_of(feature)
+    name = plugin['name']
+    out = list(plugin.get('problems') or [])
+    decl = _decl_of(plugin)
     if decl is None:
         return out
     declared = decl.get('name')
     if declared is not None and declared != name:
-        out.append(f'feature {name!r} declares the name {declared!r}: the folder is its identity, '
+        out.append(f'plugin {name!r} declares the name {declared!r}: the folder is its identity, '
                    f'so the two have to agree')
     timing = decl.get('timing')
     if timing not in TIMINGS:
-        out.append(f'feature {name!r}: timing {timing!r} is not one of {list(TIMINGS)}')
+        out.append(f'plugin {name!r}: timing {timing!r} is not one of {list(TIMINGS)}')
     action = decl.get('action')
     if action not in ACTIONS:
-        out.append(f'feature {name!r}: action {action!r} is not one of {list(ACTIONS)}')
+        out.append(f'plugin {name!r}: action {action!r} is not one of {list(ACTIONS)}')
     if timing in TIMINGS and action in ACTIONS and (timing, action) not in CELLS:
         served = ', '.join(f'{act} at {when}' for when, act in CELLS)
-        out.append(f'feature {name!r}: {action!r} at {timing!r} is not a cell this core serves '
+        out.append(f'plugin {name!r}: {action!r} at {timing!r} is not a cell this core serves '
                    f'({served})')
 
     groups = _names(decl)
     knobs, readings, metrics = groups['knobs'], groups['readings'], groups['metrics']
     for key, cell in knobs.items():
         if not isinstance(cell, dict):
-            out.append(f'feature {name!r}: knob {key!r} must be an object '
+            out.append(f'plugin {name!r}: knob {key!r} must be an object '
                        f'(kind, default, values, summary)')
             continue
         kind = cell.get('kind')
         if kind not in KINDS:
-            out.append(f'feature {name!r}: knob {key!r} has kind {kind!r}, which is not one of '
+            out.append(f'plugin {name!r}: knob {key!r} has kind {kind!r}, which is not one of '
                        f'{list(KINDS)}')
         if kind == 'word' and cell.get('values') is not None:
             values = cell.get('values')
             if (not isinstance(values, list) or not values
                     or not all(isinstance(word, str) for word in values)):
-                out.append(f'feature {name!r}: knob {key!r} takes `values` as a non-empty list of '
+                out.append(f'plugin {name!r}: knob {key!r} takes `values` as a non-empty list of '
                            f'words')
         layers = cell.get('layers')
         if layers is not None:
             if (not isinstance(layers, list) or not layers
                     or not all(isinstance(layer, str) for layer in layers)):
-                out.append(f'feature {name!r}: knob {key!r} takes `layers` as a non-empty list of '
+                out.append(f'plugin {name!r}: knob {key!r} takes `layers` as a non-empty list of '
                            f'layer names ({", ".join(LAYERS)})')
             else:
                 unknown = [layer for layer in layers if layer not in LAYERS]
                 if unknown:
-                    out.append(f'feature {name!r}: knob {key!r} names the layer(s) '
+                    out.append(f'plugin {name!r}: knob {key!r} names the layer(s) '
                                f'{", ".join(repr(layer) for layer in unknown)}, which are not on the '
                                f'chain ({", ".join(LAYERS)})')
 
     for key, cell in readings.items():
         if not isinstance(cell, dict):
-            out.append(f'feature {name!r}: reading {key!r} must be an object (source, ask, ...)')
+            out.append(f'plugin {name!r}: reading {key!r} must be an object (source, ask, ...)')
             continue
         source = cell.get('source')
         if source not in SOURCES:
-            out.append(f'feature {name!r}: reading {key!r} has source {source!r}, which is not one '
+            out.append(f'plugin {name!r}: reading {key!r} has source {source!r}, which is not one '
                        f'of {list(SOURCES)}')
         when = cell.get('when_knob')
         if when and when not in knobs:
-            out.append(f'feature {name!r}: reading {key!r} is narrowed by {when!r}, which the '
-                       f'feature does not declare as a knob')
+            out.append(f'plugin {name!r}: reading {key!r} is narrowed by {when!r}, which the '
+                       f'plugin does not declare as a knob')
 
     for key, cell in metrics.items():
         if not isinstance(cell, dict):
-            out.append(f'feature {name!r}: metric {key!r} must be an object (line, tag, method)')
+            out.append(f'plugin {name!r}: metric {key!r} must be an object (line, tag, method)')
             continue
         if key not in readings:
-            out.append(f'feature {name!r}: metric {key!r} names a reading the feature does not '
+            out.append(f'plugin {name!r}: metric {key!r} names a reading the plugin does not '
                        f'declare')
         line = cell.get('line')
         if line not in knobs:
-            out.append(f'feature {name!r}: metric {key!r} is judged against {line!r}, which the '
-                       f'feature does not declare as a knob')
+            out.append(f'plugin {name!r}: metric {key!r} is judged against {line!r}, which the '
+                       f'plugin does not declare as a knob')
         for field in ('tag', 'method'):
             value = cell.get(field)
             if not isinstance(value, str) or not value.strip():
-                out.append(f'feature {name!r}: metric {key!r} needs a {field} (the string the '
+                out.append(f'plugin {name!r}: metric {key!r} needs a {field} (the string the '
                            f'outside writes down to name this debt)')
 
     enable = decl.get('enable_knob')
     if enable:
         cell = knobs.get(enable)
         if not isinstance(cell, dict):
-            out.append(f'feature {name!r}: switches on {enable!r}, which the feature does not '
+            out.append(f'plugin {name!r}: switches on {enable!r}, which the plugin does not '
                        f'declare as a knob')
         elif cell.get('kind') != 'switch':
-            out.append(f'feature {name!r}: switches on {enable!r}, whose kind is '
+            out.append(f'plugin {name!r}: switches on {enable!r}, whose kind is '
                        f'{cell.get("kind")!r}; only a switch names on/off')
 
-    if not (feature['folder'] / IMPLEMENTATION).is_file():
-        out.append(f'feature {name!r}: no {IMPLEMENTATION} in {feature["folder"]}')
+    if not (plugin['folder'] / IMPLEMENTATION).is_file():
+        out.append(f'plugin {name!r}: no {IMPLEMENTATION} in {plugin["folder"]}')
     return out
 
 
-def _conflicts(features: list) -> list:
-    """The names two features may not share: feature names, knobs, readings, and dedupe tags."""
+def _conflicts(plugins: list) -> list:
+    """The names two plugins may not share: plugin names, knobs, readings, and dedupe tags."""
     out = []
     for label, values in (
-        ('feature name', [(feature['name'], feature['name']) for feature in features]),
-        ('knob', _declared(features, 'knobs')),
-        ('reading', _declared(features, 'readings')),
-        ('dedupe tag', _declared(features, 'metrics', 'tag')),
+        ('plugin name', [(plugin['name'], plugin['name']) for plugin in plugins]),
+        ('knob', _declared(plugins, 'knobs')),
+        ('reading', _declared(plugins, 'readings')),
+        ('dedupe tag', _declared(plugins, 'metrics', 'tag')),
     ):
         out.extend(_first_claim(label, values))
     return out
 
 
-def _declared(features: list, group: str, field: str | None = None) -> list:
-    """(name, feature name) pairs for one declaration group: its keys, or one string field of them."""
+def _declared(plugins: list, group: str, field: str | None = None) -> list:
+    """(name, plugin name) pairs for one declaration group: its keys, or one string field of them."""
     out = []
-    for feature in features:
-        decl = _decl_of(feature)
+    for plugin in plugins:
+        decl = _decl_of(plugin)
         if decl is None:
             continue
         cells = decl.get(group)
@@ -340,35 +340,35 @@ def _declared(features: list, group: str, field: str | None = None) -> list:
         for key, cell in cells.items():
             value = key if field is None else (cell.get(field) if isinstance(cell, dict) else None)
             if isinstance(value, str) and value.strip():
-                out.append((value, feature['name']))
+                out.append((value, plugin['name']))
     return out
 
 
 def _first_claim(label: str, values: list):
-    """One sentence per name a second feature claims (`values` is ordered by folder)."""
+    """One sentence per name a second plugin claims (`values` is ordered by folder)."""
     seen = {}
     for value, owner in values:
         if value in seen:
             yield (f'{label} {value!r} is claimed by both {seen[value]!r} and {owner!r}: '
-                   f'two features may not share it')
+                   f'two plugins may not share it')
         else:
             seen[value] = owner
 
 
 def validate() -> list:
-    """Every problem the installed features have: the doctor's list, and nothing that raises.
+    """Every problem the installed plugins have: the doctor's list, and nothing that raises.
 
-    Covered: the features directory itself, each declaration's own shape and references, the names two
-    features may not share, an implementation file that is missing, and an implementation that failed
+    Covered: the plugins directory itself, each declaration's own shape and references, the names two
+    plugins may not share, an implementation file that is missing, and an implementation that failed
     to load at runtime. An unknown timing or action is stated here rather than silently dropped: the
     runtime skips that cell, and this is where a human reads why.
     """
-    features = load_all()
+    plugins = load_all()
     problems = list(scan_problems())
-    for feature in features:
-        problems.extend(_problems_of(feature))
-    problems.extend(_conflicts(features))
-    installed = {feature['name'] for feature in features}
+    for plugin in plugins:
+        problems.extend(_problems_of(plugin))
+    problems.extend(_conflicts(plugins))
+    installed = {plugin['name'] for plugin in plugins}
     problems.extend(_RUNTIME_PROBLEMS[name] for name in sorted(_RUNTIME_PROBLEMS)
                     if name in installed)
     return problems
@@ -379,14 +379,14 @@ def validate() -> list:
 class _StandIn:
     """The context the validator calls an implementation with: a temporary project, its own names.
 
-    The doors are the core `Context`'s (`feature_host.Context`), answered the way a project that
+    The doors are the core `Context`'s (`plugin_host.Context`), answered the way a project that
     configured its knobs but holds nothing yet would: a declared knob reads the first value its cell
     allows (a `number` / `integer` as 1, a `word` as its first declared word, a `switch` as `on`), a
     declared ticket reading reads 1, the line is in service with no tags, and the graph is empty.
 
-    The line carries no tags on purpose: which line a feature judges is its own business, read off
+    The line carries no tags on purpose: which line a plugin judges is its own business, read off
     the cycle it is handed, and the core guessing a tag on its behalf would be the core naming a
-    feature's concern. A feature that needs one answers "not known this pass", which is legal.
+    plugin's concern. A plugin that needs one answers "not known this pass", which is legal.
 
     **No child process starts and nothing is written.** `capture` answers the empty text without
     running anything, `run` does nothing, and `spec_path` only spells a landing spot: the validator
@@ -438,16 +438,16 @@ def _cell_value(cell: dict):
     return 'on'
 
 
-def card_folders(feature: dict) -> list:
-    """The card folders one feature ships: `(language, method, folder)`, in folder order.
+def skill_folders(plugin: dict) -> list:
+    """The skill folders one plugin ships: `(language, method, folder)`, in folder order.
 
-    The layout is the feature's own: `<feature>/cards/<lang>/<method>/`. A card is the third kind of
-    thing a feature folder carries beside the declaration and the implementation, and it is the thing
-    a `method` name points a session at -- so it lives where the feature lives, and removing the
-    folder removes both. A dotted or underscored directory is not a card (the same cut the feature
-    scan makes); a folder whose name no declaration names is `_card_problems`' business.
+    The layout is the plugin's own: `<plugin>/skills/<lang>/<method>/`. A skill is the third kind of
+    thing a plugin folder carries beside the declaration and the implementation, and it is the thing
+    a `method` name points a session at -- so it lives where the plugin lives, and removing the
+    folder removes both. A dotted or underscored directory is not a skill (the same cut the plugin
+    scan makes); a folder no declaration names is simply another skill the plugin ships.
     """
-    root = Path(feature['folder']) / CARDS
+    root = Path(plugin['folder']) / SKILLS
     out = []
     if not root.is_dir():
         return out
@@ -459,51 +459,55 @@ def card_folders(feature: dict) -> list:
     return out
 
 
-def cards() -> dict:
-    """Every card the installed features ship, by method name: `{method: [(feature, folder), ...]}`.
+def skills() -> dict:
+    """Every skill the installed plugins ship, by method name: `{method: [(plugin, folder), ...]}`.
 
-    Two features may name one method, and the card is one card either way -- so the question "is this
-    method backed" is asked of the whole installed set, not of one declaration. The folders are the
-    raw answer; `_card_problems` compares them with the declarations in both directions.
+    One entry per folder, so a name a plugin ships in two languages appears twice. A name two plugins
+    ship is one of the two answers `_skill_problems` reports.
     """
     out = {}
-    for feature in load_all():
-        for _lang, method, folder in card_folders(feature):
-            out.setdefault(method, []).append((feature['name'], folder))
+    for plugin in load_all():
+        for _lang, method, folder in skill_folders(plugin):
+            out.setdefault(method, []).append((plugin['name'], folder))
     return out
 
 
-def _card_problems(features: list) -> list:
-    """The two ways a card and a declaration disagree.
+def _skill_problems(plugins: list) -> list:
+    """The two ways a skill and a declaration can disagree, both read off the folders.
 
-    A method a declaration names needs `SKILL.md` in a card folder some installed feature ships -- any
-    one of them is enough, because two features may name one method and one card serving both is what
-    sharing it means. The other direction is a problem too: a card folder whose name no declaration
-    names is a card nothing will ever read, and `CARDS/<lang>/<method>` is a fixed enough shape to say
-    which folder it is.
+    A plugin's own folders are its inventory: every folder under `SKILLS/<lang>/` is a skill it ships,
+    and the names under `metrics` are its own skills. So:
 
-    There is no skills tree to be missing here any more: the card belongs to the feature, so a project
-    with no feature has no card and nothing to report.
+    * a `method` a declaration names must have `SKILL.md` in THAT plugin's own folder -- a name that
+      lands on another plugin's skill is a loan, and a skill does not move between plugins: the two
+      would be one plugin;
+    * a skill name belongs to one plugin. Shipping the same name from two plugin folders is the same
+      loan seen from the other side, and it is what makes `~/.agents/skills/<name>` ambiguous.
+
+    A skill no declaration names is not a problem either way: it is a skill the user invokes, and
+    `pf doctor` lists it with the plugin that carries it.
+
+    There is no skills tree to be missing here any more: the skill belongs to the plugin, so a project
+    with no plugin has no skill and nothing to report.
     """
-    shipped = {}
-    for feature in features:
-        for lang, method, folder in card_folders(feature):
-            shipped.setdefault(method, []).append((feature['name'], lang, folder))
-    backed = {method for method, entries in shipped.items()
-              if any((folder / CARD).is_file() for _owner, _lang, folder in entries)}
-    named = set()
     out = []
-    for feature in features:
-        for method in methods_of(feature):
-            named.add(method)
+    owner = {}
+    for plugin in plugins:
+        name = plugin['name']
+        backed = set()
+        for lang, method, folder in skill_folders(plugin):
+            if (folder / SKILL_FILE).is_file():
+                backed.add(method)
+            if method not in owner:
+                owner[method] = (name, lang)
+            elif owner[method][0] != name:
+                out.append(f'skill {method!r}: {owner[method][0]!r} ships it under '
+                           f'{SKILLS}/{owner[method][1]} and {name!r} under {SKILLS}/{lang} -- '
+                           f'a skill belongs to one plugin')
+        for method in methods_of(plugin):
             if method not in backed:
-                out.append(f'feature {feature["name"]!r}: method {method!r} has no card (no installed '
-                           f'feature ships {CARDS}/<lang>/{method}/{CARD})')
-    for feature in features:
-        for lang, method, _folder in card_folders(feature):
-            if method not in named:
-                out.append(f'feature {feature["name"]!r}: the card {method!r} under '
-                           f'{CARDS}/{lang} is a method no installed declaration names')
+                out.append(f'plugin {name!r}: method {method!r} has no skill of its own (no '
+                           f'{SKILLS}/<lang>/{method}/{SKILL_FILE} in its folder)')
     return out
 
 
@@ -525,7 +529,7 @@ def _command_verbs(answer, out: list) -> None:
                 _command_verbs(part, out)
 
 
-#: The answer keys this check reads: the two list-shaped ones `feature_host._usable_offer` reads and
+#: The answer keys this check reads: the two list-shaped ones `plugin_host._usable_offer` reads and
 #: types as lists of strings (`tags`, `steps`). `fields` is left out on purpose -- its value is the
 #: free-shape dict a reader is shown, so a two-dimensional list there is a legitimate field and the
 #: core accepts it. A key the core never reads is left out for the same reason: an argv list in it
@@ -537,7 +541,7 @@ EDIT_KEYS = ('tags', 'steps')
 def _edit_problems(name: str, answer) -> list:
     """The command-shaped lists one answer carries in the keys the core reads -- and there may be none.
 
-    A feature **declares a node**; the edit that puts it into the graph is the core's, and it has one
+    A plugin **declares a node**; the edit that puts it into the graph is the core's, and it has one
     implementation (`insertion.py`), which is also the one home of the verbs it uses. So this check
     does not restate that vocabulary: it reports a command-shaped list in a key the core reads
     (`EDIT_KEYS`), and the sentence stays on that fact -- a list shaped like a command, and which key
@@ -548,23 +552,23 @@ def _edit_problems(name: str, answer) -> list:
         verbs = []
         _command_verbs(answer.get(key), verbs)
         if verbs:
-            out.append(f'feature {name!r}: its answer carries a command-shaped list in {key!r} '
-                       f'({", ".join(repr(verb) for verb in verbs)}); a feature declares the node '
+            out.append(f'plugin {name!r}: its answer carries a command-shaped list in {key!r} '
+                       f'({", ".join(repr(verb) for verb in verbs)}); a plugin declares the node '
                        f'and the core performs the edit')
     return out
 
 
-def _live_call_problems(feature: dict, decl: dict) -> list:
+def _live_call_problems(plugin: dict, decl: dict) -> list:
     """One real call of one implementation, against a stand-in project.
 
     The door is the one its action has: `offer` for an `insert`, `check` for a `block`. A missing
-    door is a feature that declares a timing nothing will ever serve. An action outside the two is
+    door is a plugin that declares a timing nothing will ever serve. An action outside the two is
     skipped -- `validate()` names it, and there is no door to call.
 
     A load failure is skipped here for the same reason: it is `_RUNTIME_PROBLEMS`' entry, printed by
     `validate()`, and calling a module that did not load is not a second finding.
     """
-    name = feature['name']
+    name = plugin['name']
     door = {'insert': 'offer', 'block': 'check'}.get(decl.get('action'))
     if door is None:
         return []
@@ -573,20 +577,20 @@ def _live_call_problems(feature: dict, decl: dict) -> list:
         return []
     call = getattr(impl, door, None)
     if not callable(call):
-        return [f'feature {name!r}: {IMPLEMENTATION} has no {door}(), so the {decl.get("action")!r} '
+        return [f'plugin {name!r}: {IMPLEMENTATION} has no {door}(), so the {decl.get("action")!r} '
                 f'timing it declares can never be served']
     try:
-        with tempfile.TemporaryDirectory(prefix='pf-feature-check-') as tmp:
+        with tempfile.TemporaryDirectory(prefix='pf-plugin-check-') as tmp:
             answer = call(_StandIn(decl, tmp))
-    except (Exception, SystemExit) as e:      # noqa: BLE001 -- a feature's door may not raise
-        return [f'feature {name!r}: {door}() raised on a stand-in project: {e!r}']
+    except (Exception, SystemExit) as e:      # noqa: BLE001 -- a plugin's door may not raise
+        return [f'plugin {name!r}: {door}() raised on a stand-in project: {e!r}']
     if not answer:
         # "Nothing from me this pass" is always a legal answer: it is what a project with no debt
-        # left, no line stated and nothing to say gets, and no feature has to answer every time.
+        # left, no line stated and nothing to say gets, and no plugin has to answer every time.
         return []
     expected = dict if door == 'offer' else str
     if not isinstance(answer, expected):
-        return [f'feature {name!r}: {door}() answered {type(answer).__name__}, and that timing reads '
+        return [f'plugin {name!r}: {door}() answered {type(answer).__name__}, and that timing reads '
                 f'{"an offer object" if door == "offer" else "a reason string"} or nothing']
     return _edit_problems(name, answer)
 
@@ -594,53 +598,53 @@ def _live_call_problems(feature: dict, decl: dict) -> list:
 def verify() -> list:
     """The validator: everything `validate()` answers, plus the half only the implementation can show.
 
-    Three questions, and every sentence that comes back names the feature:
+    Three questions, and every sentence that comes back names the plugin:
 
-      * **is the declaration inside the core's closed sets, and do two features keep off each other's
+      * **is the declaration inside the core's closed sets, and do two plugins keep off each other's
         names?** -- `validate()`'s own list, unchanged;
-      * **does the method its metrics name have a card?** -- `cards/<lang>/<method>/SKILL.md` in an
-        installed feature's own folder, and no card folder whose method nothing names
-        (`_card_problems`);
+      * **does the method its metrics name have a skill?** -- `skills/<lang>/<method>/SKILL.md` in an
+        installed plugin's own folder, and no skill folder whose method nothing names
+        (`_skill_problems`);
       * **does the implementation keep its side of the bargain?** -- one real call against a stand-in
         project: it must answer (an offer, a reason) or "not known this pass", it must never raise,
         and it may not carry a command-shaped list in a key the core reads (`_live_call_problems`).
 
-    Nothing here raises on a broken feature -- a broken feature is a sentence, not an exception. The
+    Nothing here raises on a broken plugin -- a broken plugin is a sentence, not an exception. The
     two callers are the test suite and `pf doctor`; the pipeline's route never asks: somebody's
-    project must not be stopped mid-run by a feature that is broken, which is failure isolation and
+    project must not be stopped mid-run by a plugin that is broken, which is failure isolation and
     nothing about speed.
     """
-    features = load_all()
+    plugins = load_all()
     # The loads happen FIRST: `validate()` reads `_RUNTIME_PROBLEMS`, and an implementation that
     # cannot be loaded has to be on this list rather than discovered at some later close.
-    for feature in features:
-        if (feature['folder'] / IMPLEMENTATION).is_file():
-            impl_of(feature['name'])
+    for plugin in plugins:
+        if (plugin['folder'] / IMPLEMENTATION).is_file():
+            impl_of(plugin['name'])
     problems = validate()
-    problems.extend(_card_problems(features))
-    for feature in features:
-        decl = _decl_of(feature)
+    problems.extend(_skill_problems(plugins))
+    for plugin in plugins:
+        decl = _decl_of(plugin)
         if decl is not None:
-            problems.extend(_live_call_problems(feature, decl))
+            problems.extend(_live_call_problems(plugin, decl))
     return problems
 
 
 # ── what the declarations say, merged for the readers ───────────────────────
 
 def knob_specs() -> dict:
-    """Every knob the installed features declare: `{name: {kind, default, values?, layers, summary,
-    feature}}`.
+    """Every knob the installed plugins declare: `{name: {kind, default, values?, layers, summary,
+    plugin}}`.
 
     Only well-formed cells come out (a kind outside the four kinds is not a knob, and a `layers` cell
     that is not a non-empty subset of the chain is dropped: `validate()` says what is wrong with
-    both). A name two features both claim is reported by `validate()` and the first folder keeps it --
-    but whether a feature may shadow a name the core already owns is answered by the merger, not here:
+    both). A name two plugins both claim is reported by `validate()` and the first folder keeps it --
+    but whether a plugin may shadow a name the core already owns is answered by the merger, not here:
     this file does not know the built-in table, and copying it here would be a second place for those
     names.
     """
     out = {}
-    for feature in load_all():
-        decl = _decl_of(feature)
+    for plugin in load_all():
+        decl = _decl_of(plugin)
         if decl is None:
             continue
         for key, cell in _names(decl)['knobs'].items():
@@ -650,7 +654,7 @@ def knob_specs() -> dict:
                 'kind': cell['kind'],
                 'default': cell.get('default'),
                 'summary': cell.get('summary') or '',
-                'feature': feature['name'],
+                'plugin': plugin['name'],
             }
             values = cell.get('values')
             if isinstance(values, list) and values and all(isinstance(w, str) for w in values):
@@ -678,22 +682,22 @@ def _layer_cell(value):
 
 
 def readings() -> list:
-    """Every reading the installed features declare: `{feature, key, source, ask, when_knob}`.
+    """Every reading the installed plugins declare: `{plugin, key, source, ask, when_knob}`.
 
-    Declaration order inside one feature, features in folder order -- the order the declarations were
+    Declaration order inside one plugin, plugins in folder order -- the order the declarations were
     written in, which is the order a form or a judgement should walk them in. A reading whose source
     is not one of the two sources is dropped (the doctor reports it).
     """
     out = []
-    for feature in load_all():
-        decl = _decl_of(feature)
+    for plugin in load_all():
+        decl = _decl_of(plugin)
         if decl is None:
             continue
         for key, cell in _names(decl)['readings'].items():
             if not isinstance(cell, dict) or cell.get('source') not in SOURCES:
                 continue
             out.append({
-                'feature': feature['name'],
+                'plugin': plugin['name'],
                 'key': key,
                 'source': cell['source'],
                 'ask': cell.get('ask') if isinstance(cell.get('ask'), str) else '',
@@ -702,9 +706,9 @@ def readings() -> list:
     return out
 
 
-def tags_of(feature: dict) -> list:
-    """One feature's dedupe tags, in declaration order (what a human writes to name the same debt)."""
-    decl = _decl_of(feature) or {}
+def tags_of(plugin: dict) -> list:
+    """One plugin's dedupe tags, in declaration order (what a human writes to name the same debt)."""
+    decl = _decl_of(plugin) or {}
     out = []
     for cell in _names(decl)['metrics'].values():
         tag = cell.get('tag') if isinstance(cell, dict) else None
@@ -713,9 +717,9 @@ def tags_of(feature: dict) -> list:
     return out
 
 
-def methods_of(feature: dict) -> list:
-    """One feature's method names, in declaration order (the skill cards it points a node at)."""
-    decl = _decl_of(feature) or {}
+def methods_of(plugin: dict) -> list:
+    """One plugin's method names, in declaration order (the skill skills it points a node at)."""
+    decl = _decl_of(plugin) or {}
     out = []
     for cell in _names(decl)['metrics'].values():
         method = cell.get('method') if isinstance(cell, dict) else None
@@ -725,62 +729,62 @@ def methods_of(feature: dict) -> list:
 
 
 def dedupe_tags() -> list:
-    """Every dedupe tag the installed features declare, in folder/declaration order."""
+    """Every dedupe tag the installed plugins declare, in folder/declaration order."""
     out = []
-    for feature in load_all():
-        for tag in tags_of(feature):
+    for plugin in load_all():
+        for tag in tags_of(plugin):
             if tag not in out:
                 out.append(tag)
     return out
 
 
 def methods() -> list:
-    """Every method name the installed features declare, in folder/declaration order."""
+    """Every method name the installed plugins declare, in folder/declaration order."""
     out = []
-    for feature in load_all():
-        for method in methods_of(feature):
+    for plugin in load_all():
+        for method in methods_of(plugin):
             if method not in out:
                 out.append(method)
     return out
 
 
-def _usable(feature: dict) -> bool:
-    """Whether this feature may act at runtime: a readable declaration with no problem of its own."""
-    return _decl_of(feature) is not None and not _problems_of(feature)
+def _usable(plugin: dict) -> bool:
+    """Whether this plugin may act at runtime: a readable declaration with no problem of its own."""
+    return _decl_of(plugin) is not None and not _problems_of(plugin)
 
 
 def by_timing(timing: str) -> list:
-    """The features that act at this timing, in folder order.
+    """The plugins that act at this timing, in folder order.
 
-    A feature whose declaration is broken, or whose timing nobody recognizes, is skipped: the runtime
+    A plugin whose declaration is broken, or whose timing nobody recognizes, is skipped: the runtime
     is tolerant, and the doctor is where it is pointed out.
     """
-    return [feature for feature in load_all()
-            if _usable(feature) and (_decl_of(feature) or {}).get('timing') == timing]
+    return [plugin for plugin in load_all()
+            if _usable(plugin) and (_decl_of(plugin) or {}).get('timing') == timing]
 
 
 def by_action(action: str) -> list:
-    """The features that produce this action, in folder order (see `by_timing` for the skipping)."""
-    return [feature for feature in load_all()
-            if _usable(feature) and (_decl_of(feature) or {}).get('action') == action]
+    """The plugins that produce this action, in folder order (see `by_timing` for the skipping)."""
+    return [plugin for plugin in load_all()
+            if _usable(plugin) and (_decl_of(plugin) or {}).get('action') == action]
 
 
 # ── the implementation ──────────────────────────────────────────────────────
 
 def impl_of(name: str):
-    """One feature's implementation module, loaded by path, or `None` when it will not load.
+    """One plugin's implementation module, loaded by path, or `None` when it will not load.
 
     Loaded once per process (`register` + `reuse`, under a name of its own): the module is stateless
     by contract -- it is called at its timing with the context it is handed and keeps nothing between
     calls -- so every caller shares the one copy. A load failure is recorded and reported by
-    `validate()` instead of raised: a broken feature must not stop the project that is running it.
+    `validate()` instead of raised: a broken plugin must not stop the project that is running it.
     """
-    path = features_dir() / name / IMPLEMENTATION
+    path = plugins_dir() / name / IMPLEMENTATION
     module_name = 'pf_feature_' + re.sub(r'\W', '_', name) + '_impl'
     try:
         module = _loader().load_by_path(module_name, path, register=True, reuse=True)
-    except (Exception, SystemExit) as e:      # noqa: BLE001 -- a broken feature must not raise here
-        _RUNTIME_PROBLEMS[name] = f'feature {name!r}: {IMPLEMENTATION} failed to load: {e!r}'
+    except (Exception, SystemExit) as e:      # noqa: BLE001 -- a broken plugin must not raise here
+        _RUNTIME_PROBLEMS[name] = f'plugin {name!r}: {IMPLEMENTATION} failed to load: {e!r}'
         return None
     _RUNTIME_PROBLEMS.pop(name, None)
     return module

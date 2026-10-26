@@ -250,15 +250,15 @@ completion rule. When any one of them is not satisfied, change the node or split
 write it down only after the user nods.
 
 **Four: whose run this work's running is.** To clear debt (a batch of issues in the pool), **do
-not write debt-clearing steps yourself**: run `pf doctor` once and read off which features are
+not write debt-clearing steps yourself**: run `pf doctor` once and read off which plugins are
 installed, and the dedupe tag and method name each one declares — copy those two strings in. One
-line, `method: <that method>`, means "this node is run by the conductor from that card itself", and
+line, `method: <that method>`, means "this node is run by the conductor from that skill itself", and
 the order outranks `weight` (see "Method" in [`../pf-conduct/SKILL.md`](../pf-conduct/SKILL.md)); the
 node carries the metric's dedupe tag, plus this line's tag or the picking step cannot see it. In the
 same spec, write the scope and the criterion out clearly: the scope = one metric or one batch of
 same-domain debt, the criterion = that reading coming back under the line (or that batch of issues
-reaching a terminal status). **When the listing names no feature that watches this debt, or that
-feature is not installed**: there is no such road — write an ordinary node, and do not invent a method
+reaching a terminal status). **When the listing names no plugin that watches this debt, or that
+plugin is not installed**: there is no such road — write an ordinary node, and do not invent a method
 name. A plain node carries no `method`.
 
 ### Step 4: landing
@@ -355,7 +355,7 @@ Distil the key information into the answer; do not dump the raw JSON.
   cycle, one node from prepare to close; building no nodes
 - **pf-issue-scan / pf-issue-discuss**: the pool's own branch — scanning into the pool, ruling with
   the user on external (the conventions are in [`../shared/pf/pool.md`](../shared/pf/pool.md)). The
-  card that repairs debt is not in the skills tree: it ships with the feature that watches that debt,
+  skill that repairs debt is not in the skills tree: it ships with the plugin that watches that debt,
   and `pf doctor` prints its method name. To clear one round of debt on the graph, build a node
   carrying `method: <that method>` (see the fourth of "The four questions to ask before writing it
   down")

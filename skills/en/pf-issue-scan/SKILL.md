@@ -68,7 +68,7 @@ Only once the whole batch is back do you go on.
 
 ## Boundaries
 
-- **Only the user or a conductor runs it**: this card dispatches subagents; an executor dispatched
+- **Only the user or a conductor runs it**: this skill dispatches subagents; an executor dispatched
   to it reads it and stops to report
 - It rules no `decision`, fixes no code, changes no spec and enters no graph — picking and
   ordering are the DAG's business

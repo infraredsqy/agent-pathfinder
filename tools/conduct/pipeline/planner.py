@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import feature_host, seam
+from . import plugin_host, seam
 from .store import (_holding_ids, active_cycles, cycle_policy, find_cycle,
                     load_dag, load_signal, load_state, normalize_mode)
 from .instruct import live_instructions
@@ -179,7 +179,7 @@ def _pick_next(project: Path, cycle: dict, tags) -> dict:
     (`pick_node` takes the top row), so a line's first pick takes the same rows the fill would.
     The line fills the slots its `parallel` policy allows -- one pin per slot, in ranking order --
     and the pipeline never stops here: a human who wants a different one names it (`--node`,
-    `cycle hold`). A feature may put a node in front of the pick (`_feature_pick_insertions`); that
+    `cycle hold`). A plugin may put a node in front of the pick (`_feature_pick_insertions`); that
     answer is a graph edit with no pins, so the pick itself is then made on the next step, with the
     inserted node in the same ranking.
     """
@@ -193,12 +193,12 @@ def _pick_next(project: Path, cycle: dict, tags) -> dict:
         if gated is not None:
             return gated
         # The other timing an insertion is allowed at: asked here, after the ready set is known and
-        # before anything is pinned, so the nodes a feature wants enter the graph ahead of the pick
+        # before anything is pinned, so the nodes a plugin wants enter the graph ahead of the pick
         # instead of behind it. What comes back pins nobody -- the next step picks by ranking, and
         # the inserted node is in that ranking.
         offers = _feature_pick_insertions(project, cycle, dag, ready[0])
         if offers:
-            # `None` = every offer was skipped (a feature whose text builder raises): the pick is
+            # `None` = every offer was skipped (a plugin whose text builder raises): the pick is
             # then the ordinary one, exactly as if nothing had asked.
             action = _pick_insertions_due(project, cycle, offers, ready[0])
             if action is not None:
@@ -275,7 +275,7 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
 
     This closing pass **reads the graph once** (the `dag` below) and hands it down as an argument:
     the stop rule (the node's own mode, plus the instruction pass's scope judgement), the fill list,
-    the blocked reason, the dispatch gate, the features' insertion judgement and the attention list
+    the blocked reason, the dispatch gate, the plugins' insertion judgement and the attention list
     all read it -- so stop, fill, cannot-fill, gate-refused and naming-outside-scope each read it
     that one time.
 
@@ -447,9 +447,9 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
     # (`parallel` minus what is still held) get filled, and every one has to be pinned -- pinning
     # only the head leaves the rest of the slots quietly empty.
     cmds = _close_commands(project, cycle, node_id, outcome, 'continue', filled)
-    # The features' one judgement, at the one moment it can be made: the settle that closes a node is
+    # The plugins' one judgement, at the one moment it can be made: the settle that closes a node is
     # the only place a reading and a freshly picked successor are both in hand. With nothing
-    # configured no feature offers anything and this whole pass costs one dict lookup.
+    # configured no plugin offers anything and this whole pass costs one dict lookup.
     offers = _feature_insertions(project, cycle, node_id, sig, dag, filled[0])
     if offers:
         # The insertion action is a close that also edits the graph, so it carries the same close
@@ -469,7 +469,7 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
                                    extra_note=spoke)
         if inserted is not None:
             return inserted
-        # `None` = every offer was skipped (a feature whose text builder raises): this close goes on
+        # `None` = every offer was skipped (a plugin whose text builder raises): this close goes on
         # as the ordinary one below -- the node is settled, the slot filled, the next session asked
         # for. One broken folder must not freeze the line at its close.
     # The pointer is NOT pinned here: the returned `open_node` is what `apply` runs, and it re-plans
@@ -491,56 +491,56 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
 
 def _feature_pick_insertions(project: Path, cycle: dict, dag: dict,
                              target: dict | None = None) -> list:
-    """The insertions the features want at a PICK, in registry order (empty is the common case).
+    """The insertions the plugins want at a PICK, in registry order (empty is the common case).
 
-    The second of the two timings an insert action may occupy (`feature_registry.TIMINGS` has three
-    cells for three timings; a feature declares exactly one). A pick has no node being closed and no
-    ticket to read, so what a feature is handed here is the line, the graph read for the pick and the
+    The second of the two timings an insert action may occupy (`plugin_registry.TIMINGS` has three
+    cells for three timings; a plugin declares exactly one). A pick has no node being closed and no
+    ticket to read, so what a plugin is handed here is the line, the graph read for the pick and the
     node the ranking chose -- nothing else. That is also why `node_id` / `sig` are left out: a
-    feature that ran at a close and one that runs at a pick are different folders with different
+    plugin that ran at a close and one that runs at a pick are different folders with different
     declarations, and this one has no ticket to be handed.
     """
-    ctx = feature_host.Context(project, cycle=cycle, dag=dag, target=target)
-    return feature_host.insertions('pick', ctx)
+    ctx = plugin_host.Context(project, cycle=cycle, dag=dag, target=target)
+    return plugin_host.insertions('pick', ctx)
 
 
 def _feature_insertions(project: Path, cycle: dict, node_id: str, sig: dict | None, dag: dict,
                         target: dict | None = None) -> list:
-    """The insertions the features want at this close, in registry order (empty is the common case).
+    """The insertions the plugins want at this close, in registry order (empty is the common case).
 
-    The whole judgement is `feature_host.insertions`: this only states WHICH state a feature is
+    The whole judgement is `plugin_host.insertions`: this only states WHICH state a plugin is
     handed -- the line, the node being closed, that node's ticket, the graph read at the close entry
     and the node the close had picked. A line with nothing configured gets an empty list here, and
-    that is what keeps the close byte-for-byte what it was before features existed.
+    that is what keeps the close byte-for-byte what it was before plugins existed.
 
-    The `dag` handed down is the one read at the close entry: a feature asking "does this metric
+    The `dag` handed down is the one read at the close entry: a plugin asking "does this metric
     already have a node open" reads that copy, not the disk again.
     """
-    ctx = feature_host.Context(project, cycle=cycle, node_id=node_id, sig=sig, dag=dag,
+    ctx = plugin_host.Context(project, cycle=cycle, node_id=node_id, sig=sig, dag=dag,
                                target=target)
-    return feature_host.insertions('close', ctx)
+    return plugin_host.insertions('close', ctx)
 
 
 def _gate_reasons(project: Path, cycle: dict, node_ids, dag: dict | None = None) -> list:
-    """The dispatch gate's answers: one sentence per feature that says not now; empty is a go.
+    """The dispatch gate's answers: one sentence per plugin that says not now; empty is a go.
 
     The one place the gate is asked, whichever path is asking -- the pick before its pins, the close
     before the fill it hands over, and the dispatch the writer builds from either. The context
     carries the node that would be dispatched, which is what a gate judging "may this node's session
     open now?" reads.
     """
-    ctx = feature_host.Context(project, cycle=cycle, dag=dag,
+    ctx = plugin_host.Context(project, cycle=cycle, dag=dag,
                                node_id=(list(node_ids) or [None])[0])
-    return feature_host.gates('dispatch', ctx)
+    return plugin_host.gates('dispatch', ctx)
 
 
 def _gate_says(reasons) -> str:
-    """A refused dispatch's opening sentence: the gate's own words, verbatim, one per feature."""
-    return 'a feature gate blocked this dispatch: ' + '; '.join(reasons)
+    """A refused dispatch's opening sentence: the gate's own words, verbatim, one per plugin."""
+    return 'a plugin gate blocked this dispatch: ' + '; '.join(reasons)
 
 
 def _feature_gate(project: Path, cycle: dict, node_ids, dag: dict | None = None) -> dict | None:
-    """The stop answer when a feature gate refuses this dispatch, or `None` for a green light.
+    """The stop answer when a plugin gate refuses this dispatch, or `None` for a green light.
 
     A gate sits at the dispatch -- the one moment "does anybody mind another session opening now?"
     can be answered -- and **it is asked before anything is pinned or written, on every path**: the

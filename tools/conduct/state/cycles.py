@@ -5,8 +5,8 @@ show / hold / close / retry -- plus the vocabulary a cycle carries: VALID_TAGS, 
 and the policy table (`POLICY_*`, and `cycle_policy` as the one reading of it).
 
 A line's policies are its own thing: three of them (`when_shelved` / `parallel` / `spawner`) belong
-to the line and live nowhere else, and the rest are the knobs the installed features declare, which
-this line may state on its own record. Nothing in this file spells a feature's name -- the thresholds
+to the line and live nowhere else, and the rest are the knobs the installed plugins declare, which
+this line may state on its own record. Nothing in this file spells a plugin's name -- the thresholds
 a line configures arrive from the declarations of whatever is installed.
 """
 
@@ -35,7 +35,7 @@ def _require_tags(tags: list, verb: str) -> None:
     """A new line must state the range it picks from; an empty range is refused, with `--tags` in
     the hint.
 
-    Which branch a line **belongs to** (whether a feature that reacts to a crossed threshold may
+    Which branch a line **belongs to** (whether a plugin that reacts to a crossed threshold may
     insert a node for a line like this one) is expressed by this tag too: a cycle with no tags
     would give "who may react to a crossed threshold" a second answer. Cycles already on disk keep
     running; this gate applies to new calls only.
@@ -46,7 +46,7 @@ def _require_tags(tags: list, verb: str) -> None:
           f'For example: {verb} <slug> --tags coding. '
           f'Known words: {"/".join(VALID_TAGS)} (a word outside the vocabulary is fine too; it is '
           f'taken as given). '
-          f'Every pick this line makes, and which features may react to it, reads this one range.',
+          f'Every pick this line makes, and which plugins may react to it, reads this one range.',
           file=sys.stderr)
     sys.exit(2)
 
@@ -92,10 +92,10 @@ LINE_POLICIES = {
 }
 
 #: The table `cycle policy` judges with: the line's own three, then every knob a declaration brings
-#: that takes the cycle layer. A feature's thresholds and its switch do walk the whole chain, so this
+#: that takes the cycle layer. A plugin's thresholds and its switch do walk the whole chain, so this
 #: line may state them (one chain, one place to state a value); the core's own settings do not take
 #: this layer, so `max_agents` is not a policy and `pf cycle policy` refuses it. Derived from
-#: `knobs.specs()` -- no feature's name is spelled in this file.
+#: `knobs.specs()` -- no plugin's name is spelled in this file.
 _SPECS = {**LINE_POLICIES,
           **{key: cell for key, cell in knobs.specs().items()
              if 'cycle' in knobs.layers_of(cell)}}
@@ -110,12 +110,12 @@ POLICY_VALUES = {key: tuple(LINE_POLICIES[key].get('values') or ())
 #: holds at least one slot).
 POLICY_COUNTS = tuple(key for key in POLICY_DEFAULTS if LINE_POLICIES[key]['kind'] == 'integer')
 #: Numeric policies: no candidate table, the value parses as a number; `off` cancels (absent means
-#: "not configured"). The thresholds of the features that declare a metric land here -- they are
+#: "not configured"). The thresholds of the plugins that declare a metric land here -- they are
 #: **this line's own rules**, the same kind of thing as `tags`, so they ride on the cycle record.
 POLICY_NUMBERS = tuple(sorted(key for key, spec in _SPECS.items() if spec['kind'] == 'number'))
 #: Word policies: the value must be in the candidate table, `off` clears it, and there is no
 #: default -- a line that never configured it falls to the next level of the chain, and nothing
-#: changes. `spawner` lives here, and so does a feature's word knob that names no default.
+#: changes. `spawner` lives here, and so does a plugin's word knob that names no default.
 POLICY_WORDS = tuple(sorted(key for key, spec in _SPECS.items()
                             if spec['kind'] == 'word' and spec.get('default') is None
                             and key not in POLICY_DEFAULTS))

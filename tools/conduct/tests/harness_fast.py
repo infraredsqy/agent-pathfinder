@@ -37,7 +37,7 @@ __all__ = [
 _FAST_SM_CACHE = {}
 _PIPELINE_CALL_LOCK = threading.RLock()
 
-#: Destinations the real CLI declares `type=int`. A feature's numeric knobs are compared as numbers,
+#: Destinations the real CLI declares `type=int`. A plugin's numeric knobs are compared as numbers,
 #: so a string through here would be a comparison of the wrong type rather than a visible failure.
 _INT_FLAGS = ('stop_after_nodes',)
 

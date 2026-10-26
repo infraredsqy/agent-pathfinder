@@ -64,7 +64,7 @@
 
 ## `conduct-execute-dispatches-on-conductor-instructions` · 依指挥者说明继续派发 subagent
 
-**症状**：spec 或方法卡里写着「按改动域分批，每批派 Fix / Review，批过即提交」，你就照它派起了 subagent——一层套一层。
+**症状**：spec 或方法技能里写着「按改动域分批，每批派 Fix / Review，批过即提交」，你就照它派起了 subagent——一层套一层。
 
 **纠正信号**：你这一步出现了派发动作，而你的 prompt 里没有这一项。
 

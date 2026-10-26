@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 > Who runs me: the user (`/pf-issue-discuss`)
 > What I am for: reading, writing and ruling on the pool — take one entry in, look at the state, rule autofix/external, and put what needs the call in front of the user
-> Do I dispatch subagents: no. To repair, go to the debt-clearing card (it ships with the feature that watches that debt; `pf doctor` says whether it is installed and what it is called); to scan, go to `/pf-issue-scan`
+> Do I dispatch subagents: no. To repair, go to the debt-clearing skill (it ships with the plugin that watches that debt; `pf doctor` says whether it is installed and what it is called); to scan, go to `/pf-issue-scan`
 
 Tools and conventions are in [`../shared/pf/pool.md`](../shared/pf/pool.md): commands go through
 `pf issue` only, and run `--help` before touching anything.
@@ -21,7 +21,7 @@ Tools and conventions are in [`../shared/pf/pool.md`](../shared/pf/pool.md): com
 | "how much is in the pool right now" | **Look at the state**: `status` + `top --limit 10`, reporting the total and the grades by severity and by source |
 | "that one is fixed" | **Settle it**: locate with `search` → `resolve <id>`; when you are not sure which one it is, lay them out for the user to pick |
 | "walk me through the external ones" | **Rule**: go through the two steps below |
-| "fix this bug" | A single debug goes to `/trace`; a batch of same-domain debt goes to the debt-clearing card (`pf doctor` says whether it is installed and what it is called) |
+| "fix this bug" | A single debug goes to `/trace`; a batch of same-domain debt goes to the debt-clearing skill (`pf doctor` says whether it is installed and what it is called) |
 
 When recording, do not cross-examine: one sentence is enough to record it. When the user says more
 about the file or the module, fill in `--module` / `--files` / `--description` in passing.
@@ -62,7 +62,7 @@ More burns the judgement, so what is over goes into the next batch.
 |---|---|
 | Talking a single entry's implementation through at length | suggest moving to `/engineering` |
 | A large-scale refactor signal | an entry of its own (threshold and conventions in [`../shared/pf/pool.md`](../shared/pf/pool.md)), and suggest moving to `/engineering` |
-| A batch to repair | the debt-clearing card (`pf doctor` says whether it is installed and what it is called) |
+| A batch to repair | the debt-clearing skill (`pf doctor` says whether it is installed and what it is called) |
 | The pool is due for a refresh | `/pf-issue-scan` |
 | A new feature that should enter the graph | `/pf-route` |
 

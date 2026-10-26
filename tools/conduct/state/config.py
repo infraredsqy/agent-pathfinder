@@ -11,7 +11,7 @@ chain owes an answer to. `list` prints the pair; `get` prints the value alone, w
 reads.
 
 Not every knob takes every layer: a core setting is how this project or this machine behaves (the
-project and global layers), while a knob a feature declares walks the whole chain. A write into a
+project and global layers), while a knob a plugin declares walks the whole chain. A write into a
 layer the knob does not take is refused here, naming the layers it does take. And three names are
 not settings at all -- `parallel`, `when_shelved` and `spawner` live on the line record, whose writer
 is `pf cycle policy`: this command does not know them, and saying so here is what keeps a value
@@ -79,7 +79,7 @@ def _check_layer(key: str, spec: dict, layer: str) -> None:
 
     Which layers a knob takes is its own cell (`layers`), not a property of the chain: a core setting
     is how this project or this machine behaves and takes the two wide layers only, while a knob a
-    feature declares is read through the whole chain and takes all four. Writing into a layer the
+    plugin declares is read through the whole chain and takes all four. Writing into a layer the
     knob does not take would land a value nothing could ever read, so it is refused here -- the read
     side reports a value hand-written into such a layer, and the two sides say the same thing.
     """

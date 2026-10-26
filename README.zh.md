@@ -26,7 +26,7 @@ pwsh -File install.ps1
 
 该脚本将 `pf-*` 技能链接至 `~/.agents/skills`，把 `tools/bin` 加入 `PATH`（同时摘掉其它 checkout 的那一条，`pf` 只解析到本仓库）。仓库位置变更后重新执行即可，脚本具备幂等性，收尾自检里包含一次 `pf doctor`。
 
-技能分英文与中文两套，一次只装一套（一个方法名只有一份卡）：缺省装英文，`-Lang zh` 装中文那一套。选择记在 `~/.pf/lang.txt`，之后重跑修复不会把语言换掉。
+技能分英文与中文两套，一次只装一套（一个方法名只有一份技能）：缺省装英文，`-Lang zh` 装中文那一套。选择记在 `~/.pf/lang.txt`，之后重跑修复不会把语言换掉。
 
 ```pwsh
 pf version     # 当前 checkout 的位置
@@ -65,7 +65,7 @@ pf next --spawn
 | `pf-issue-scan` | 扫描代码中尚未入库的技术债 |
 | `pf-issue-discuss` | 与人工逐批确认 issue 池中的条目 |
 
-功能也可以自带一张技能卡：卡放在该功能自己的文件夹里（`tools/conduct/features/<name>/cards/`），随功能一起装、卸，所以本仓库装了哪几张，以 `pf doctor` 列出来的为准。没有哪个技能会点它的名——提到它时只说「跑 `pf doctor`」。
+插件也可以自带技能：技能放在该插件自己的文件夹里（`plugins/<name>/skills/`），随插件一起装、卸，所以本仓库装了哪些，以 `pf doctor` 列出来的为准。没有哪个技能会点它的名——提到它时只说「跑 `pf doctor`」。
 
 ## 开发
 

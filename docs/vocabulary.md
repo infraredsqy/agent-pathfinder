@@ -104,18 +104,18 @@
 | 收口 / 收尾 | close out | |
 | 正本 | the one source | |
 | 出厂默认 | factory default | |
-| 维护通道 | maintenance channel | 一个功能（一个文件夹）：占收尾时机、产出插入动作 |
-| 功能 | feature | 一个文件夹：声明 + 实现；文件夹名就是它的身份 |
-| 声明 | declaration | 功能文件夹里那份数据：占哪个时机、认哪些名字 |
-| 实现 | implementation | 功能文件夹里的代码：时机到了被叫一次 |
-| 技能卡 | skill card | 方法名点到的那份 `SKILL.md`；绑功能的卡住在功能的 `cards/<语言>/<方法名>/` 里，随它装、卸 |
+| 维护通道 | maintenance channel | 一个插件（一个文件夹）：占收尾时机、产出插入动作 |
+| 插件 | plugin | 一个文件夹：声明 + 实现；文件夹名就是它的身份 |
+| 声明 | declaration | 插件文件夹里那份数据：占哪个时机、认哪些名字 |
+| 实现 | implementation | 插件文件夹里的代码：时机到了被叫一次 |
+| 技能 | skill | 方法名点到的那份 `SKILL.md`；绑插件的技能住在插件的 `skills/<语言>/<方法名>/` 里，随它装、卸 |
 | 旋钮 | knob | 一个设置的名字 |
 | 旋钮的种类 | the knob's kind | 数值 / 整数 / 词 / 开关（`number` / `integer` / `word` / `switch`） |
 | 时机 | timing | 收尾 / 挑选 / 派发（`close` / `pick` / `dispatch`） |
 | 动作 | action | 插入 / 拦下（`insert` / `block`） |
 | 度量 | metric | 一条债：一个读数、一条线、一枚去重标签、一个方法名 |
 | 去重标签 | dedupe tag | 节点上的 tag，回答「这个度量是不是已经有一个在局中的节点」 |
-| 方法名 | method name | spec 的 `method: ` 行点名的技能卡 |
+| 方法名 | method name | spec 的 `method: ` 行点名的技能 |
 | 过滤集 | filter set | |
 | 重试 | retry | |
 | 降级标记 | degradation marker | |
@@ -146,7 +146,7 @@
 |---|---|
 | 指挥者 | the conductor |
 | 用户 / 人工 | the user / a human |
-| 方法卡 / 角色卡 | method card / role card |
+| 方法技能 / 角色卡 | method skill / role card |
 | 拍板 | the call |
 | 裁定 | the conductor's verdict |
 | 落笔 | write it down |

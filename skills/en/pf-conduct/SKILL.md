@@ -38,7 +38,7 @@ them in `run.md`'s "Facts checked".
 | The `.pf/` flavour | commit / local | judged at step 0's sync | how many pulls step 0 does, and where the close's merge-back and commit-push go (see "Close out") |
 | Mode | `manual` / `checkpoint` / `auto` | `info` | whether it stops, and whether it asks a human (see "Mode") |
 | Look at the weight first | `light` / absent = `standard` | `info`'s `weight` | who does the work at the execute step (see "Look at the weight first") |
-| Method | the `method: <skill name>` line in the spec; absent = none | read `spec.md` | who runs this node this run, and under which card (see "Method") |
+| Method | the `method: <skill name>` line in the spec; absent = none | read `spec.md` | who runs this node this run, and under which skill (see "Method") |
 | Test tier and verification | `full` / `minimal` | `pf config get test_tier` | what each step verifies, and whether tests get written (see "Test tier and verification") |
 | worktree mode | `off` / `fork` / `reuse` | `pf config get worktree_mode` | the two steps, prepare's fork and the close's merge-back (see "Parallel: worktree") |
 | The subagent cap | a positive integer | `pf config get max_agents` | how the dispatched work is batched (see [`../shared/pf/subagents.md`](../shared/pf/subagents.md)) |
@@ -96,19 +96,19 @@ under "Autonomous decisions"; **the downgrade in the other direction is not your
 
 When the spec carries a `method: <skill name>` line, read `~/.agents/skills/<name>/SKILL.md` (you
 expand `~` yourself; when it is going to a subagent, write the absolute path) — how this node
-runs this run follows that card.
+runs this run follows that skill.
 
 - That line carries the **skill name** and nothing else. Workspace things (the spec, the report
   set and paths under `.pf/`) always get absolute paths from the tool, and role cards are always
   `<this skill's directory>/…`; **turning a name into a path happens on this line only** — the
   three places never derive one from another
-- **The method card declares its own layer**: when the card's opening says it dispatches
+- **The method skill declares its own layer**: when the skill's opening says it dispatches
   subagents, it is a conductor method — **run it yourself**, do not push it onto Execute; when it
   says it does not dispatch, it is an executor method, and the "Look at the weight first" column
   decides
 - **The order: the method line outranks weight.** Debt nodes and debt-clearing nodes carry
   no weight (= standard), and the "standard dispatches Execute" road does not hold for them
-- The layer a method card dispatches still may not dispatch any further down
+- The layer a method skill dispatches still may not dispatch any further down
 
 ### Test tier and verification
 
@@ -129,8 +129,8 @@ are taken from the project docs (the `slow` marker, the two entries, and with no
 full run — projects differ in shape), so do not copy another project's wording; the `minimal`
 tier is exactly the few checks that project names, and **no suite gets built for it**; when the
 fast lane gets too slow to bear, that is a matter of tiers or compression and belongs to the
-test-hygiene path (run `pf doctor`: the listing says which installed feature watches this metric, and
-which method card that feature names) — do not dodge it by running the full run more often or less. Reports carry the
+test-hygiene path (run `pf doctor`: the listing says which installed plugin watches this metric, and
+which method skill that plugin names) — do not dodge it by running the full run more often or less. Reports carry the
 actual commands and counts, and the `full` tier also carries **the suite's actual measured
 seconds**; without the evidence it counts as never run.
 
@@ -138,8 +138,8 @@ When neither the spec nor the project docs names a verification command, stop an
 fill it in through pf-route — that is pf-route's debt. When the project says `minimal` and this line
 carries a reading that asks for the full suite's wall clock, report the contradiction to the user,
 together with the command that turns it off (`pf cycle policy <cycle> <that key> off` — the key is a
-**knob name**, read off `pf doctor`'s feature listing: under the feature that owns the reading it
-prints the knobs that feature declares, one per line, each with its own summary sentence — the
+**knob name**, read off `pf doctor`'s plugin listing: under the plugin that owns the reading it
+prints the knobs that plugin declares, one per line, each with its own summary sentence — the
 reading's slot name is not a key and is rejected).
 
 ### Node tags
@@ -629,7 +629,7 @@ push as usual, then run `pf next --cycle <cycle> --spawn --json` and let the pic
 it; from there it walks like any other node. It goes when it is done, and stopping to
 wait for someone's answer is not among its options. **Its spec carries a `method: ` line** (which
 method it names is the declaration's to write, and `pf doctor` prints it): when prepare reads it, run
-that card yourself —
+that skill yourself —
 batching, dispatching and settling are all in your hands, and the loop is still this flow's
 "Execute" section; the scope is set by the spec that inserted it, so do not widen it to everything
 yourself. Close out as usual when it is done, then go on to the next.
@@ -762,7 +762,7 @@ checkout root prints it), not under the current project's `docs/`.
   is this line's cap)
 - The pool (the issue store)'s tools and conventions:
   [`../shared/pf/pool.md`](../shared/pf/pool.md)
-- Method cards: `~/.agents/skills/<name>/SKILL.md` — named by the spec's `method: ` line; this is
+- Method skills: `~/.agents/skills/<name>/SKILL.md` — named by the spec's `method: ` line; this is
   the only place a name turns into a path
 - Dispatch and authentication: `docs/conduct-dsh-dispatch.md`
 - The filter semantics for node tags: `docs/conduct-node-tags.md`

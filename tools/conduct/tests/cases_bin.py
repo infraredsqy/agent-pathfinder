@@ -1,5 +1,5 @@
 """The pieces in front of `pf`'s door: `pf.cmd` on Windows, the project root `doctor` names, and the
-features `doctor` says are installed.
+plugins `doctor` says are installed.
 
 All three live in the pf layer, and what is measured is the rules of that layer:
 
@@ -10,20 +10,20 @@ All three live in the pf layer, and what is measured is the rules of that layer:
   * the project root `doctor` reports is the same root the tools it forwards (`pf dag` / `pf issue`)
     read the ledger by: cwd is the root, the one exception being that a linked worktree goes back to
     the main tree. That the two readings agree is what these cases prove.
-  * `doctor`'s `features:` section: what the scan found, how each one works (its own summary and the
-    knobs it declares), the dedupe tags and methods each feature shows the outside, zero installed for
-    an empty features directory, a declaration problem counted
+  * `doctor`'s `plugins:` section: what the scan found, how each one works (its own summary and the
+    knobs it declares), the dedupe tags and methods each plugin shows the outside, zero installed for
+    an empty plugins directory, a declaration problem counted
     in the exit code, a declaration that claims a built-in setting's name (reported by the one door
     that sees both tables, with the built-in cell still in force), and an `impl.py` that cannot even
     compile (the doctor loads each installed one once, so a broken implementation is named here and
-    not discovered at the next close). The scan is pointed at a throwaway features directory, so
-    these cases say nothing about which features this checkout happens to ship -- an empty
-    `features/` is a legal tree and the suite stays green with it.
+    not discovered at the next close). The scan is pointed at a throwaway plugins directory, so
+    these cases say nothing about which plugins this checkout happens to ship -- an empty
+    `plugins/` is a legal tree and the suite stays green with it.
   * `help` and `--help` print the same body (the parser's own), and the command list is not copied a
     second time.
 
 Every case builds its own thing in a temp dir (a fake `pf.py` plus a real `pf.cmd`, a throwaway git
-repository plus one worktree, or a project plus a features directory), runs the real CLI and cleans up
+repository plus one worktree, or a project plus a plugins directory), runs the real CLI and cleans up
 afterwards; no real project is touched, no session is opened, and every command stays inside the 5 s
 budget.
 
@@ -45,7 +45,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from harness import (GIT, TOOLS_DIR, _child_env, _run_command, git, init_markers, run_argv,
-                     write_card)
+                     write_skill)
 
 __all__ = ['TestPfCmdShim', 'TestDoctorRoot', 'TestDoctorFeatures', 'TestCommandList']
 
@@ -55,10 +55,10 @@ PF = BIN / 'pf.py'
 SHIM = BIN / 'pf.cmd'
 CMD = os.environ.get('COMSPEC', 'cmd.exe')
 
-#: The method the default fixture declaration names, and the card folder the fixture writes beside it.
-#: A fixture writes its own card instead of borrowing the name of one this checkout happens to ship:
-#: the card lives in the feature folder, so the two are one thing to write.
-FIXTURE_METHOD = 'pf-fixture-card'
+#: The method the default fixture declaration names, and the skill folder the fixture writes beside it.
+#: A fixture writes its own skill instead of borrowing the name of one this checkout happens to ship:
+#: the skill lives in the plugin folder, so the two are one thing to write.
+FIXTURE_METHOD = 'pf-fixture-skill'
 
 #: A fake `pf.py`: every run appends one line to `runs.txt` (recording the argv it received) and then
 #: exits with `FAKE_PF_EXIT`. One fake is enough: these cases measure "how many times it ran, and
@@ -237,46 +237,46 @@ class TestDoctorRoot(unittest.TestCase):
 
 
 class TestDoctorFeatures(unittest.TestCase):
-    """`doctor`'s `features:` section: what the scan found, and what a declaration's problems cost.
+    """`doctor`'s `plugins:` section: what the scan found, and what a declaration's problems cost.
 
-    `PF_FEATURES_DIR` is pointed at a throwaway directory in every case, so what is asserted is the
-    doctor's own reporting -- never which features this checkout ships. The project is a clean one
-    (init markers plus the usage note), so the exit code is the features' alone.
+    `PF_PLUGINS_DIR` is pointed at a throwaway directory in every case, so what is asserted is the
+    doctor's own reporting -- never which plugins this checkout ships. The project is a clean one
+    (init markers plus the usage note), so the exit code is the plugins' alone.
     """
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory(prefix='pf-doctor-features-')
+        tmp = tempfile.TemporaryDirectory(prefix='pf-doctor-plugins-')
         self.addCleanup(tmp.cleanup)
         base = Path(tmp.name)
         self.project = base / 'project'
         ledger = init_markers(self.project)
         (ledger / 'AGENTS.md').write_text('# ledger\n', encoding='utf-8')
-        self.features = base / 'features'
-        self.features.mkdir()
+        self.plugins = base / 'plugins'
+        self.plugins.mkdir()
         self.home = base / 'home'
         self.home.mkdir()
 
     # ── helpers ──────────────────────────────────────────────────────────────
-    def doctor(self, features=None):
+    def doctor(self, plugins=None):
         env = _child_env()
-        env['PF_FEATURES_DIR'] = str(self.features if features is None else features)
+        env['PF_PLUGINS_DIR'] = str(self.plugins if plugins is None else plugins)
         env['PF_HOME_DIR'] = str(self.home)
         return run_argv([PF, 'doctor'], cwd=self.project, env=env, check=False)
 
     def add_feature(self, name='auditor', declaration=None, impl=None):
-        """One feature folder under the temp features directory, with the card its method names.
+        """One plugin folder under the temp plugins directory, with the skill its method names.
 
         `impl` replaces the trivial implementation a case does not care about: the doctor has to call
         every installed `impl.py` once, and load it once on top of that, so what a broken one looks
         like is a case of its own. The default declaration names a method the fixture's own folder
-        carries a card for -- a card lives in the feature folder, so a fixture without one would make
+        carries a skill for -- a skill lives in the plugin folder, so a fixture without one would make
         every case here fail for a reason none of them is about.
         """
-        folder = self.features / name
+        folder = self.plugins / name
         folder.mkdir()
         (folder / 'impl.py').write_text(
             impl if impl is not None else 'def offer(ctx):\n    return None\n', encoding='utf-8')
-        (folder / 'feature.json').write_text(json.dumps(declaration or {
+        (folder / 'plugin.json').write_text(json.dumps(declaration or {
             'name': name, 'timing': 'close', 'action': 'insert',
             'knobs': {'audit_limit': {'kind': 'number',
                                       'summary': 'the audited minutes the line must read below'}},
@@ -286,12 +286,12 @@ class TestDoctorFeatures(unittest.TestCase):
                                           'method': FIXTURE_METHOD, 'order': 0}},
         }), encoding='utf-8')
         if declaration is None:
-            write_card(folder, FIXTURE_METHOD)
+            write_skill(folder, FIXTURE_METHOD)
         return folder
 
     def pf(self, *args):
         env = _child_env()
-        env['PF_FEATURES_DIR'] = str(self.features)
+        env['PF_PLUGINS_DIR'] = str(self.plugins)
         env['PF_HOME_DIR'] = str(self.home)
         return run_argv([PF, *args], cwd=self.project, env=env, check=False)
 
@@ -302,20 +302,20 @@ class TestDoctorFeatures(unittest.TestCase):
         proc = self.doctor()
 
         self.assertEqual(0, proc.returncode, proc.stdout)
-        self.assertIn('features: 1 installed', proc.stdout)
+        self.assertIn('plugins: 1 installed', proc.stdout)
         self.assertIn('auditor', proc.stdout)
         self.assertIn('audit:minutes', proc.stdout, 'the dedupe tag the outside writes down')
         self.assertIn(FIXTURE_METHOD, proc.stdout, 'the method name its nodes point at')
         self.assertIn('the audited minutes the line must read below', proc.stdout,
                       'the knob it declares, in the declaration\'s own words')
 
-    def test_an_empty_features_directory_reports_zero_installed(self):
+    def test_an_empty_plugins_directory_reports_zero_installed(self):
         proc = self.doctor()
 
         self.assertEqual(0, proc.returncode, proc.stdout)
-        self.assertIn('features: 0 installed', proc.stdout,
-                      'the core is whole with no feature at all, and the doctor says so')
-        self.assertIn(str(self.features), proc.stdout, 'and it says where it looked')
+        self.assertIn('plugins: 0 installed', proc.stdout,
+                      'the core is whole with no plugin at all, and the doctor says so')
+        self.assertIn(str(self.plugins), proc.stdout, 'and it says where it looked')
 
     def test_a_declaration_problem_is_counted_in_the_exit_code(self):
         clean = self.doctor()
@@ -329,7 +329,7 @@ class TestDoctorFeatures(unittest.TestCase):
         self.assertIn('broken', broken.stdout)
         self.assertIn('not one of', broken.stdout,
                       'the problem says what the declaration would have to be')
-        self.assertTrue((folder / 'feature.json').is_file())
+        self.assertTrue((folder / 'plugin.json').is_file())
 
     def test_a_declaration_that_claims_a_builtin_name_is_reported(self):
         """A declaration that claims a core setting's name is the merge's one silence: the built-in
@@ -373,7 +373,7 @@ class TestDoctorFeatures(unittest.TestCase):
         self.assertEqual(0, self.pf('config', 'set', 'audit_limit', '5').returncode)
 
     def test_a_broken_implementation_is_reported(self):
-        """`pf doctor` loads every installed `impl.py` once: a feature whose code cannot even compile
+        """`pf doctor` loads every installed `impl.py` once: a plugin whose code cannot even compile
         has to be named on the doctor's list, not discovered at the next close."""
         clean = self.doctor()
         self.assertEqual(0, clean.returncode, clean.stdout)
@@ -389,26 +389,26 @@ class TestDoctorFeatures(unittest.TestCase):
                       'the sentence says the code, not the declaration, is what broke')
 
     def test_a_method_without_a_card_is_reported(self):
-        """The doctor runs the validator's card check: a method a declaration names has to have its
-        `SKILL.md` in a card folder some installed feature ships, or a generated node points a session
+        """The doctor runs the validator's skill check: a method a declaration names has to have its
+        `SKILL.md` in a skill folder some installed plugin ships, or a generated node points a session
         at nothing."""
         self.add_feature('cardless', {
             'name': 'cardless', 'timing': 'close', 'action': 'insert',
             'knobs': {'audit_limit': {'kind': 'number'}},
             'readings': {'audit_minutes': {'source': 'ticket', 'when_knob': 'audit_limit'}},
             'metrics': {'audit_minutes': {'line': 'audit_limit', 'tag': 'audit:cardless',
-                                          'method': 'pf-no-such-card', 'order': 0}},
+                                          'method': 'pf-no-such-skill', 'order': 0}},
         })
 
         proc = self.doctor()
 
         self.assertNotEqual(0, proc.returncode,
-                            f'a method card that is missing must reach the exit code:\n{proc.stdout}')
-        self.assertIn("'cardless'", proc.stdout, 'the problem names the feature')
-        self.assertIn("'pf-no-such-card'", proc.stdout, 'and the method nobody has a card for')
+                            f'a method skill that is missing must reach the exit code:\n{proc.stdout}')
+        self.assertIn("'cardless'", proc.stdout, 'the problem names the plugin')
+        self.assertIn("'pf-no-such-skill'", proc.stdout, 'and the method nobody has a skill for')
 
     def test_an_implementation_that_raises_is_reported(self):
-        """The doctor really calls each implementation once, against a stand-in project: a feature
+        """The doctor really calls each implementation once, against a stand-in project: a plugin
         that explodes at its door is named here, not discovered at somebody's next close."""
         self.add_feature('boom', impl='def offer(ctx):\n    raise RuntimeError("boom")\n')
 
@@ -416,7 +416,7 @@ class TestDoctorFeatures(unittest.TestCase):
 
         self.assertNotEqual(0, proc.returncode,
                             f'an implementation that raises must reach the exit code:\n{proc.stdout}')
-        self.assertIn("'boom'", proc.stdout, 'the problem names the feature')
+        self.assertIn("'boom'", proc.stdout, 'the problem names the plugin')
         self.assertIn('raised on a stand-in project', proc.stdout,
                       'the sentence says the code answered with an exception')
 

@@ -16,7 +16,7 @@ answer to "which one" (`spawn/host.py`'s `default_spawner`, honoring `DSH_CONDUC
 `spawner` policy is read by `resolve_spawner` inside that door when the caller names a cycle this
 project records).
 
-**The dispatch gate is asked here, before anything starts.** A feature may declare `block` at the
+**The dispatch gate is asked here, before anything starts.** A plugin may declare `block` at the
 `dispatch` timing -- the question "may a session open now?" -- and this lever opens a real session, so
 it is one more mouth the gate has to cover: the gate is asked with the workspace as the project and
 the line's own record when `--cycle-id` names one this project knows (the record is empty otherwise:
@@ -82,9 +82,9 @@ def _start(workspace: Path, cycle_id: str, prompt_file: Path, dry_run: bool) -> 
 
 
 def _dispatch_gate(workspace: Path, cycle_id: str) -> list:
-    """The dispatch gate's answer for this start: one reason string per feature saying "not now".
+    """The dispatch gate's answer for this start: one reason string per plugin saying "not now".
 
-    The gate lives at the moment a session opens (a `block` feature at the `dispatch` timing), and
+    The gate lives at the moment a session opens (a `block` plugin at the `dispatch` timing), and
     this file opens sessions, so it is asked here -- with the workspace as the project and the line's
     own record when this project records it. `--cycle-id` names the chain's degradation marker and
     need not be a line at all: with no such record the gate is asked over the project anyway (an

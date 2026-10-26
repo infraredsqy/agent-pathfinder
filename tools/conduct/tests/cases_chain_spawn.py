@@ -6,8 +6,8 @@ tested territory; here the choice is pinned through `DSH_CONDUCT_SPAWNER` -- the
 `default_spawner` answers first.
 
 The dispatch gate is asked before anything starts (a chain-run session is a real session), so a
-throwaway features directory holding a `block`-at-dispatch folder is the fixture for the refusal
-case: `PF_FEATURES_DIR` points the feature scan at it, and `PF_HOME_DIR` keeps the machine's own
+throwaway plugins directory holding a `block`-at-dispatch folder is the fixture for the refusal
+case: `PF_PLUGINS_DIR` points the plugin scan at it, and `PF_HOME_DIR` keeps the machine's own
 settings file out of the run.
 
     python -m unittest cases_chain_spawn            # from this directory
@@ -81,14 +81,14 @@ class ChainCase(unittest.TestCase):
             code = chain_spawn.main(['--prompt-file', str(self.prompt), *extra])
         return code, calls, out.getvalue(), err.getvalue()
 
-    def features(self, declaration, impl):
-        """A throwaway features directory holding one feature folder, entered for one call."""
-        root = self.root / 'features'
+    def plugins(self, declaration, impl):
+        """A throwaway plugins directory holding one plugin folder, entered for one call."""
+        root = self.root / 'plugins'
         folder = root / 'gate'
         folder.mkdir(parents=True, exist_ok=True)
-        (folder / 'feature.json').write_text(json.dumps(declaration), encoding='utf-8')
+        (folder / 'plugin.json').write_text(json.dumps(declaration), encoding='utf-8')
         (folder / 'impl.py').write_text(impl, encoding='utf-8')
-        return mock.patch.dict(os.environ, {'PF_FEATURES_DIR': str(root)})
+        return mock.patch.dict(os.environ, {'PF_PLUGINS_DIR': str(root)})
 
 
 class TestSpawn(ChainCase):
@@ -139,7 +139,7 @@ class TestFailure(ChainCase):
                        'knobs': {}, 'readings': {}, 'metrics': {}}
         impl = "def check(ctx):\n    return 'the fixture gate says not now'\n"
 
-        with self.features(declaration, impl):
+        with self.plugins(declaration, impl):
             code, calls, out, err = self.run_tool('--dry-run')
 
         self.assertEqual(1, code, (out, err))
@@ -147,11 +147,11 @@ class TestFailure(ChainCase):
         self.assertIn('the dispatch gate says not now', err)
         self.assertIn('the fixture gate says not now', err, 'the gate\'s own words must come through')
 
-    def test_an_empty_features_directory_leaves_the_start_alone(self):
-        """With no feature installed the gate has nothing to say, and the chain starts as always."""
-        empty = self.root / 'empty-features'
+    def test_an_empty_plugins_directory_leaves_the_start_alone(self):
+        """With no plugin installed the gate has nothing to say, and the chain starts as always."""
+        empty = self.root / 'empty-plugins'
         empty.mkdir()
-        with mock.patch.dict(os.environ, {'PF_FEATURES_DIR': str(empty)}):
+        with mock.patch.dict(os.environ, {'PF_PLUGINS_DIR': str(empty)}):
             code, calls, out, _ = self.run_tool('--dry-run', real_door=True)
 
         self.assertEqual(0, code, out)

@@ -29,10 +29,10 @@ What is worth a case here, because each fails silently otherwise:
   * `init` leaves a blank object at a discoverable path and never clobbers what was written into it
   * the global layer needs no project at all, and `pf` really forwards the verb
 
-The number and switch kinds have no built-in member: they arrive as a **feature's declaration**, so
-this file installs a throwaway one under `PF_FEATURES_DIR` rather than leaning on whatever features
-this checkout happens to ship. The suite has to stay green with `features/` empty, so nothing here
-names a shipped feature or one of its knobs.
+The number and switch kinds have no built-in member: they arrive as a **plugin's declaration**, so
+this file installs a throwaway one under `PF_PLUGINS_DIR` rather than leaning on whatever plugins
+this checkout happens to ship. The suite has to stay green with `plugins/` empty, so nothing here
+names a shipped plugin or one of its knobs.
 
 Every case points `PF_HOME_DIR` at its own sandbox: without that, a case would read (and one would
 write) the machine's real `~/.pf/config.json`. `_child_env()` inherits both variables, so the child
@@ -63,17 +63,17 @@ LINE = re.compile(r'^(?P<key>[a-z_]+)\s+=\s+(?P<value>.+?)\s*\((?P<layer>.+?)\)$
 NODE = 'deadbeef-0000-1111-2222-333344445555'
 
 
-def _install_feature(features: Path) -> None:
-    """Put a throwaway feature under `features/`, declaring the two kinds the built-ins lack.
+def _install_feature(plugins: Path) -> None:
+    """Put a throwaway plugin under `plugins/`, declaring the two kinds the built-ins lack.
 
-    A feature is a folder: a declaration (data) and an implementation (code). Nothing here runs the
+    A plugin is a folder: a declaration (data) and an implementation (code). Nothing here runs the
     implementation -- what is wanted is only that its knobs exist, one `number` and one `switch`, so
     the four kinds this file pins are all reachable through the same merged table.
     """
-    folder = features / 'sandbox'
+    folder = plugins / 'sandbox'
     folder.mkdir(parents=True)
     (folder / 'impl.py').write_text('def offer(ctx):\n    return None\n', encoding='utf-8')
-    (folder / 'feature.json').write_text(json.dumps({
+    (folder / 'plugin.json').write_text(json.dumps({
         'name': 'sandbox',
         'timing': 'close',
         'action': 'insert',
@@ -96,12 +96,12 @@ class TestConfig(unittest.TestCase):
         # What `init` writes, and the only thing that says this `.pf/` was put there on purpose:
         # a write into the project layer is refused without them.
         self.ledger = init_markers(self.root)
-        # The two non-built-in kinds arrive from a feature's declaration; a sandbox one keeps this
-        # file independent of the features this checkout ships.
-        self.features = self.base / 'features'
-        _install_feature(self.features)
+        # The two non-built-in kinds arrive from a plugin's declaration; a sandbox one keeps this
+        # file independent of the plugins this checkout ships.
+        self.plugins = self.base / 'plugins'
+        _install_feature(self.plugins)
         env = mock.patch.dict(os.environ, {'PF_HOME_DIR': str(self.home),
-                                           'PF_FEATURES_DIR': str(self.features)})
+                                           'PF_PLUGINS_DIR': str(self.plugins)})
         env.start()
         self.addCleanup(env.stop)
 
@@ -190,10 +190,10 @@ class TestConfig(unittest.TestCase):
     def test_a_declared_knob_takes_only_the_layers_its_declaration_names(self):
         """A declaration may narrow its own knob (`layers: ["project"]`): the write side obeys that
         cell, so `--node` and `--cycle` are refused naming what it takes, and `--project` lands."""
-        folder = self.features / 'narrow'
+        folder = self.plugins / 'narrow'
         folder.mkdir()
         (folder / 'impl.py').write_text('def offer(ctx):\n    return None\n', encoding='utf-8')
-        (folder / 'feature.json').write_text(json.dumps({
+        (folder / 'plugin.json').write_text(json.dumps({
             'name': 'narrow', 'timing': 'close', 'action': 'insert',
             'knobs': {'narrow_limit': {'kind': 'number', 'layers': ['project']}},
         }), encoding='utf-8')
@@ -215,7 +215,7 @@ class TestConfig(unittest.TestCase):
     def test_the_whole_chain_resolves_narrowest_first(self):
         """Four layers, one key: each write covers the wider ones, and each `unset` steps back.
 
-        The key is the **declared** number knob: a knob a feature declares takes every layer, which
+        The key is the **declared** number knob: a knob a plugin declares takes every layer, which
         is what the chain is for. (A core setting takes the two wide ones, and the case above pins
         that.)
         """

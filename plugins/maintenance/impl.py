@@ -1,8 +1,8 @@
-"""The maintenance feature's own implementation: the judgement, and the node's own text.
+"""The maintenance plugin's own implementation: the judgement, and the node's own text.
 
-This file is loaded **by path**, on its own, from the folder it sits in (`feature.json` beside it is
-this feature's declaration). It therefore imports nothing from the pipeline package: everything it
-may touch arrives in the `ctx` it is handed (`feature_host.Context`) --
+This file is loaded **by path**, on its own, from the folder it sits in (`plugin.json` beside it is
+this plugin's declaration). It therefore imports nothing from the pipeline package: everything it
+may touch arrives in the `ctx` it is handed (`plugin_host.Context`) --
 
     ctx.knob(name)            the effective value of one knob, from the whole resolution chain
     ctx.reading(key)          the number this ticket reported for one declared reading, or None
@@ -12,11 +12,11 @@ may touch arrives in the `ctx` it is handed (`feature_host.Context`) --
     ctx.spec_path(node_id)    where a node's own `spec.md` lands (this tree's layout, not ours)
     ctx.project / ctx.cycle / ctx.node_id / ctx.sig / ctx.dag / ctx.target
 
-`offer(ctx)` is the whole of its contract with the core: it answers the insertion this feature wants
+`offer(ctx)` is the whole of its contract with the core: it answers the insertion this plugin wants
 now (a title, tags, a text builder and the fields a reader is shown), or `None` -- the common case.
 It never writes a file, never opens a session, and never raises for a missing number: a project that
 configured no line gets `None` here, which is what keeps a close without knobs byte-for-byte what it
-was before this feature existed.
+was before this plugin existed.
 
 **Every number is optional, and a garbled one reads as "not known this pass".** The lines live in the
 line's own policies (`policies.<line>`), the ticket carries the wall clock, and the pool's weighted
@@ -33,26 +33,26 @@ from pathlib import Path
 
 # ── the declaration beside this file ─────────────────────────────────────────
 # The names (which reading, which line, which tag, which method, in which order) live in
-# `feature.json`, never a second time here; this reads it. A declaration that cannot be read leaves
-# the feature with no judgement at all -- the runtime's answer for "this feature is broken this
+# `plugin.json`, never a second time here; this reads it. A declaration that cannot be read leaves
+# the plugin with no judgement at all -- the runtime's answer for "this plugin is broken this
 # pass", the same as an exception inside `offer`.
 
 _HERE = Path(__file__).resolve().parent
-DECLARATION = _HERE / 'feature.json'
+DECLARATION = _HERE / 'plugin.json'
 
 _DECL = None
 _DECL_ERROR = None
 
 
 def declaration() -> dict | None:
-    """This feature's declaration, read once per process. `None` when it cannot be read."""
+    """This plugin's declaration, read once per process. `None` when it cannot be read."""
     global _DECL, _DECL_ERROR
     if _DECL is None and _DECL_ERROR is None:
         try:
             loaded = json.loads(DECLARATION.read_text(encoding='utf-8'))
             _DECL = loaded if isinstance(loaded, dict) else None
             if _DECL is None:
-                _DECL_ERROR = 'feature.json is not an object'
+                _DECL_ERROR = 'plugin.json is not an object'
         except (OSError, ValueError) as e:
             _DECL_ERROR = str(e)
     return _DECL
@@ -88,14 +88,14 @@ PROSE = {
 }
 
 
-# ── the tool this feature measures with ──────────────────────────────────────
+# ── the tool this plugin measures with ──────────────────────────────────────
 # The pool's number is computed by the tool that owns the pool, so this asks it -- a child process,
 # which is why it is asked LAST and only when this line really carries that line (see `offer`).
-# Which file is asked follows the tree's one toolpath rule: the env override first, then the shipped
-# sibling (`<tree>/tools/issue/issue_manager.py`, three levels up from this folder).
+# Which file is asked follows the tree's one toolpath rule: the env override first, then the one this
+# checkout ships (`<tree>/tools/issue/issue_manager.py`, one level up from this plugin's folder).
 
 ISSUE_TOOL_ENV = 'DSH_CONDUCT_ISSUE_MANAGE'
-_SHIPPED_ISSUE = _HERE.parents[2] / 'issue' / 'issue_manager.py'
+_SHIPPED_ISSUE = _HERE.parents[1] / 'tools' / 'issue' / 'issue_manager.py'
 
 #: The one word `pf issue weight` answers with: the verb that prints the pool's weighted sum.
 WEIGHT_VERB = 'weight'
@@ -194,13 +194,13 @@ def _wired(metric: dict, values: dict, lines: dict):
 
 
 def offer(ctx):
-    """The insertion this feature wants now, or `None` (the common case).
+    """The insertion this plugin wants now, or `None` (the common case).
 
-    `None` covers every way the feature stays shut: no number for a metric, no line on this line, a
-    number under its line, a line that is not about code, a feature that was turned off, and a metric
+    `None` covers every way the plugin stays shut: no number for a metric, no line on this line, a
+    number under its line, a line that is not about code, a plugin that was turned off, and a metric
     that ALREADY has a node open on the graph -- one metric, one live node at a time.
 
-    The children are asked late on purpose: a line that carries no line at all, or a feature that was
+    The children are asked late on purpose: a line that carries no line at all, or a plugin that was
     turned off, does not start the issue tool.
     """
     decl = declaration()
@@ -321,7 +321,7 @@ def spec(hit: dict, spec_path: str) -> str:
     """
     return (
         '# Maintenance node (generated by the tool)\n'
-        'This node\'s spec is generated by a conduct feature and copied verbatim; it says **why this '
+        'This node\'s spec is generated by a conduct plugin and copied verbatim; it says **why this '
         'node was inserted**, **the scope of this one pass**, **how to do it**, and **the completion '
         'rule fixed from the start**.\n'
         '\n'
@@ -333,14 +333,14 @@ def spec(hit: dict, spec_path: str) -> str:
         f'- the line in force for this close: **{_shown(hit["at"], hit["unit"])}** '
         f'(the `{hit["line"]}` knob; it may be stated on the line, the project, the machine or a '
         f'node, and the value the close read is the one that counts)\n'
-        '- this feature is project-level: maintenance debt belongs to no line and has no edge in '
+        '- this plugin is project-level: maintenance debt belongs to no line and has no edge in '
         'the graph, so the ranking always pushes it to the bottom; the close therefore inserts it '
         'against the line in force for that close.\n'
         '\n'
         '## Scope\n'
         '\n'
         '- **this pass does one thing only**: pull this one metric back under the line. No adding '
-        'features on the side, no refactoring on the side, no cleanup unrelated to this metric.\n'
+        'plugins on the side, no refactoring on the side, no cleanup unrelated to this metric.\n'
         '- another metric crossing its line, or other work in the graph being more urgent, is '
         'outside this node\'s scope -- whoever crosses comes in for a pass of their own.\n'
         '- the size of the change follows the criterion: keep going while it fails, stop when it '
@@ -349,7 +349,7 @@ def spec(hit: dict, spec_path: str) -> str:
         '## How to do it\n'
         '\n'
         f'- `method: {hit["method"]}` (how to run it: `~/.agents/skills/{hit["method"]}/SKILL.md`; '
-        'that card declares who runs it, and this spec only points at it)\n'
+        'that skill declares who runs it, and this spec only points at it)\n'
         '\n'
         '## Completion rule (mechanically judgeable)\n'
         '\n'

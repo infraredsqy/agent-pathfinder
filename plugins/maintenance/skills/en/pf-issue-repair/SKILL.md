@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # pf-issue-repair
 
-> Feature I bind: `maintenance` — this card is installed and removed with that feature; the feature not installed, this card is not here
+> Plugin I bind: `maintenance` — this skill is installed and removed with that plugin; the plugin not installed, this skill is not here
 > Who runs me: the conductor — a pipeline node's conductor, or the user's own session
 > What I am for: repair the pool's repairable entries back under the line (one metric / one batch, with the scope set by whatever called you in)
 > Do I dispatch subagents: yes, one layer (Fix / Review) and no more. An executor dispatched here reads this, stops and reports back — it does not work from it
