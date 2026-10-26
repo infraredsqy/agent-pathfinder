@@ -119,7 +119,10 @@ if (-not $Uninstall) {
 # language it came from. A method no language ships at all is said missing for the same reason: the
 # run may not report success while a node's method has nothing to read. Removing a feature folder is
 # how its card goes away: the link is dead from that moment on, and the next run of this script takes
-# the dead link off -- that is all "installed and removed with it" means.
+# the dead link off -- that is all "installed and removed with it" means. Which links are this step's
+# to reconcile is answered by the link's own shape (`Test-FeatureCard`), never by where the checkout
+# sits at the moment: a repository that moves keeps its card links attributable, and a repair then
+# re-points them at the new place instead of leaving them dead behind it.
 $featuresRoot = Join-Path $repo 'tools\conduct\features'
 
 function Get-CardFolders([string]$featureDir) {
@@ -156,9 +159,24 @@ function Get-DeclaredMethods([string]$featureDir) {
     return $found
 }
 
+function Test-FeatureCard([string]$target) {
+    # Is this link pointing at a feature's card -- `<checkout>\tools\conduct\features\<name>\cards\
+    # <lang>\<method>`? The shape is the signature, the same way `Test-PfBin` recognizes a `tools\bin`
+    # by its own. Nothing else makes a link of that shape, and one method name has exactly one card, so
+    # the card links in the skills tree are this script's to keep in shape -- and recognizing them by
+    # shape is what keeps them attributable once the repository has moved, where asking for this
+    # checkout's own path would leave every one of them dead and nameless.
+    if (-not $target) { return $false }
+    $parts = @($target.TrimEnd('\') -split '\\')
+    if ($parts.Count -lt 7) { return $false }
+    $tail = $parts[($parts.Count - 7)..($parts.Count - 1)]
+    return ($tail[0] -eq 'tools') -and ($tail[1] -eq 'conduct') -and ($tail[2] -eq 'features') -and ($tail[4] -eq 'cards')
+}
+
 function Test-UnderFeatures([string]$target) {
-    # A link this checkout made into a feature folder -- the only links this step reconciles. A
-    # junction to another checkout's features is that checkout's business.
+    # A card link pointing into THIS checkout's features tree: what `-Uninstall` takes off, because
+    # uninstalling one checkout is not the moment to clear another one's links. The repair does not ask
+    # this -- it reconciles every card link there, whoever made it (see `Test-FeatureCard`).
     if (-not $target) { return $false }
     $root = $featuresRoot.TrimEnd('\') + '\'
     return $target.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)
@@ -211,8 +229,9 @@ if (Test-Path -LiteralPath $skillsRoot) {
     foreach ($link in Get-ChildItem -LiteralPath $skillsRoot -Directory -Force) {
         if (-not (Test-Reparse $link.FullName)) { continue }
         $target = (Get-Item -LiteralPath $link.FullName -Force).Target
-        if (-not (Test-UnderFeatures $target)) { continue }
+        if (-not (Test-FeatureCard $target)) { continue }
         if ($Uninstall) {
+            if (-not (Test-UnderFeatures $target)) { continue }
             cmd /c rmdir "$($link.FullName)" | Out-Null
             Say 'removed' $link.Name
         } elseif (-not $wanted.ContainsKey($link.Name.ToLowerInvariant())) {
@@ -296,11 +315,19 @@ $verdict = 0
 Write-Host ''
 Say 'note' "skill language: $Lang"
 Say 'note' ("pf skills visible here: " + (@(Get-ChildItem -LiteralPath $skillsRoot -Directory | Where-Object {
-    $_.Name -like 'pf-*' -and -not (Test-UnderFeatures (Get-Item -LiteralPath $_.FullName -Force).Target) }).Count))
+    $_.Name -like 'pf-*' -and -not (Test-FeatureCard (Get-Item -LiteralPath $_.FullName -Force).Target) }).Count))
 $cardLinks = @(Get-ChildItem -LiteralPath $skillsRoot -Directory -Force -ErrorAction SilentlyContinue | Where-Object {
-    (Test-Reparse $_.FullName) -and (Test-Path -LiteralPath (Join-Path $_.FullName 'SKILL.md')) -and
-    (Test-UnderFeatures (Get-Item -LiteralPath $_.FullName -Force).Target) })
-Say 'note' ("feature cards visible here: " + $cardLinks.Count)
+    (Test-Reparse $_.FullName) -and (Test-FeatureCard (Get-Item -LiteralPath $_.FullName -Force).Target) })
+$readableCards = @($cardLinks | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'SKILL.md') })
+Say 'note' ("feature cards visible here: " + $readableCards.Count)
+if ($readableCards.Count -lt $cardLinks.Count) {
+    # A link the repair left in place with nothing behind it: the method's folder is there and its
+    # `SKILL.md` is not. That is what a session would land on, and the doctor says the same thing
+    # from the declaration's side, so the count alone is not allowed to stand for "all good".
+    $empty = @($cardLinks | Where-Object {
+        -not (Test-Path -LiteralPath (Join-Path $_.FullName 'SKILL.md')) })
+    Say 'warning' ("a card link with nothing to read behind it: " + ($empty.Name -join ', '))
+}
 if (Test-Path -LiteralPath $sharedPf) { Say 'note' 'shared/pf is in place' } else { Say 'warning' 'shared/pf is not in place yet (its own section above)' }
 if (-not $Uninstall) {
     Write-Host ''
