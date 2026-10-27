@@ -11,7 +11,7 @@ is the core's).
 
 What this file pins, in the order the criteria are stated:
 
-  * the installed tree validates, and the shipped folder is inside the closed sets;
+  * the installed tree validates, and the shipped folders are inside the closed sets;
   * a declaration naming a timing or a knob kind the core does not know is a *problem*, and the
     sentence names the plugin (which is the half a human acts on);
   * two plugins may not claim one name (a knob, a reading, a dedupe tag) -- and they may share a
@@ -23,7 +23,7 @@ What this file pins, in the order the criteria are stated:
   * and the pipeline's route never asks any of it: the two callers are this suite and `pf doctor`.
 
 Every case builds its own plugins directory (`PF_PLUGINS_DIR`), so nothing here depends on the
-folders this checkout ships; a case whose subject IS the shipped folder skips itself when it is gone.
+folders this checkout ships; a case whose subject IS a shipped folder skips itself when it is gone.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import Base, pipeline  # noqa: E402
+from cases_maintenance import POOL, TICKET  # noqa: E402
 from harness import (CONDUCT_DIR, plugins_dir, requires_plugin, shipped_sources,  # noqa: E402
                      write_skill, write_plugin)
 
@@ -113,12 +114,15 @@ class TestTheValidator(Base):
         """
         self.assertEqual([], pipeline.registry().verify())
 
-    @requires_plugin('maintenance')
+    @requires_plugin(TICKET.plugin, POOL.plugin)
     def test_the_shipped_declaration_sits_in_the_closed_sets(self):
-        """The shipped declaration is inside the tables the core serves, and its methods have skills.
+        """The shipped declarations are inside the tables the core serves, and their methods have
+        skills.
 
         Read off the registry itself, not restated here: a declaration that drifted out of the three
-        cells would be a plugin the runtime never asks, and the validator is what says so.
+        cells would be a plugin the runtime never asks, and the validator is what says so. Both
+        shipped folders are asked for, because this case's subject is the tree as it ships -- one
+        folder gone is a different (supported) state, and the cases that produce it say so themselves.
         """
         registry = pipeline.registry()
         declared = {(plugin['decl']['timing'], plugin['decl']['action'])

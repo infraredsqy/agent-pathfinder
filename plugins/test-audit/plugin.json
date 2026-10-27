@@ -1,0 +1,32 @@
+{
+  "name": "test-audit",
+  "summary": "a crossed test-suite time line inserts a node into the graph",
+  "enable_knob": "test_audit",
+  "timing": "close",
+  "action": "insert",
+  "knobs": {
+    "test_audit": {
+      "kind": "switch",
+      "default": "on",
+      "summary": "whether a crossed test-suite time line inserts a node at the close"
+    },
+    "test_seconds_limit": {
+      "kind": "number",
+      "summary": "the project test suite's full wall clock (seconds) the next close must read below"
+    }
+  },
+  "readings": {
+    "test_seconds": {
+      "source": "ticket",
+      "when_knob": "test_seconds_limit",
+      "ask": "the measured wall-clock seconds of a full verification (run the command set the project docs recognize; estimating is not allowed)"
+    }
+  },
+  "metrics": {
+    "test_seconds": {
+      "line": "test_seconds_limit",
+      "tag": "test-audit:test_seconds",
+      "method": "pf-test-audit"
+    }
+  }
+}

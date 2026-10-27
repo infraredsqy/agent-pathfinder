@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import NODE, NODE2, NODE3, Base, pipeline, skill_of  # noqa: E402
+from cases_maintenance import POOL, TICKET  # noqa: E402
 from harness import (CONDUCT_DIR, Closer, Driver, WorkerSession,  # noqa: E402
                      _dag_hook, requires_plugin, stop_after)
 
@@ -673,38 +674,55 @@ class TestShelvedPolicy(Base):
         self.assertIn('stop', bad_value.stderr)
         self.assertNotIn('policies', sb.cycle(), 'a refused write still wrote something')
 
-    @requires_plugin('maintenance')
-    def test_a_feature_knob_is_validated_like_any_other(self):
-        """A knob a plugin declares is a first-class policy key: it is refused for a value its kind
-        cannot be, and a line of 0 is refused too (a 0 line fails every reading).
+    def a_refused_line(self, line):
+        """A plugin's `number` knob is refused for a value its kind cannot be, and a line of 0 is
+        refused too (a 0 line fails every reading).
 
-        The key arrives through the registry, so this skips when the folder that declares it is not
-        installed -- deleting a plugin is a supported state, and the core's own keys above still
-        cover the validation path without it.
+        The key arrives through the registry, so the case that drives it skips when the folder
+        declaring it is not installed -- deleting a plugin is a supported state, and the core's own
+        keys above still cover the validation path without it.
         """
         sb = self.pair()
-        bad_number = sb.set_policy('cyc', 'test_seconds_limit', 'soon', check=False)
+        bad_number = sb.set_policy('cyc', line, 'soon', check=False)
         self.assertNotEqual(bad_number.returncode, 0)
-        zero = sb.set_policy('cyc', 'test_seconds_limit', '0', check=False)
+        zero = sb.set_policy('cyc', line, '0', check=False)
         self.assertNotEqual(zero.returncode, 0, 'a line of 0 fails every reading')
         self.assertNotIn('policies', sb.cycle(), 'a refused write still wrote something')
 
-    @requires_plugin('maintenance')
-    def test_a_numeric_policy_lands_as_a_number_and_off_clears_it(self):
+    @requires_plugin(TICKET.plugin)
+    def test_a_feature_knob_is_validated_like_any_other(self):
+        """`plugins/test-audit`'s line is a first-class policy key."""
+        self.a_refused_line(TICKET.line)
+
+    @requires_plugin(POOL.plugin)
+    def test_the_other_feature_knob_is_validated_the_same_way(self):
+        """`plugins/issue`'s line is one too: the core reads both out of the declaration, so neither
+        is a special case."""
+        self.a_refused_line(POOL.line)
+
+    def a_numeric_policy_lands(self, line):
         """A plugin's numeric knob (the kind `number`): a positive number lands as the number itself,
         and `off` drops the entry."""
         sb = self.pair()
-        proc = sb.set_policy('cyc', 'test_seconds_limit', '15', cli=True)
+        proc = sb.set_policy('cyc', line, '15', cli=True)
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(sb.cycle()['policies']['test_seconds_limit'], 15)
-        self.assertIn('test_seconds_limit=15', proc.stdout)
+        self.assertEqual(sb.cycle()['policies'][line], 15)
+        self.assertIn(f'{line}=15', proc.stdout)
 
-        cleared = sb.set_policy('cyc', 'test_seconds_limit', 'off', cli=True)
+        cleared = sb.set_policy('cyc', line, 'off', cli=True)
 
         self.assertEqual(cleared.returncode, 0, cleared.stderr)
-        self.assertNotIn('test_seconds_limit', sb.cycle()['policies'])
-        self.assertNotIn('test_seconds_limit', cleared.stdout)
+        self.assertNotIn(line, sb.cycle()['policies'])
+        self.assertNotIn(line, cleared.stdout)
+
+    @requires_plugin(TICKET.plugin)
+    def test_a_numeric_policy_lands_as_a_number_and_off_clears_it(self):
+        self.a_numeric_policy_lands(TICKET.line)
+
+    @requires_plugin(POOL.plugin)
+    def test_the_other_numeric_policy_lands_and_clears_the_same_way(self):
+        self.a_numeric_policy_lands(POOL.line)
 
     def test_set_policy_prints_the_effective_set(self):
         """Write one, and what comes back is the whole **effective** policy set (a human need not
@@ -1027,7 +1045,7 @@ class TestTheCloseReadsTheGraphOnce(Base):
 #  the closing decision: one entry, whatever the line holds
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@requires_plugin('maintenance')
+@requires_plugin(TICKET.plugin, POOL.plugin)
 class TestTheCloseHasOneEntry(Base):
     """The judge that ends a node -- the stop rule, the close's commands, the stop answer, and the
     plugins' insertion -- is asked from exactly one function, for a line holding one node and for a
@@ -1038,10 +1056,10 @@ class TestTheCloseHasOneEntry(Base):
     in exactly the corners no case looks at. This is the case that looks: it drives the closes that
     between them walk every branch, and records who asked.
 
-    One of those branches is a close a plugin answers with an insertion ("several slots, the
-    maintenance node goes in"), which needs the shipped declaration; the class therefore skips when
-    that folder is not installed. The pin it carries is a code-shape one, and the shape does not
-    change with a data folder.
+    Two of those branches are closes a plugin answers with a node -- one per shipped metric -- which
+    need both declarations installed; the class therefore skips when either folder is gone, and each
+    metric's answer is walked here rather than only one of the two. The pin it carries is a
+    code-shape one, and the shape does not change with a data folder.
     """
 
     #: The machinery a close is built from: the stop rule, the mechanical close list, the stop
@@ -1132,7 +1150,7 @@ class TestTheCloseHasOneEntry(Base):
 
     def several_slot_closes(self):
         """The closes a line holding several slots can take: a refill, a slot still in flight with
-        nothing to refill with, and a close a plugin answers with an insertion."""
+        nothing to refill with, and a close each shipped plugin answers with a node."""
         def fill_one(sb):
             sb.add_node(NODE, 'UI design')
             sb.add_node(NODE2, 'the next one')
@@ -1150,21 +1168,34 @@ class TestTheCloseHasOneEntry(Base):
             sb.write_signal('cyc', NODE, 'completed', 'done')
             return {'node': NODE}
 
-        def maintenance_due(sb):
-            """The same close, and a plugin answers it with a node: the branch that is only walked
-            when the judgement hands something back."""
+        def ticket_due(sb):
+            """The same close, and the ticket's plugin answers it with a node: the branch that is
+            only walked when the judgement hands something back."""
             sb.add_node(NODE, 'UI design', tags=['coding'])
             sb.add_node(NODE2, 'the next one', tags=['coding'], deps=[NODE])
             sb.start_cycle(tags=['coding'])
             sb.set_policy('cyc', 'parallel', 2)
-            sb.set_policy('cyc', 'test_seconds_limit', 120)
+            sb.set_policy('cyc', TICKET.line, TICKET.at)
             sb.write_signal('cyc', NODE, 'completed', 'done',
-                            {'deliverable': 'x', 'reading': {'test_seconds': 200}})
+                            {'deliverable': 'x', 'reading': {TICKET.reading: TICKET.over}})
+            return {'node': NODE}
+
+        def pool_due(sb):
+            """The same branch answered by the other plugin: the pool's number is not on the note, so
+            the fixture lays it out in the store the issue tool reads instead."""
+            sb.add_node(NODE, 'UI design', tags=['coding'])
+            sb.add_node(NODE2, 'the next one', tags=['coding'], deps=[NODE])
+            sb.start_cycle(tags=['coding'])
+            sb.set_policy('cyc', 'parallel', 2)
+            sb.set_policy('cyc', POOL.line, POOL.at)
+            POOL.repay(sb, POOL.over)
+            sb.write_signal('cyc', NODE, 'completed', 'done', {'deliverable': 'x'})
             return {'node': NODE}
 
         return (('several slots, the freed slot is refilled', fill_one),
                 ('several slots, a slot still in flight', in_flight_no_fill),
-                ('several slots, the maintenance node goes in', maintenance_due))
+                ('several slots, the ticket line answers with a node', ticket_due),
+                ('several slots, the pool line answers with a node', pool_due))
 
     def test_every_close_decision_hangs_from_one_function(self):
         """One slot or several, stop or open: the close's whole judgement is asked from the one

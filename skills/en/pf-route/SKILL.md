@@ -353,12 +353,12 @@ Distil the key information into the answer; do not dump the raw JSON.
   yourself
 - **pf-conduct**: running the graph, doing the nodes. Picking a node from the graph, opening a
   cycle, one node from prepare to close; building no nodes
-- **pf-issue-scan / pf-issue-discuss**: the pool's own branch — scanning into the pool, ruling with
-  the user on external (the conventions are in [`../shared/pf/pool.md`](../shared/pf/pool.md)). The
-  skill that repairs debt is not in the skills tree: it ships with the plugin that watches that debt,
-  and `pf doctor` prints its method name. To clear one round of debt on the graph, build a node
-  carrying `method: <that method>` (see the fourth of "The four questions to ask before writing it
-  down")
+- **the pool's own branch**: scanning into the pool, ruling with the user on external (the
+  conventions are in [`../shared/pf/pool.md`](../shared/pf/pool.md)) — this branch's skills (the
+  debt-clearing one included) ship with the plugin that watches that debt: `pf doctor` prints whether
+  that plugin is installed and which name its `method:` line takes. To clear one round of debt on the
+  graph, build a node carrying `method: <that method>` (see the fourth of "The four questions to ask
+  before writing it down")
 
 When the user wants to talk a node's implementation through at length → suggest moving to
 `/pf-conduct` (at prepare it aligns the request with the code); when it is only a rough

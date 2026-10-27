@@ -1,14 +1,21 @@
-"""Running the maintenance plugin's line: the graph edit through the real processes, the walk, the form.
+"""Running a debt line: the graph edit through the real processes, the walk, the form.
 
-`TestMaintenanceCli` puts the close back on the real `dag-manage` / `state-manage` processes (the new
-node's uuid only exists in that process's stdout), `TestMaintenanceDrive` walks a whole line from the
-crossing to the far end, and `TestTheForm` pins what the line asks a worker for in its ticket (the
-declaration's `ask` text, read back through `ticket_readings`).
+`TestTicketCli` and `TestPoolCli` put the close back on the real `dag-manage` / `state-manage`
+processes (the new node's uuid only exists in that process's stdout), `TestTicketDrive` and
+`TestPoolDrive` walk a whole line from the crossing to the far end, and `TestTheForm` pins what a line
+asks a worker for in its ticket (the declaration's `ask` text, read back through `ticket_readings`).
 
-Every class here drives the shipped declaration and therefore carries
-`requires_plugin('maintenance')`: with that folder deleted the pipeline still closes and dispatches,
-and these behaviour cases skip instead of failing. What the plugin does NOT depend on -- the
-mechanism itself -- is pinned in `cases_insertion.py` and `cases_plugin.py`.
+Two classes per side, because a metric is driven through its OWN declaration: which line is
+configured, how the number is produced and what the note carries all come out of the `Debt` profile
+the case is bound to (`TICKET` / `POOL` in `cases_maintenance.py`). `TestTheForm` is one class and
+binds per case instead: the form is where the two readings differ the most (a session is asked to
+measure the ticket's, and is never asked for the pool's), so its cases say which declaration they are
+about.
+
+Every class here drives a shipped declaration and therefore carries `requires_plugin(...)`: with that
+folder deleted the pipeline still closes and dispatches, and these behaviour cases skip instead of
+failing. What the plugins do NOT depend on -- the mechanism itself -- is pinned in
+`cases_insertion.py` and `cases_plugin.py`.
 
 When the insert happens, which line it happens on, and how many nodes one metric gets all live in
 `cases_maintenance.py`.
@@ -18,43 +25,42 @@ When the insert happens, which line it happens on, and how many nodes one metric
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import NODE, NODE2, Base  # noqa: E402
-from cases_maintenance import (SelfHealingWorker, TEST_LINE, coding_line,  # noqa: E402
-                               set_config)
+from cases_maintenance import (  # noqa: E402
+    POOL, TICKET, DebtWorker, coding_line, set_config)
 from harness import HANDOFF_PY, _run_proc, requires_plugin  # noqa: E402
 
-__all__ = ['TestMaintenanceCli', 'TestMaintenanceDrive', 'TestTheForm']
+__all__ = ['TestPoolCli', 'TestPoolDrive', 'TestTheForm', 'TestTicketCli', 'TestTicketDrive']
 
 
-@requires_plugin('maintenance')
-class TestMaintenanceCli(Base):
-    """The graph edit goes through **the real processes**: the uuid `dag-manage add` prints exists only in
-    its stdout.
+class CliCases:
+    """The graph edit goes through **the real processes**: the uuid `dag-manage add` prints exists only
+    in its stdout.
 
     The sandbox answers `dag-manage` calls in this one process by default (saving a process start), and
-    the cases above take that fast path; capturing a child's output is a different thing on the two
-    paths -- this one puts the whole closing pass back on the real CLI, so the new node's uuid is
-    printed by a real process and read back by `_capture`.
+    the cases in `cases_maintenance.py` take that fast path; capturing a child's output is a different
+    thing on the two paths -- this one puts the whole closing pass back on the real CLI, so the new
+    node's uuid is printed by a real process and read back by `_capture`.
 
-    It also pins the split the whole plugin is about, through the shipped surfaces: the closing call
+    It also pins the split the whole mechanism is about, through the shipped surfaces: the closing call
     inserts and **opens nothing**, and the NEXT call is the one that picks the node up.
     """
+
+    DEBT = None
 
     def test_the_insertion_opens_nothing_and_the_next_dispatch_picks_it(self):
         sb = self.make(cli=True)
         sb.add_node(NODE, 'Write code A', mode='auto', tags=['coding'])
         sb.add_node(NODE2, 'Write code B', mode='auto', tags=['coding'], deps=[NODE])
         sb.start_cycle(tags=['coding'])
-        sb.set_policy('cyc', 'test_seconds_limit', 60)
+        sb.set_policy('cyc', self.DEBT.line, self.DEBT.at)
         sb.next()                                  # the real `next` CLI pins NODE and dispatches it
-        sb.handoff('cyc', NODE, 'completed', 'done',
-                   {'deliverable': 'x', 'reading': {'test_seconds': 400}})
+        self.DEBT.report(sb, NODE, self.DEBT.over, via_handoff=True)
 
         action, proc = sb.next_cli('--after', NODE)
 
@@ -62,7 +68,7 @@ class TestMaintenanceCli(Base):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(action['action'], 'insert_node')
         nodes = sb.dag()['nodes']
-        self.assertEqual(len(nodes), 3, f'the maintenance node was not inserted: {action}')
+        self.assertEqual(len(nodes), 3, f'the debt node was not inserted: {action}')
         made = action['node_id']
         self.assertEqual(nodes[made]['dependencies'], [NODE])
         self.assertEqual(nodes[NODE2]['dependencies'], [made])
@@ -78,7 +84,7 @@ class TestMaintenanceCli(Base):
         self.assertEqual(dispatched['node_id'], made)
         self.assertEqual(sb.current_node(), made)
         # Dispatching stops at the prompt file: that is what `dispatch <cycle>` reads, and this case
-        # asserts exactly "the file is there, holding the maintenance node's invocation line". **No
+        # asserts exactly "the file is there, holding the debt node's invocation line". **No
         # `dispatch` call and no `--spawn`** -- that path works and would really open a session (the
         # dispatch-semantics layer is guarded by `TestDispatchVerb`'s fake spawner).
         self.assertTrue(Path(dispatched['prompt']).is_file())
@@ -96,10 +102,9 @@ class TestMaintenanceCli(Base):
         sb.add_node(NODE, 'Write code A', mode='auto', tags=['coding'])
         sb.add_node(NODE2, 'Write code B', mode='auto', tags=['coding'], deps=[NODE])
         sb.start_cycle(tags=['coding'])
-        sb.set_policy('cyc', 'test_seconds_limit', 60)
+        sb.set_policy('cyc', self.DEBT.line, self.DEBT.at)
         sb.next()
-        sb.write_signal('cyc', NODE, 'completed', 'done',
-                        {'deliverable': 'x', 'reading': {'test_seconds': 400}})
+        self.DEBT.report(sb, NODE, self.DEBT.over)
 
         action, proc = sb.spawn_next('--after', NODE)
 
@@ -110,37 +115,53 @@ class TestMaintenanceCli(Base):
         self.assertEqual(sb.holding_ids(), [])
 
 
-@requires_plugin('maintenance')
-class TestMaintenanceDrive(Base):
-    """A whole line walked to the end: the maintenance node is dispatched as usual, closes as usual,
-    then the line goes on to the one it deferred."""
+@requires_plugin(TICKET.plugin)
+class TestTicketCli(CliCases, Base):
+    """`plugins/test-audit`'s graph edit, through the real processes."""
+    DEBT = TICKET
+
+
+@requires_plugin(POOL.plugin)
+class TestPoolCli(CliCases, Base):
+    """`plugins/issue`'s graph edit, through the real processes."""
+    DEBT = POOL
+
+
+class DriveCases:
+    """A whole line walked to the end: the debt node is dispatched as usual, closes as usual, then the
+    line goes on to the one it deferred."""
+
+    DEBT = None
 
     def test_the_driver_walks_through_the_inserted_node_and_on_to_the_deferred_one(self):
-        """An unattended run: A reports an over-the-line reading, so the maintenance node runs before B and
+        """An unattended run: A reports an over-the-line number, so the debt node runs before B and
         then B goes on.
 
-        The maintenance node repaid that debt (the reading it reports back is under the line), so this
-        run inserts **one** node and closes -- this case pins both "what was inserted is an ordinary
-        node, dispatched as usual and closed as usual" and "once repaid, nothing more is inserted".
+        The debt node repaid that debt (the number it leaves behind is under the line), so this run
+        inserts **one** node and closes -- this case pins both "what was inserted is an ordinary node,
+        dispatched as usual and closed as usual" and "once repaid, nothing more is inserted".
         """
-        sb = coding_line(self, policies=[('test_seconds_limit', 60)], dispatch=False)
+        sb = coding_line(self, self.DEBT, dispatch=False)
+        # The debt really is over before anybody runs: the pool's lives in its store, and the
+        # ticket's is the note the worker below writes on its way in (`repay` is that metric's way of
+        # putting its number where it keeps it).
+        self.DEBT.repay(sb, self.DEBT.over)
 
-        # every session carries a reading in its note; the maintenance node reports the repaired number
-        terminal, driver = self.run_to_stop(
-            sb, worker=SelfHealingWorker(sb, {'test_seconds': 400}))
+        # every session carries this metric's number in its note; the debt node reports the repaired one
+        terminal, driver = self.run_to_stop(sb, worker=DebtWorker(sb, self.DEBT))
 
         made = [n for n, _ in driver.dispatched if n not in (NODE, NODE2)]
         self.assertEqual(len(made), 1,
-                         f'the maintenance node was never dispatched: {driver.dispatched}')
-        maintenance_node = made[0]
-        self.assertEqual(sb.path_nodes(), [NODE, maintenance_node, NODE2],
-                         'the maintenance node runs between the node it was inserted after and '
+                         f'the debt node was never dispatched: {driver.dispatched}')
+        debt_node = made[0]
+        self.assertEqual(sb.path_nodes(), [NODE, debt_node, NODE2],
+                         'the debt node runs between the node it was inserted after and '
                          'the node that was already picked')
         self.assertEqual(terminal['action'], 'stop_pipeline')
-        self.assertEqual(sb.dag()['nodes'][maintenance_node]['status'], 'completed')
+        self.assertEqual(sb.dag()['nodes'][debt_node]['status'], 'completed')
         self.assertEqual(sb.dag()['nodes'][NODE2]['status'], 'completed')
         # the inserted node is an ordinary node: it is dispatched itself and delivers its own note
-        self.assertEqual(sb.read_signal('cyc', maintenance_node)['status'], 'completed')
+        self.assertEqual(sb.read_signal('cyc', debt_node)['status'], 'completed')
 
     def test_a_plain_run_never_produces_an_insertion_action(self):
         """With no threshold, no insertion ever appears on the line: this channel is additive, and
@@ -154,12 +175,11 @@ class TestMaintenanceDrive(Base):
         self.assertEqual(len(sb.dag()['nodes']), 2)
 
     def test_the_closing_call_keeps_the_worker_out_of_the_graph_edit(self):
-        """The closing call hands back an insertion and no commands the caller could run again
-        (invariant 6): the graph edit is the tool's business."""
-        sb = coding_line(self, policies=[('test_seconds_limit', 60)], dispatch=False)
+        """The closing call hands back an insertion and no commands the caller could run again: the
+        graph edit is the tool's business."""
+        sb = coding_line(self, self.DEBT, dispatch=False)
         sb.next()
-        sb.write_signal('cyc', NODE, 'completed', 'done',
-                        {'deliverable': 'x', 'reading': {'test_seconds': 400}})
+        self.DEBT.report(sb, NODE, self.DEBT.over)
 
         action = sb.close_round(NODE)
 
@@ -180,98 +200,128 @@ class TestMaintenanceDrive(Base):
         self.assertNotIn('opened_node', action, 'an insertion is not an open')
         self.assertEqual(sb.holding_ids(), [])
 
+
+@requires_plugin(TICKET.plugin)
+class TestTicketDrive(DriveCases, Base):
+    """`plugins/test-audit`'s line walked to the end."""
+    DEBT = TICKET
+
     def test_the_worker_can_report_a_reading_through_the_real_handoff(self):
         """`reading` is an ordinary `outputs` key on the note: `handoff.py` takes it verbatim.
 
-        The close reads only the ones it recognizes (`test_seconds`); the pool slot is computed by the
-        issue tool even when it is written on the note.
+        This is the ticket's metric from end to end -- the session measures, writes what it measured,
+        and the close reads it back -- and it is also where the note's own slot is pinned: the number
+        arrives written by `handoff.py` itself, not by anything the pipeline does.
         """
         sb = self.make()
         sb.add_node(NODE, 'Write code A', mode='auto', tags=['coding'])
         sb.add_node(NODE2, 'Write code B', mode='auto', tags=['coding'], deps=[NODE])
         sb.start_cycle(tags=['coding'])
-        sb.set_policy('cyc', 'test_seconds_limit', 60)
+        sb.set_policy('cyc', TICKET.line, TICKET.at)
         sb.next()
         sb.handoff('cyc', NODE, 'completed', 'done',
-                   {'deliverable': 'x', 'reading': {'test_seconds': 400, 'issue_pool_weight': 3}})
+                   {'deliverable': 'x',
+                    'reading': {TICKET.reading: TICKET.over, POOL.reading: 3}})
 
         ticket = sb.read_signal('cyc', NODE)
         self.assertEqual(ticket['outputs']['reading'],
-                         {'test_seconds': 400, 'issue_pool_weight': 3})
+                         {TICKET.reading: TICKET.over, POOL.reading: 3})
         inserted = sb.close_round(NODE)
         self.assertEqual(len(sb.dag()['nodes']), 3)
         made = inserted['node_id']
-        # only the metric that crossed comes in; the one that did not stays where it is
+        # only the metric that crossed comes in; the other key on the note is read by nobody
         spec = (sb.root / '.pf' / 'nodes' / made / 'spec.md').read_text(encoding='utf-8')
-        self.assertIn('test_seconds', spec)
-        self.assertIn('"reading": {"test_seconds"', spec)
-        self.assertNotIn('issue_pool_weight', (sb.dag()['nodes'][made]['title']))
+        self.assertIn(TICKET.reading, spec)
+        self.assertIn(f'"reading": {{"{TICKET.reading}"', spec)
+        self.assertNotIn(POOL.reading, sb.dag()['nodes'][made]['title'])
 
-@requires_plugin('maintenance')
+
+@requires_plugin(POOL.plugin)
+class TestPoolDrive(DriveCases, Base):
+    """`plugins/issue`'s line walked to the end."""
+    DEBT = POOL
+
+
 class TestTheForm(Base):
-    """`handoff.py --form <cycle>`: what this line wants is printed on the spot by the note's
+    """`handoff.py --form <cycle>`: what a line wants is printed on the spot by the note's
     receiver, and nothing can be written into it.
 
     The readings a form asks for are the declarations' own: which keys (`ticket_readings`, narrowed by
     each reading's `when_knob`) and which words (the declared `ask`) are merged out of the installed
     plugins, so this class is the other end of the declaration from `cases_plugin.py`'s registry
     cases.
+
+    Which cases are about which declaration is said one by one: the form is where the two metrics
+    differ the most. Only a reading a session can MEASURE becomes a ticket slot, so the ticket's line
+    fills one and the pool's never does -- whatever its own line is set to.
     """
 
     def form(self, sb, cycle='cyc') -> str:
         return _run_proc(sb.root, [HANDOFF_PY, '--form', cycle]).stdout
 
-    def a_line(self, **policies):
-        """One coding node on a started line, with `policies` written onto the cycle."""
-        return coding_line(self, policies=policies.items(), dispatch=False, pair=False)
+    def a_line(self, *policies):
+        """One coding node on a started line, with `policies` written onto the cycle.
+
+        Each is `(knob, value)`: only a declared knob can be written, and which is declared is the
+        declaration's business, so a case names the metric's own.
+        """
+        sb = coding_line(self, TICKET, thresholds=False, dispatch=False, pair=False)
+        for key, value in policies:
+            sb.set_policy('cyc', key, value)
+        return sb
 
     def test_a_line_without_numeric_policies_asks_for_nothing(self):
-        """A project with no line configured (the `minimal` tier is one) gets a skeleton with no reading
-        slot."""
+        """A project with no line configured (the `minimal` tier is one) gets a skeleton with no
+        reading slot."""
         text = self.form(self.a_line())
 
         self.assertIn('-o \'{"deliverable"', text)
         self.assertNotIn('"reading"', text)
 
+    @requires_plugin(TICKET.plugin)
     def test_the_test_line_asks_for_the_wall_clock(self):
-        text = self.form(self.a_line(test_seconds_limit=60))
+        text = self.form(self.a_line((TICKET.line, TICKET.at)))
 
-        self.assertIn('"reading":{"test_seconds":', text)
+        self.assertIn(f'"reading":{{"{TICKET.reading}":', text)
 
+    @requires_plugin(TICKET.plugin)
     def test_a_threshold_stated_on_the_project_layer_is_asked_too(self):
-        """The form reads the whole chain, like the close does: a `test_seconds_limit` written on the
-        project layer (no line policy at all) is still a threshold this line is measured against."""
+        """The form reads the whole chain, like the close does: a threshold written on the project
+        layer (no line policy at all) is still a threshold this line is measured against."""
         sb = self.a_line()                     # no cycle policy whatsoever
-        set_config(sb, TEST_LINE, 60)
+        set_config(sb, TICKET.line, TICKET.at)
 
         text = self.form(sb)
 
-        self.assertIn('"reading":{"test_seconds":', text)
+        self.assertIn(f'"reading":{{"{TICKET.reading}":', text)
 
+    @requires_plugin(TICKET.plugin)
     def test_a_threshold_on_the_nodes_own_layer_is_asked_when_the_node_is_named(self):
         """The form resolves with the same context the close judges with: a threshold written on the
         node about to be settled is in force there, so naming that node asks for the reading. With no
         node named the answer stays the chain's own (this line and wider), exactly as before."""
         sb = self.a_line()                     # no cycle policy, no project threshold
-        set_config(sb, TEST_LINE, 60, '--node', NODE)
+        set_config(sb, TICKET.line, TICKET.at, '--node', NODE)
 
         asked = _run_proc(sb.root, [HANDOFF_PY, '--form', 'cyc', NODE]).stdout
         unnamed = self.form(sb)
 
-        self.assertIn('"reading":{"test_seconds":', asked)
+        self.assertIn(f'"reading":{{"{TICKET.reading}":', asked)
         self.assertNotIn('"reading"', unnamed,
                          'a form that names no node claimed a layer a node states')
 
+    @requires_plugin(POOL.plugin)
     def test_the_pool_line_never_becomes_a_ticket_slot(self):
-        """The pool slot is computed by the issue tool: this line configured it, yet the key still does not
-        appear on the form."""
-        text = self.form(self.a_line(issue_pool_weight_limit=8))
+        """The pool slot is computed by the issue tool: this line configured it, yet the key still does
+        not appear on the form."""
+        text = self.form(self.a_line((POOL.line, POOL.at)))
 
-        self.assertNotIn('issue_pool_weight', text)
+        self.assertNotIn(POOL.reading, text)
         self.assertNotIn('"reading"', text)
 
+    @requires_plugin(TICKET.plugin)
     def test_the_form_writes_nothing(self):
-        sb = self.a_line(test_seconds_limit=60)
+        sb = self.a_line((TICKET.line, TICKET.at))
         before = (sb.root / '.pf' / 'state.json').read_text(encoding='utf-8')
 
         self.form(sb)
@@ -279,4 +329,3 @@ class TestTheForm(Base):
         self.assertEqual((sb.root / '.pf' / 'state.json').read_text(encoding='utf-8'), before)
         signals = (sb.root / '.pf' / 'signals')
         self.assertEqual(sorted(signals.rglob('*.json')) if signals.exists() else [], [])
-

@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # pf-test-audit
 
-> Plugin I bind: `maintenance` — this skill is installed and removed with that plugin; the plugin not installed, this skill is not here
+> Plugin I bind: `test-audit` — this skill is installed and removed with that plugin; the plugin not installed, this skill is not here
 > Who runs me: the user (`/pf-test-audit`, type it and it runs itself to the end) / the conductor (named by a node spec's `method: ` line — that is how the maintenance channel's node comes about)
 > What I am for: take the test suite once — delete what verifies nothing real, move out or split what slows the fast lane, and build a tier yourself when the split is missing
 > Do I dispatch subagents: yes, one layer (scan / removal) — an executor dispatched here reads this and stops to report back

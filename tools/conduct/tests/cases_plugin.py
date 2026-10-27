@@ -54,6 +54,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import Base, NODE, NODE2, pipeline, normalise  # noqa: E402
+from cases_maintenance import POOL, TICKET  # noqa: E402
 from harness import (HANDOFF_PY, STATE_MANAGE, TOOLS_DIR, _run_proc, plugins_dir,  # noqa: E402
                      patched, requires_plugin, shipped_sources, write_plugin, write_skill)
 
@@ -362,61 +363,48 @@ class FeatureBase(Base):
 class TestTheRegistry(FeatureBase):
     """What is installed, and the one table every reader is handed."""
 
-    @requires_plugin('maintenance')
-    def test_the_installed_feature_declares_every_name_the_outside_uses(self):
-        """One folder declares the shipped plugin: its knobs, its readings, its dedupe tags and its
-        method names -- and the core reads them all from there."""
+    @requires_plugin(TICKET.plugin, POOL.plugin)
+    def test_the_installed_features_declare_every_name_the_outside_uses(self):
+        """The two shipped folders declare every name the outside uses -- the switch and the line, the
+        reading and where its number comes from, the dedupe tag and the method -- and the core reads
+        them all from there.
+
+        One pass per metric: each profile (`TICKET` / `POOL`) states the names its own declaration
+        owns, so both legs are asserted the same way and a rename inside one folder is one edit. What
+        the two legs are NOT allowed to share is where the number comes from -- a note the session
+        writes, or the tool the pool belongs to -- which is exactly what the reading cells say.
+        """
         registry = pipeline.registry()
-        self.assertIn('maintenance', [plugin['name'] for plugin in registry.load_all()])
-        self.assertEqual([], registry.validate(), 'the shipped declaration does not validate')
+        installed = [plugin['name'] for plugin in registry.load_all()]
+        for debt in (TICKET, POOL):
+            self.assertIn(debt.plugin, installed, 'a shipped folder is not installed')
+        self.assertEqual([], registry.validate(), 'a shipped declaration does not validate')
 
         knobs = registry.knob_specs()
-        self.assertEqual(knobs['test_seconds_limit']['kind'], 'number')
-        self.assertEqual(knobs['issue_pool_weight_limit']['kind'], 'number')
-        self.assertEqual(knobs['maintenance']['kind'], 'switch')
-        self.assertEqual(knobs['maintenance']['default'], 'on')
+        for debt in (TICKET, POOL):
+            self.assertEqual(knobs[debt.switch]['kind'], 'switch')
+            self.assertEqual(knobs[debt.switch]['default'], 'on')
+            self.assertEqual(knobs[debt.line]['kind'], 'number')
 
-        self.assertEqual(registry.dedupe_tags(),
-                         ['maint:test_seconds', 'maint:issue_pool_weight'])
-        self.assertEqual(registry.methods(), ['pf-test-audit', 'pf-issue-repair'])
+        self.assertEqual(sorted(debt.tag for debt in (TICKET, POOL)),
+                         sorted(registry.dedupe_tags()))
+        self.assertEqual(sorted(debt.method for debt in (TICKET, POOL)),
+                         sorted(registry.methods()))
 
         readings = {reading['key']: reading for reading in registry.readings()}
-        self.assertEqual(readings['test_seconds']['source'], 'ticket')
-        self.assertEqual(readings['test_seconds']['when_knob'], 'test_seconds_limit')
-        self.assertTrue(readings['test_seconds']['ask'],
-                        'the form has to be able to ask the reading in words')
-        self.assertEqual(readings['issue_pool_weight']['source'], 'pool')
+        for debt in (TICKET, POOL):
+            reading = readings[debt.reading]
+            self.assertEqual(debt.source, reading['source'],
+                             f'{debt.plugin}: the reading draws on another source than its own')
+            self.assertEqual(debt.when_knob, reading['when_knob'])
+            self.assertEqual(bool(debt.when_knob), bool(reading['ask']),
+                             'only a number a session reports is asked for on the form')
+
         # the merged table is what every door reads the same names from
-        self.assertIn('test_seconds_limit', pipeline.knob_specs())
+        for debt in (TICKET, POOL):
+            self.assertIn(debt.line, pipeline.knob_specs())
 
-    @requires_plugin('maintenance')
-    def test_the_core_names_no_installed_feature(self):
-        """The shipped core spells none of the plugin's names: not a knob, not a reading, not a
-        dedupe tag, not a method, not a command word, not the plugin's own name.
-
-        The names are read off the declaration, never restated here: a rename inside the folder is a
-        folder-local edit, and this guard follows it. The scan is the tree's own list of what ships
-        (`shipped_sources`, tests and `plugins/` excluded).
-        """
-        decl = (json.loads((pipeline.registry().plugins_dir() / 'maintenance' /
-                            'plugin.json').read_text(encoding='utf-8')))
-        names = {'maintenance'}
-        names |= set(decl.get('knobs') or {})
-        names |= set(decl.get('readings') or {})
-        names |= set(decl.get('commands') or {})
-        for metric in (decl.get('metrics') or {}).values():
-            if isinstance(metric, dict):
-                names |= {metric.get('tag'), metric.get('method')}
-        names.discard(None)
-
-        hits = []
-        for path in shipped_sources():
-            text = path.read_text(encoding='utf-8')
-            hits.extend(f'{path.relative_to(TOOLS_DIR)}: {name}'
-                        for name in sorted(names) if name in text)
-        self.assertEqual([], hits, f'the core names a plugin: {hits}')
-
-    @requires_plugin('maintenance')
+    @requires_plugin(TICKET.plugin, POOL.plugin)
     def test_the_cells_and_kinds_are_the_ones_the_core_knows(self):
         """The vocabulary is closed, and every installed declaration sits in a cell it serves.
 

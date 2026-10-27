@@ -1,8 +1,7 @@
 # The pool (the issue store)
 
-> The skills on the pool's own branch share this one: scanning, ruling with the user, and the
-> debt-clearing skill that ships with a plugin and leaves with it. For command detail go by
-> `--help`; this writes the conventions only.
+> The skills on the pool's own branch share this one: scanning, ruling with the user, and
+> clearing the debt. For command detail go by `--help`; this writes the conventions only.
 
 The pool lives in the project's `.pf/issues/` and is one unified to-do list. `source` only says
 how the entry came about: `scan` (scanned into the pool), `manual` (written down by the user in

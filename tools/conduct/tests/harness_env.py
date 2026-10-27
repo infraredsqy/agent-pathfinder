@@ -6,9 +6,9 @@ _decode/_child_env, and the pieces the `cases_*` files share instead of each wri
 `init_markers` (what `init` puts in a `.pf/`), `run_argv` and `git` (one child process, one identity),
 `patched` (one place a global name is swapped), `spawn_dry_run` (the one place a session start is
 turned into a drill), `shipped_sources` (the one list of the shipped tree), and the plugins
-fixture -- `PLUGINS_DIR` / `MAINTENANCE_PLUGIN`, `requires_plugin` (the skip a case whose subject
-is a shipped declaration carries), `plugins_dir` (the `PF_PLUGINS_DIR` switch, for one block) and
-`write_plugin` (one folder, hand-written).
+fixture -- `PLUGINS_DIR`, `requires_plugin` (the skip a case whose subject is a shipped declaration
+carries), `plugins_dir` (the `PF_PLUGINS_DIR` switch, for one block) and `write_plugin` (one folder,
+hand-written).
 """
 
 from __future__ import annotations
@@ -24,7 +24,6 @@ from pathlib import Path
 
 __all__ = [
     'CONDUCT_DIR', 'DAG_MANAGE', 'PLUGINS_DIR', 'GIT', 'INIT_GITATTRIBUTES', 'INIT_GITIGNORE',
-    'MAINTENANCE_PLUGIN',
     'PIPELINE_PATH', 'HANDOFF_PY', 'HERE', 'SIGNAL_PY', 'SPAWN_DRY_RUN', 'STATE_MANAGE',
     'TERMINAL_ACTIONS', 'TOOLS_DIR',
     '_child_env', '_decode', '_fresh_module', '_run_command', 'chdir', 'plugins_dir', 'git',
@@ -43,9 +42,10 @@ HANDOFF_PY = CONDUCT_DIR / 'handoff.py'
 #: The shipped plugins directory: one folder per plugin, and the folder is the plugin's identity.
 #: A case that needs a declaration points `PF_PLUGINS_DIR` elsewhere (`plugins_dir`) instead of
 #: reading this one; a case whose SUBJECT is the shipped plugin skips itself when it is not installed
-#: (`requires_plugin`), because deleting the folder is a supported project state.
+#: (`requires_plugin`), because deleting the folder is a supported project state. No folder is named
+#: here: which plugins ship is the tree's own answer, read off the directory, and a constant naming
+#: one of them would be this file carrying a name the declarations own.
 PLUGINS_DIR = TOOLS_DIR.parent / 'plugins'
-MAINTENANCE_PLUGIN = PLUGINS_DIR / 'maintenance'
 # `dag-manage.py` is NOT part of the conduct tool and is never edited by a conduct change, so it
 # is resolved: next to us in the shipped tree, else the machine's installed copy.
 #
@@ -291,22 +291,29 @@ def spawn_dry_run():
 PLUGINS_ENV = 'PF_PLUGINS_DIR'
 
 
-def requires_plugin(name: str = 'maintenance'):
+def requires_plugin(name: str, *more: str):
     """The skip a behaviour case carries when its subject is a plugin's declaration.
 
     A plugin is a folder, and deleting it is a supported state of this tree: the pipeline still
     closes and still dispatches (that is the node's completion criterion). So a case that drives THAT
     plugin must skip rather than fail when the folder is not installed -- the mechanism cases point
-    `PF_PLUGINS_DIR` at their own fixture instead and never depend on the shipped tree.
+    `PF_PLUGINS_DIR` at their own fixture instead and never depend on the shipped tree. Several names
+    mean every one of them: a case that needs both plugins installed is one case, and one decorator
+    says so (a stacked pair would leave the reason of whichever was applied last).
+
+    Which folders the tree ships is not stated here: the name is the caller's, because only the case
+    knows which declaration it drives -- a default would be this file holding a plugin's name.
 
     "Installed" is asked of the scan itself (`plugin_registry.plugins_dir()`), not of the shipped
     path: a case may hide the tree's own folder by pointing the variable elsewhere, and this skip has
     to follow that too, or the suite would only be green for one of the two ways of removing it.
     """
     import unittest
-    folder = Path(load_pipeline().registry().plugins_dir()) / name
-    return unittest.skipUnless((folder / 'plugin.json').is_file(),
-                               f'the {name!r} plugin is not installed ({folder})')
+    root = Path(load_pipeline().registry().plugins_dir())
+    missing = [want for want in (name, *more) if not (root / want / 'plugin.json').is_file()]
+    return unittest.skipIf(bool(missing), 'the plugin folder(s) '
+                          f'{", ".join(repr(want) for want in missing)} '
+                          f'{"is" if len(missing) == 1 else "are"} not installed under {root}')
 
 
 @contextlib.contextmanager

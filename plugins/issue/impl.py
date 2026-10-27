@@ -1,17 +1,23 @@
-"""The maintenance plugin's own implementation: the judgement, and the node's own text.
+"""The issue plugin's own implementation: the judgement, and the node's own text.
 
 This file is loaded **by path**, on its own, from the folder it sits in (`plugin.json` beside it is
 this plugin's declaration). It therefore imports nothing from the pipeline package: everything it
 may touch arrives in the `ctx` it is handed (`plugin_host.Context`) --
 
     ctx.knob(name)            the effective value of one knob, from the whole resolution chain
-    ctx.reading(key)          the number one declared reading answers: the ticket's, or the one a
-                              source the plugin claims computes (this plugin claims none)
+    ctx.reading(key)          the number a worker reported in the ticket's `outputs.reading.<key>`;
+                              this plugin asks it for nothing -- the pool's weight is the pool
+                              tool's own number, fetched below with `ctx.capture`
     ctx.nodes_with_tag(tag)   the ids of the still-open nodes carrying one tag
     ctx.capture(argv)         run one command, hand back its stdout
-    ctx.run(argv)             run one command
     ctx.spec_path(node_id)    where a node's own `spec.md` lands (this tree's layout, not ours)
     ctx.project / ctx.cycle / ctx.node_id / ctx.sig / ctx.dag / ctx.target
+
+**This copy is this plugin's alone.** Reading the declaration, pairing it with the prose below,
+comparing the number against the line, assembling the offer and writing the node's title and spec
+all live here, and the sibling plugin that watches the test suite carries its own copy of the same
+mechanism: nothing of this is shared between plugins or lifted into the core. The core merges the
+names and looks for clashes, and it is the core's `insertion.py` that turns the offer into a node.
 
 `offer(ctx)` is the whole of its contract with the core: it answers the insertion this plugin wants
 now (a title, tags, a text builder and the fields a reader is shown), or `None` -- the common case.
@@ -19,10 +25,11 @@ It never writes a file, never opens a session, and never raises for a missing nu
 configured no line gets `None` here, which is what keeps a close without knobs byte-for-byte what it
 was before this plugin existed.
 
-**Every number is optional, and a garbled one reads as "not known this pass".** The lines live in the
-line's own policies (`policies.<line>`), the ticket carries the wall clock, and the pool's weighted
-debt is asked of the tool that owns the pool. Reading a missing number as 0 would make a real debt
-look paid off, so it is read as absent instead.
+**The pool's weight is not a number a session reports.** It is computed by the tool that owns the
+pool, and this plugin asks that tool -- which is why the child process is started LAST, and only
+when this line really carries a line (see `offer`): a line with no line configured does not start
+it, and neither does a plugin that was turned off. A missing or garbled number reads as "not known
+this pass", never as 0 -- reading it as 0 would make a real debt look paid off.
 """
 
 from __future__ import annotations
@@ -33,10 +40,10 @@ import sys
 from pathlib import Path
 
 # ── the declaration beside this file ─────────────────────────────────────────
-# The names (which reading, which line, which tag, which method, in which order) live in
-# `plugin.json`, never a second time here; this reads it. A declaration that cannot be read leaves
-# the plugin with no judgement at all -- the runtime's answer for "this plugin is broken this
-# pass", the same as an exception inside `offer`.
+# The names (which reading, which line, which tag, which method) live in `plugin.json`, never a
+# second time here; this reads it. A declaration that cannot be read leaves the plugin with no
+# judgement at all -- the runtime's answer for "this plugin is broken this pass", the same as an
+# exception inside `offer`.
 
 _HERE = Path(__file__).resolve().parent
 DECLARATION = _HERE / 'plugin.json'
@@ -59,25 +66,17 @@ def declaration() -> dict | None:
     return _DECL
 
 
-#: What each reading measures, in the words the generated spec shows a reader. The declaration owns
-#: the mechanical half (which line, which tag, which method, in which order); this owns the prose
-#: only, and a metric the declaration names but this table does not know is simply not judged (the
-#: doctor is where a declaration that names an unknown reading is reported).
+#: What this plugin's reading measures, in the words the generated spec shows a reader. The
+#: declaration owns the mechanical half (which line, which tag, which method, and the source this
+#: reading draws on); this owns the prose only, and a metric the declaration names but this table
+#: does not know is simply not judged (the doctor is where a declaration that names an unknown
+#: reading is reported).
 #:
 #: `where` says how the number was obtained, so a node handed one knows whether to go and measure or
 #: to go and look. `subject` / `criterion` / `remedy` are the mechanical completion rule the spec
 #: carries: what is being pulled back under the line, what the next close must read, and what to run
 #: to see it.
 PROSE = {
-    'test_seconds': {
-        'unit': 's',
-        'subject': 'the project test suite\'s full wall clock (seconds)',
-        'where': 'the note\'s `outputs.reading.test_seconds` (measured by the session that ran the '
-                 'full verification)',
-        'criterion': 'the next closing note\'s `reading.test_seconds` must be **below**',
-        'remedy': 'run the full verification command the project docs settle on and **measure** it '
-                  '(never estimate), then report the measured seconds in the note',
-    },
     'issue_pool_weight': {
         'unit': '',
         'subject': 'the issue pool\'s weighted sum',
@@ -109,14 +108,14 @@ def issue_argv() -> list:
     return [sys.executable, str(tool), WEIGHT_VERB]
 
 
-# ── the reading: what the worker reported ────────────────────────────────────
+# ── the reading: the number the tool prints ──────────────────────────────────
 
 def _number(value) -> float | None:
     """One reading, or `None`.
 
     A number is a number and nothing else: a bool is not one (it is the JSON spelling of a decision,
-    not a measurement), and a string is not parsed -- guessing a number out of a worker's prose is
-    how a threshold ends up firing on the wrong evidence.
+    not a measurement), and a string is not parsed -- guessing a number out of a tool's prose is how
+    a threshold ends up firing on the wrong evidence.
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -142,13 +141,12 @@ def pool_weight(ctx) -> float | None:
         return None
 
 
-# ── the metrics: the declaration's names, this file's prose ──────────────────
+# ── the metric: the declaration's names, this file's prose ───────────────────
 
 def metrics(decl: dict) -> list:
-    """The declared metrics, merged with the prose above, in the declaration's own order.
+    """The declared metric, merged with the prose above, in the declaration's own order.
 
-    `order` is the severity order used to pick WHICH metric a node is inserted for when several
-    cross; a metric whose reading has no prose here cannot be written into a node and is left out.
+    A metric whose reading has no prose here cannot be written into a node and is left out.
     """
     readings = decl.get('readings') or {}
     declared = decl.get('metrics') or {}
@@ -160,14 +158,12 @@ def metrics(decl: dict) -> list:
         reading = readings.get(key) if isinstance(readings.get(key), dict) else {}
         out.append({**prose, **spec,
                     'reading': key,
-                    'source': reading.get('source') or 'ticket',
-                    'order': spec.get('order', 0)})
-    out.sort(key=lambda metric: (metric.get('order') or 0, metric.get('reading') or ''))
+                    'source': reading.get('source') or 'ticket'})
     return out
 
 
 def _is_coding(cycle: dict) -> bool:
-    """Only a line about code is judged: both metrics are code-branch debt."""
+    """Only a line about code is judged: this metric is code-branch debt."""
     tags = [t for t in (cycle.get('tags') or []) if isinstance(t, str)]
     return 'coding' in tags
 
@@ -197,11 +193,11 @@ def _wired(metric: dict, values: dict, lines: dict):
 def offer(ctx):
     """The insertion this plugin wants now, or `None` (the common case).
 
-    `None` covers every way the plugin stays shut: no number for a metric, no line on this line, a
+    `None` covers every way the plugin stays shut: no number for the metric, no line on this line, a
     number under its line, a line that is not about code, a plugin that was turned off, and a metric
     that ALREADY has a node open on the graph -- one metric, one live node at a time.
 
-    The children are asked late on purpose: a line that carries no line at all, or a plugin that was
+    The child is asked late on purpose: a line that carries no line at all, or a plugin that was
     turned off, does not start the issue tool.
     """
     decl = declaration()
@@ -227,14 +223,11 @@ def offer(ctx):
         return None
     values = {}
     for metric in declared:
-        if metric['source'] == 'ticket':
-            got = _number(ctx.reading(metric['reading']))
-            if got is not None:
-                values[metric['reading']] = got
-    if any(metric['source'] == 'pool' and metric['line'] in lines for metric in declared):
+        if metric['source'] != 'pool' or metric['line'] not in lines:
+            continue
         weight = pool_weight(ctx)
         if weight is not None:
-            values['issue_pool_weight'] = weight
+            values[metric['reading']] = weight
     if not values:
         return None
     for metric in declared:
@@ -292,21 +285,12 @@ def title(hit: dict) -> str:
 
 
 def _closing_reading(hit: dict) -> str:
-    """What the next judgement of this debt reads: the two sources are written differently, because
-    they are read differently.
-
-    The pool number is computed by the issue tool itself, and writing it in the note would be read by
-    nobody; the wall clock can only be measured by the session that ran the verification, and the
-    printed ticket form points that slot out.
-    """
-    if hit['source'] == 'pool':
-        return ('- the issue tool computes this metric itself (`pf issue weight`); the note does '
-                'not carry it:\n'
-                f'  at the next close, a number the tool computes below'
-                f' {_shown(hit["at"], hit["unit"])} counts as back under the line.\n')
-    return ('- in the note\'s `-o`, carry `"reading": {"' + hit['reading'] + '": <measured number>}`'
-            ' (the form points this slot out), so the next close can judge whether it is back '
-            'under the line.\n')
+    """What the next judgement of this debt reads: the pool number is computed by the issue tool
+    itself, and writing it in the note would be read by nobody."""
+    return ('- the issue tool computes this metric itself (`pf issue weight`); the note does '
+            'not carry it:\n'
+            f'  at the next close, a number the tool computes below'
+            f' {_shown(hit["at"], hit["unit"])} counts as back under the line.\n')
 
 
 def spec(hit: dict, spec_path: str) -> str:

@@ -9,11 +9,14 @@ and a behaviour put back the old way turns it red.
      human's whole answer at that gate; `pf dag approve` is the other hand that says the same thing.
      The guard walks the call chain from the one write site outwards and requires the two human doors
      -- and no third caller anywhere in the shipped tree.
-  2. **The core names no installed plugin.** The five name groups a declaration owns -- the plugin's
-     own name, its knob keys, its readings, its dedupe tags and its method names -- may not appear in
-     any module of this tool outside `plugins/`. They are read off the installed declarations, never
-     restated here.
-  2b. **The skills name no installed plugin either.** The same five groups may not appear in a skill
+  2. **The core names no installed plugin.** The six name groups a declaration INVENTS for itself --
+     its knob keys, its readings, its claimed source names, its command words, its dedupe tags and its
+     method names -- may not appear in any module of this tool outside `plugins/`. They are read off
+     the installed declarations, never restated here. The folder's own name is deliberately not one of
+     them: that is the identity a folder is GIVEN, not a word a declaration invents, and the core's own
+     vocabulary may overlap it -- a core file saying `issue` is talking about its own pool, and that
+     string does not mean the core knows a plugin.
+  2b. **The skills name no installed plugin either.** The same six groups may not appear in a skill
      under `skills/`: a skill bound to a plugin lives in that plugin's folder, and what a skill says
      instead is "run the command that lists what is installed".
   3. **Every self-entry has a real door.** A word a tool's own parser registers is either a word `pf`
@@ -210,20 +213,23 @@ def _called_names(expr) -> set:
 # ── 2. the core names no plugin ────────────────────────────────────────────
 
 class TestTheCoreNamesNoFeature(Base):
-    """No module of this tool outside `plugins/` spells a name an installed declaration owns.
+    """No module of this tool outside `plugins/` spells a name an installed declaration invents.
 
-    The seven groups are read off the declarations, so renaming a knob, a tag, a source name or a
+    The six groups are read off the declarations, so renaming a knob, a tag, a source name or a
     method inside a plugin folder keeps this green with no edit here -- and a core that starts
     branching on one of them turns it red. `plugins/` itself is where those names belong, so it is
     out of scope; the test suite is not shipped code and is out of scope the same way.
+
+    What a declaration does NOT invent is the name of the folder it sits in (`load_all`'s `name`): a
+    folder is given its name and a declaration merely agrees with it. So it is not one of the six, and
+    a core file that spells one of those folder names -- `issue`, the pool this tool has always
+    owned -- is not read as naming a plugin.
     """
 
     def installed_names(self) -> set:
-        """The seven name groups every installed declaration owns, as one set of strings."""
-        registry = pipeline.registry()
+        """Every name an installed declaration invents, as one set of strings."""
         names = set()
-        for plugin in registry.load_all():
-            names.add(plugin['name'])
+        for plugin in pipeline.registry().load_all():
             decl = plugin.get('decl')
             if not isinstance(decl, dict):
                 continue
@@ -241,10 +247,12 @@ class TestTheCoreNamesNoFeature(Base):
         if not names:
             self.skipTest('no plugin is installed: there is no name for the core to carry')
 
-        core = [path for path in shipped_sources() if CONDUCT_DIR in path.parents]
-        self.assertTrue(core, 'the scan found no module of this tool')
+        # every shipped module, not just the pipeline's own: a name that drifts into the graph tool
+        # or the pool tool is the same failure -- that tool would then be reading a plugin's word
+        shipped = shipped_sources()
+        self.assertTrue(shipped, 'the scan found no module of this tool')
         hits = [f'{path.relative_to(TOOLS_DIR).as_posix()}: {name}'
-                for path in core
+                for path in shipped
                 for name in sorted(names)
                 if name in path.read_text(encoding='utf-8')]
         self.assertEqual([], hits, f'the core names a plugin: {hits}')
@@ -253,25 +261,26 @@ class TestTheCoreNamesNoFeature(Base):
 # ── 2b. the skills name no plugin ──────────────────────────────────────────
 
 class TestTheSkillsNameNoFeature(Base):
-    """No skill skill under `skills/` spells a name an installed declaration owns.
+    """No skill under `skills/` spells a name an installed declaration invents.
 
-    The same seven name groups the core guard watches -- the plugin's name, its knob keys, its
-    readings, its commands, its claimed source names, its dedupe tags and its method names -- read
-    off the declarations, so a rename inside a plugin folder follows with no edit here and a skill
-    that starts carrying one turns this red. A skill may say "run the command that lists what is
-    installed"; the listing is the declarations' own words.
+    The same six name groups the core guard watches -- a declaration's knob keys, its readings, its
+    claimed source names, its commands, its dedupe tags and its method names -- read off the
+    declarations, so a rename inside a plugin folder follows with no edit here and a skill that starts
+    carrying one turns this red. A skill may say "run the command that lists what is installed"; the
+    listing is the declarations' own words.
 
     A skill bound to a plugin is out of scope by construction: it lives in that plugin's own folder
     (`plugins/<name>/skills/`), where naming the plugin it binds is the point, and where it is
     installed and removed with that plugin.
+
+    The folder name is not one of the six here either, and for the same reason the core guard gives:
+    a skill that says `issue` about the pool is talking about the tool the reader is using.
     """
 
     def outside_names(self) -> set:
-        """The seven name groups a declaration owns: name, knobs, readings, commands, sources, tags,
-        methods."""
+        """Every name a declaration invents: knobs, readings, commands, sources, tags, methods."""
         names = set()
         for plugin in pipeline.registry().load_all():
-            names.add(plugin['name'])
             decl = plugin.get('decl')
             if not isinstance(decl, dict):
                 continue

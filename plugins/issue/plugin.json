@@ -1,0 +1,30 @@
+{
+  "name": "issue",
+  "summary": "a crossed issue-pool line inserts a node into the graph",
+  "enable_knob": "issue_pool",
+  "timing": "close",
+  "action": "insert",
+  "knobs": {
+    "issue_pool": {
+      "kind": "switch",
+      "default": "on",
+      "summary": "whether a crossed issue-pool line inserts a node at the close"
+    },
+    "issue_pool_weight_limit": {
+      "kind": "number",
+      "summary": "the issue pool's weighted sum the next close must read below"
+    }
+  },
+  "readings": {
+    "issue_pool_weight": {
+      "source": "pool"
+    }
+  },
+  "metrics": {
+    "issue_pool_weight": {
+      "line": "issue_pool_weight_limit",
+      "tag": "issue:issue_pool_weight",
+      "method": "pf-issue-repair"
+    }
+  }
+}

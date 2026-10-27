@@ -536,7 +536,7 @@ The `--form` one only prints the shape and moves no state; the
 `pf handoff <cycle> <node> completed -o …` one **writes the note only** — it closes no node and
 spawns no session; the `next --after` one **closes this node**, then settles the next one and
 writes its prompt to disk (the path is given by the command itself) — when a threshold is crossed
-it answers `insert_node` instead, which only puts a node into the graph and has no prompt to write.
+it answers `insert_node` instead, which only puts nodes into the graph and has no prompt to write.
 None of the three spawns a session; for the note, see "The note and its readings".
 
 **Then commit** (the two flavours do not take the same road):
@@ -584,9 +584,9 @@ run and the words to say:
   line holds at that moment (one node by default; the nodes whose sessions already started are
   skipped), reports the line it prints to the user, and then **exits on its own**; it refuses to
   dispatch when the line is not in service, so put the line back in service before re-sending
-- `insert_node`: a node has just been put into the graph, **nothing was pinned** and there is no
+- `insert_node`: nodes have just been put into the graph, **nothing was pinned** and there is no
   prompt — commit and push as usual, then run `pf next --cycle <cycle> --spawn --json` and let the
-  picking rules dispatch it (this is where a debt node comes from, see "Debt nodes"
+  picking rules dispatch them (this is where a debt node comes from, see "Debt nodes"
   below)
 - `stop_pipeline`: say `reason` to the user as it stands (read `attention` out too when it has
   content), then stop — it does not stop this line while other nodes are still in flight, and
@@ -623,16 +623,17 @@ the node finishing and your answer coming back may be long, and by then that nod
 have settled — a session change along the way does not matter, the record is on disk.
 
 **Debt nodes**: when the close went over this line's debt threshold, the action
-`next --after` returns is `insert_node`: it carries `spec` (where the new node's own spec landed)
-and `note`, **no prompt, and nothing was pinned** — the line's holding does not move. Commit and
-push as usual, then run `pf next --cycle <cycle> --spawn --json` and let the picking rules dispatch
-it; from there it walks like any other node. It goes when it is done, and stopping to
-wait for someone's answer is not among its options. **Its spec carries a `method: ` line** (which
-method it names is the declaration's to write, and `pf doctor` prints it): when prepare reads it, run
-that skill yourself —
-batching, dispatching and settling are all in your hands, and the loop is still this flow's
-"Execute" section; the scope is set by the spec that inserted it, so do not widen it to everything
-yourself. Close out as usual when it is done, then go on to the next.
+`next --after` returns is `insert_node`: it carries the nodes it put in, each with where its own
+spec landed, plus `note` — **no prompt, and nothing was pinned**, so the line's holding does not
+move. **It can carry more than one node** (when more than one debt is over its line; see "the
+maintenance channel" in `docs/conduct-state.md`). Commit and push as usual, then run
+`pf next --cycle <cycle> --spawn --json` and let the picking rules dispatch them; from there each
+walks like any other node. They go when they are done, and stopping to wait for someone's answer is
+not among their options. **Every node's spec carries a `method: ` line** (which method it names is
+the declaration's to write, and `pf doctor` prints it): when prepare reads it, run that skill
+yourself — batching, dispatching and settling are all in your hands, and the loop is still this
+flow's "Execute" section; the scope is set by the spec that inserted it, so do not widen it to
+everything yourself. Close out as usual when it is done, then go on to the next.
 
 When the requirement cannot be met, or the spec contradicts itself: `completed` becomes `failed`;
 when the work is one you chose to stop doing, it becomes `stopped`. Either way the reason goes

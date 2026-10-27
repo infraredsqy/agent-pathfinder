@@ -4,8 +4,8 @@
 
 - conduct-state.md — where the state-and-advancing design comes from: who writes it down, how
   claiming and the status divide, the two ways in, the stopping criteria, the settings chain and the
-  plugins (the maintenance channel is one of them) (read before changing conduct's behaviour or
-  writing pf-conduct)
+  plugins (the two this checkout ships are the maintenance channel) (read before changing conduct's
+  behaviour or writing pf-conduct)
 - conduct-dsh-dispatch.md — dispatch and authentication: measured calibration, the self-signed
   cookie, failure modes and troubleshooting (read when a dispatch fails)
 - conduct-node-tags.md — node tags and splitting between cycles: the word list, the filter

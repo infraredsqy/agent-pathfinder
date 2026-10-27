@@ -6,6 +6,7 @@ disable-model-invocation: true
 
 # pf-issue-scan
 
+> Plugin I bind: `issue` — this skill is installed and removed with that plugin; the plugin not installed, this skill is not here
 > Who runs me: the user (`/pf-issue-scan`) / the conductor (named by a pipeline node spec's `method: ` line)
 > What I am for: scan the code for new debt + check whether the old debt is still there, and go into the pool only
 > Do I dispatch subagents: yes, one layer (scan); an executor reading this stops and reports back

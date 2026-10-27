@@ -6,6 +6,7 @@ disable-model-invocation: true
 
 # pf-issue-scan
 
+> 绑哪个插件：`issue` —— 这个技能随那个插件一起装、一起卸；插件不在，这个技能也不在
 > 谁跑我：用户（`/pf-issue-scan`）／指挥者（管线节点 spec 的 `method: ` 行点名）
 > 我解决什么：扫代码找新债 + 核对旧债还在不在，只入池
 > 我派不派 subagent：派，一层（scan）；执行者读到这份，停手回报
