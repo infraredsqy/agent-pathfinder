@@ -15,6 +15,11 @@
       "by": "pool_weight"
     }
   },
+  "files": [
+    "tools/issue_manager.py",
+    "tools/commands.py",
+    "tools/storage.py"
+  ],
   "knobs": {
     "issue_pool": {
       "kind": "switch",

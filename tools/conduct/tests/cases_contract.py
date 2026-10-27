@@ -665,6 +665,7 @@ def offer(ctx):
         'tags': [TAG],
         'spec_of': lambda node_id: f'# fixture\\n\\nwritten for {node_id}\\n',
         'fields': {'metric': 'fixture'},
+        'why': 'the fixture measured 42, over its line',
         'note': 'the fixture asked for this node',
     }
 '''
@@ -699,7 +700,8 @@ class TestTheInsertionActionShape(Base):
         at the top, and not inside each nested `insertions[*]`;
       * the walk: an insertion is where a `next` stops -- the pick's graph edit comes back as
         `insert_node`, the caller commits, and the next step dispatches -- so the caller always sees
-        the graph edit before the session, and one call never inserts a burst.
+        the graph edit before the session, and no single call grows the graph by a burst: one plugin
+        answers with one node, and the calls in one step are the plugins'.
     """
 
     def fixture(self, sb, timing='close'):
@@ -720,6 +722,32 @@ class TestTheInsertionActionShape(Base):
                          'the caller vocabulary and the entry table disagree')
         self.assertIn(pipeline.INSERT_ACTION, pipeline.ACTIONS)
         self.assertEqual('insert_node', pipeline.INSERT_ACTION)
+
+    def test_the_sources_reason_is_printed_as_written_and_the_landing_spot_is_the_cores(self):
+        """The two lines a reader gets beside an insertion: `why` as the source wrote it, and where
+        the node went as the core read it off the graph it had just edited.
+
+        The second used to be the source's to state, which made the renderer depend on key names no
+        contract named: a source that spelled them differently lost the line and nothing said so. The
+        core knows where it put the node, so it is the core that says it.
+        """
+        sb = self.make()
+        sb.add_node(NODE, 'Write code A', mode='auto', tags=['coding'])
+        sb.add_node(NODE2, 'Write code B', mode='auto', tags=['coding'], deps=[NODE])
+        sb.start_cycle(tags=['coding'])
+        sb.next()
+        sb.write_signal('cyc', NODE, 'completed', 'done', {'deliverable': 'x'})
+        self.fixture(sb)
+
+        planned = pipeline.plan(sb.root, 'cyc', after=NODE, self_verified=True)
+        text = pipeline.render_action(dict(planned), as_json=False, preview=True)
+
+        self.assertIn('the fixture measured 42, over its line', text,
+                      f'the source\'s own sentence is not printed as written: {text}')
+        self.assertIn(f'Write code B  ({NODE2})', text,
+                      f'the landing spot is not the core\'s reading of the graph: {text}')
+        # ... and the free-shape dict still travels untouched: it is data, not a rendering instruction
+        self.assertEqual({'metric': 'fixture'}, planned['insertions'][0]['fields'])
 
     def test_a_previewed_insertion_hands_no_runbook_to_the_caller(self):
         """`next --plan` on a close a plugin answers with an insertion: the JSON carries no
@@ -763,7 +791,8 @@ class TestTheInsertionActionShape(Base):
 
         A pick has no close commands to run with it, so the graph's own growth is the only progress
         there is -- and the walk stops there and answers `insert_node`: the caller commits and
-        pushes, and the step after it picks and dispatches. One call never inserts a burst.
+        pushes, and the step after it picks and dispatches. One plugin answers with one node, so the
+        graph never grows by a burst from it.
         """
         sb = self.make()
         sb.add_node(NODE, 'Write code A', mode='auto', tags=['coding'])

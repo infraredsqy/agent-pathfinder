@@ -21,7 +21,7 @@ mechanism: nothing of this is shared between plugins or lifted into the core. Th
 names and looks for clashes, and it is the core's `insertion.py` that turns the offer into a node.
 
 `offer(ctx)` is the whole of its contract with the core: it answers the insertion this plugin wants
-now (a title, tags, a text builder and the fields a reader is shown), or `None` -- the common case.
+now (a title, tags, a text builder and the sentence saying why), or `None` -- the common case.
 It never writes a file, never opens a session, and never raises for a missing number: a project that
 configured no line gets `None` here, which is what keeps a close without knobs byte-for-byte what it
 was before this plugin existed.
@@ -273,8 +273,7 @@ def _offer(ctx, cycle: dict, hit: dict) -> dict:
         'title': hit['title'],
         'tags': [hit['tag'], *_line_tags(cycle)],
         'spec_of': hit['spec_of'],
-        'fields': {'metric': hit['reading'], 'reading': reading, 'line': line,
-                   'deferred_node': target_id, 'deferred_title': target.get('title', '')},
+        'why': f'{hit["reading"]} = {reading} (line {line})',
         'note': note,
     }
 

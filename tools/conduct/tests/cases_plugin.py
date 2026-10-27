@@ -61,7 +61,7 @@ from harness import (HANDOFF_PY, STATE_MANAGE, TOOLS_DIR, _run_proc, plugins_dir
 #: The shipped `pf` entry: one real doctor run is the door this file checks the claimed source on.
 PF = TOOLS_DIR / 'bin' / 'pf.py'
 
-__all__ = ['TestTheRegistry', 'TestASourceAPluginClaims', 'TestTheDeletedFeatureFolder',
+__all__ = ['TestTheRegistry', 'TestASourceAPluginClaims', 'TestTheDeletedPluginFolder',
            'TestTheDispatchGate', 'TestThePickTiming', 'TestABrokenOfferIsContained',
            'TestTheOffersFields', 'TestADoorMayNotEndTheProcess']
 
@@ -183,7 +183,9 @@ def offer(ctx):
 '''
 
 #: An offer that puts the action's own cells into `fields`: `cycle` names another line, `action`
-#: another kind, `note` / `steps` replace what the close itself says. Only `metric` is its own data.
+#: another kind, `note` / `steps` replace what the close itself says, and `why` / `before_node` /
+#: `before_title` forge the two lines a reader uses to see where the node went. Only `metric` is its
+#: own data.
 RESERVED_FIELDS_IMPL = '''
 def offer(ctx):
     line = [tag for tag in ((ctx.cycle or {}).get('tags') or []) if isinstance(tag, str)]
@@ -193,6 +195,8 @@ def offer(ctx):
         'spec_of': lambda node_id: f'# fixture\\n\\nwritten for {node_id}\\n',
         'fields': {'action': 'dispatch', 'cycle': 'some-other-line',
                    'note': 'a lie about the close', 'steps': ['a lie about what this does'],
+                   'why': 'a lie about the reason', 'before_node': 'not-this-one',
+                   'before_title': 'a lie about where it went',
                    'metric': 'fixture'},
         'note': 'the fixture asked for this node',
     }
@@ -320,7 +324,7 @@ def block_decl(name='gate', knob=None, **extra):
     return decl
 
 
-class FeatureBase(Base):
+class PluginBase(Base):
     """A case's own plugins directory: `self.plugins()` makes one and points the scan at it."""
 
     def plugins(self):
@@ -360,11 +364,11 @@ class FeatureBase(Base):
         return sb
 
 
-class TestTheRegistry(FeatureBase):
+class TestTheRegistry(PluginBase):
     """What is installed, and the one table every reader is handed."""
 
     @requires_plugin(TICKET.plugin, POOL.plugin)
-    def test_the_installed_features_declare_every_name_the_outside_uses(self):
+    def test_the_installed_plugins_declare_every_name_the_outside_uses(self):
         """The two shipped folders declare every name the outside uses -- the switch and the line, the
         reading and where its number comes from, the dedupe tag and the method -- and the core reads
         them all from there.
@@ -446,7 +450,7 @@ class TestTheRegistry(FeatureBase):
         self.assertEqual([], pipeline.ticket_readings(sb.root, sb.cycle()),
                          'a reading was asked with no plugin installed to declare it')
 
-    def test_a_fake_second_feature_is_just_a_folder(self):
+    def test_a_fake_second_plugin_is_just_a_folder(self):
         """A hand-written folder is an installed plugin: its knob merges, its reading narrows by the
         knob it names, its tag and method show, and its offer is asked at its timing.
 
@@ -485,7 +489,7 @@ class TestTheRegistry(FeatureBase):
             dag=sb.dag(), target={'id': NODE2}))
         self.assertEqual(1, len(offers), offers)
 
-    def test_a_second_feature_needs_no_core_change(self):
+    def test_a_second_plugin_needs_no_core_change(self):
         """The name a declaration adds reaches the merged table while no shipped file learns it: the
         core is data-driven, and a second plugin is a folder move."""
         root = self.plugins()
@@ -579,7 +583,7 @@ class TestTheRegistry(FeatureBase):
         self.assertEqual('insert_node', action['action'], action)
         self.assertEqual(3, len(sb.dag()['nodes']), 'the close did not judge against the default')
 
-    def test_a_name_two_features_claim_is_reported(self):
+    def test_a_name_two_plugins_claim_is_reported(self):
         """Two folders declaring the same knob is a problem the doctor prints, and one cell wins at
         runtime: every door still answers one value, never a coin toss."""
         root = self.plugins()
@@ -597,7 +601,7 @@ class TestTheRegistry(FeatureBase):
         self.assertEqual(registry.knob_specs()['audit_limit']['plugin'], 'a-one',
                          'the merged cell does not follow folder order')
 
-    def test_a_command_only_feature_is_just_a_folder(self):
+    def test_a_command_only_plugin_is_just_a_folder(self):
         """The word a declaration contributes is merged for the router the way its knobs are merged for
         the chain: the folder's own words come out of `commands()`, and a folder that brings a word is
         asked at no timing of the pipeline -- only a declaration that brings none has to occupy a cell.
@@ -687,7 +691,7 @@ class TestTheRegistry(FeatureBase):
         self.assertEqual([], registry.commands())
         self.assertEqual([], registry.validate())
 
-    def test_two_features_may_not_claim_one_command_word(self):
+    def test_two_plugins_may_not_claim_one_command_word(self):
         """A command word belongs to one plugin, like a knob or a tag: the doctor names both claimants,
         and the first folder in order is the one the router would hand it to."""
         root = self.plugins()
@@ -704,7 +708,7 @@ class TestTheRegistry(FeatureBase):
                          'two folders claiming one word reached the router twice')
 
 
-class TestASourceAPluginClaims(FeatureBase):
+class TestASourceAPluginClaims(PluginBase):
     """A reading's number may come from a source the plugin claims, and the core passes it through.
 
     The criteria in order: a declared source of the plugin's own passes the doctor and reaches the
@@ -891,7 +895,7 @@ class TestASourceAPluginClaims(FeatureBase):
         self.assertIn('the fixture tool is down', err.getvalue())
 
 
-class TestTheDeletedFeatureFolder(FeatureBase):
+class TestTheDeletedPluginFolder(PluginBase):
     """The completion criterion the other way round: with no plugin folder installed, the pipeline
     still closes, still dispatches, and its close is byte-for-byte the one it always gave."""
 
@@ -977,7 +981,7 @@ class TestTheDeletedFeatureFolder(FeatureBase):
         self.assertNotIn('"reading"', text)
 
 
-class TestTheDispatchGate(FeatureBase):
+class TestTheDispatchGate(PluginBase):
     """The gate sits at the dispatch: the one moment "may a session open now?" can be answered."""
 
     def test_a_gate_stops_the_dispatch_and_leaves_the_line_in_service(self):
@@ -1112,10 +1116,10 @@ class TestTheDispatchGate(FeatureBase):
         self.assertIn('the fixture gate is broken', err.getvalue())
 
 
-class TestThePickTiming(FeatureBase):
+class TestThePickTiming(PluginBase):
     """The second timing an insertion may occupy: a pick with nothing in hand yet."""
 
-    def test_a_pick_feature_inserts_in_front_of_the_first_dispatch(self):
+    def test_a_pick_plugin_inserts_in_front_of_the_first_dispatch(self):
         """A pick-time insertion is the same graph edit with no close behind it: the node enters the
         graph with no parent (so it is ready at once), nothing is pinned, no prompt is written, the
         line stays active -- and the node is in the same ranking every other node is.
@@ -1163,13 +1167,14 @@ class TestThePickTiming(FeatureBase):
         self.assertEqual(made[0], after['node_id'], 'the inserted node is not in the same ranking')
         self.assertEqual([made[0]], sb.holding_ids())
 
-    def test_an_always_answering_pick_feature_inserts_one_node_per_step(self):
+    def test_an_always_answering_pick_plugin_inserts_one_node_per_step(self):
         """A pick insertion ends the step: one answer, one node, and the call comes back.
 
         The fixture here answers every time it is asked -- nothing de-dupes it -- which is exactly
-        the shape that used to make one `next` insert eight nodes and never reach a dispatch. Now
-        each `next` inserts at most one: the graph cannot grow by a burst, and the caller gets the
-        graph edit to commit before the next step. The pick is re-asked on every step, so the
+        the shape that used to make one `next` insert eight nodes and never reach a dispatch. Now a
+        call asks this plugin once, so it inserts at most one node: the graph cannot grow by that
+        plugin's burst, and the caller gets the graph edit to commit before the next step. The pick is
+        re-asked on every step, so the
         ranking decides which node runs only once the plugin stops answering; a pick plugin that
         keeps answering asks for one more node, one step at a time -- and staying quiet while one of
         its own nodes is open is the plugin's own obligation (a dedupe tag is the mechanism; see
@@ -1190,7 +1195,7 @@ class TestThePickTiming(FeatureBase):
         self.assertTrue(all(0 <= step <= 1 for step in diffs),
                         f'a `next` inserted more than one node: {sizes}')
 
-    def test_a_pick_feature_is_not_asked_at_a_close(self):
+    def test_a_pick_plugin_is_not_asked_at_a_close(self):
         """A plugin occupies ONE cell of the two-axis table. A `pick`-timing folder is not asked at a
         close, whatever its implementation would answer there."""
         sb = self.coding_line()
@@ -1206,11 +1211,12 @@ class TestThePickTiming(FeatureBase):
                          'a pick-timing plugin inserted at a close it never claimed')
 
 
-class TestABrokenOfferIsContained(FeatureBase):
+class TestABrokenOfferIsContained(PluginBase):
     """A plugin that cannot produce its node costs its own offer, never the close.
 
-    The contract's rule (`extensions.md`, 「运行时宽容，体检严格」): a plugin that explodes at its
-    timing prints one `WARNING:` line, contributes nothing that pass, and the pipeline carries on. The
+    The contract's rule (`docs/conduct-state.md`, the plugin section's 「运行时宽容，体检严格」): a
+    plugin that explodes at its timing prints one `WARNING:` line, contributes nothing that pass, and
+    the pipeline carries on. The
     offer is where a plugin explodes, and the text builder is the part of it that runs anyway -- so
     both halves are pinned here: the shape check (`plugin_host._usable_offer`, a wrong field) and the
     containment around the eager text evaluation (`actions._insertions_due`, a raise).
@@ -1263,7 +1269,7 @@ class TestABrokenOfferIsContained(FeatureBase):
         self.assertIn('plugin wrong-title', text)
         self.assertIn('`title` must be a non-empty string', text)
 
-    def test_the_text_is_built_once_so_the_mint_never_asks_the_feature_again(self):
+    def test_the_text_is_built_once_so_the_mint_never_asks_the_plugin_again(self):
         """The builder answers on its first call and raises on any later one: the close inserts the
         node and writes its spec from that one text, with the minted uuid filled in.
 
@@ -1303,7 +1309,7 @@ class TestABrokenOfferIsContained(FeatureBase):
         self.assertIn('plugin boom-pick', lines[0])
 
 
-class TestTheOffersFields(FeatureBase):
+class TestTheOffersFields(PluginBase):
     """`fields` is the plugin's own data: the action's own cells are not a door into the answer.
 
     The shape check (`plugin_host._usable_offer`) refuses a `fields` that is not a dict; what it
@@ -1313,10 +1319,10 @@ class TestTheOffersFields(FeatureBase):
     """
 
     def test_an_offer_cannot_rewrite_the_actions_own_cells(self):
-        """An offer whose `fields` carries `cycle` / `action` / `note` / `steps` after a real close:
-        each reserved key is dropped with a warning naming it, and the action a caller reads is the
-        close's own -- an `insert_node` for the line it settled, with the offer's own `note` and the
-        core's steps, not the plugin's."""
+        """An offer whose `fields` carries `cycle` / `action` / `note` / `steps` / `why` /
+        `before_node` / `before_title` after a real close: each reserved key is dropped with a warning
+        naming it, and the action a caller reads is the close's own -- an `insert_node` for the line it
+        settled, with the offer's own `note` and the core's steps, not the plugin's."""
         sb = self.finished_head()
         write_plugin(self.plugins(), 'liar', insert_decl('liar'), RESERVED_FIELDS_IMPL)
 
@@ -1330,17 +1336,22 @@ class TestTheOffersFields(FeatureBase):
         self.assertIn('insert a node with the generated spec', ' '.join(action['steps']))
         self.assertEqual({'metric': 'fixture'}, action['insertions'][0]['fields'],
                          'a reserved key survived in the nested insertion')
+        # the two lines a reader uses to see where the node went are the core's own answer: this offer
+        # states no reason, so there is no `why:` line, and the landing spot is the node the close
+        # really picked -- not the id the offer's `fields` named
+        self.assertEqual('', action['why'])
+        self.assertNotEqual('not-this-one', action['before_node'])
         self.assertEqual(3, len(sb.dag()['nodes']), 'the close did not insert its node')
         self.assertEqual([NODE], sb.path_nodes())
 
         text = err.getvalue()
-        for key in ('action', 'cycle', 'note', 'steps'):
+        for key in ('action', 'cycle', 'note', 'steps', 'why', 'before_node', 'before_title'):
             self.assertIn(f"{key!r} is the action's own cell", text)
-        self.assertEqual(4, text.count('field is reserved'),
+        self.assertEqual(7, text.count('field is reserved'),
                          f'one warning per dropped key was not printed: {text}')
 
 
-class TestADoorMayNotEndTheProcess(FeatureBase):
+class TestADoorMayNotEndTheProcess(PluginBase):
     """`sys.exit()` is a raise written differently, and the runtime contains it the same way.
 
     `SystemExit` is a `BaseException`, so on its own it walks through every containment there is and

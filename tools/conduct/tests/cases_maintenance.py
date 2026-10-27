@@ -1208,11 +1208,17 @@ class TestTheTwoLinesInOneClose(Base):
             owner[own[0].reading] = uid
         self.assertEqual(set(by_metric), set(owner),
                          f'one node per debt tag, both debts here: {owner}')
-        # the action's two insertions pair with those two nodes BY METRIC: the reading a plugin
-        # judged is the reading whose node it made, and its tags are that reading's tag alone
+        # the action's two insertions pair with those two nodes BY THEIR TAG: the reading a plugin
+        # judged is the reading whose node it made, and its tags are that reading's tag alone. The
+        # plugin's own sentence travels beside it (`why`) and is not what the pairing reads -- the
+        # core does not interpret it, so neither does this.
         named = {}
         for item in action['insertions']:
-            metric = item['fields']['metric']
+            own = [debt for debt in debts if debt.tag in item['tags']]
+            self.assertEqual(1, len(own),
+                             f'an insertion must carry exactly one debt tag: {item["tags"]}')
+            metric = own[0].reading
+            self.assertTrue(item.get('why'), f'{metric}: the insertion carries no reason of its own')
             self.assertNotIn(metric, named, f'one insertion per metric: {action["insertions"]}')
             named[metric] = item
         self.assertEqual(set(by_metric), set(named),

@@ -14,14 +14,17 @@ from .nodes import mode_for, node_row, node_spec_path
 from .prompts import build_prompt_text, launch_dir, launch_prompt_path
 from .store import load_dag
 
-#: The action's own cells. A plugin's `fields` is its own data (`metric`, and whatever it wants a
-#: reader to see beside the action), never a door into the answer itself: an offer saying `cycle`
-#: would name another line, one saying `action` another kind of action, and `prompt` / `nodes` would
-#: pretend an insertion is a dispatch. `_insertions_due` drops each of these with one `WARNING:`
-#: naming the key, so a copy-paste into `fields` costs the plugin that key and nothing else.
+#: The action's own cells. A plugin's `fields` is its own data, never a door into the answer itself:
+#: an offer saying `cycle` would name another line, one saying `action` another kind of action, and
+#: `prompt` / `nodes` would pretend an insertion is a dispatch. `_insertions_due` drops each of these
+#: with one `WARNING:` naming the key, so a copy-paste into `fields` costs the plugin that key and
+#: nothing else. `before_node` / `before_title` / `why` are here for the same reason from the other
+#: side: they are the action's own reading of where the node went and what the source said it was
+#: for, and a plugin writes the second of those by stating `why`, not by filling a reserved key.
 RESERVED_FIELDS = frozenset({
     'action', 'cycle', 'node_id', 'node_title', 'note', 'steps',
     'spec', 'add_command', 'spec_of', 'commands', 'insertions',
+    'before_node', 'before_title', 'why',
     # the dispatch / prompt shape an insertion deliberately does not have
     'nodes', 'mode', 'prompt', 'prompt_text',
 })
@@ -211,13 +214,16 @@ def _insertions_due(project: Path, cycle: dict, closed: str | None, offers: list
     **The offer's `fields` is its own data.** The keys the action itself owns (`RESERVED_FIELDS`) are
     dropped from it, each with one warning: the action's identity -- which line, which kind, which
     node, the note, the steps -- is the core's answer and never something a plugin can rewrite.
+    Nothing here reads a key out of what is left: a source that wants a reader to see its reason says
+    it in `why`, which is printed as written, and a source that keeps its own record puts it in
+    `fields`, which travels and is not interpreted.
 
     `closed` is `None` for a PICK-time insertion (`_pick_insertions_due`): no node was closed, so
     there are no close commands to carry and the new nodes enter the graph with no parent.
 
-    The picked node is named in `deferred_node`: it is still the next thing this line will do, just
-    not yet -- the new node stands in front of it. What does NOT happen here is a dispatch: no
-    session is opened and the inserted nodes are not pinned.
+    The node the insertion stands in front of is named in `before_node`: it is still the next thing
+    this line will do, just not yet -- the new node stands ahead of it. What does NOT happen here is a
+    dispatch: no session is opened and the inserted nodes are not pinned.
     """
     edits = []
     for offer in offers:
@@ -238,6 +244,7 @@ def _insertions_due(project: Path, cycle: dict, closed: str | None, offers: list
             continue
         edit['fields'] = _own_fields(offer.get('plugin') or '?', offer.get('fields'))
         edit['note'] = str(offer.get('note') or '')
+        edit['why'] = str(offer.get('why') or '')
         edit['steps'] = _insertion_steps(project, closed, target)
         edits.append(edit)
 
@@ -247,16 +254,23 @@ def _insertions_due(project: Path, cycle: dict, closed: str | None, offers: list
     note = head['note']
     if extra_note:
         note = f'{note}; {extra_note}' if note else extra_note
+    # Where each node went is the CORE's reading, not the source's report: `insertion.insert` puts it
+    # after the closed node and before `target`, so the core names that node from the graph it just
+    # edited. A source that had to state it would be handing the core a fact the core already has --
+    # and a source whose wording drifted would silently lose the line.
+    before = {'before_node': (target or {}).get('id') or '',
+              'before_title': (target or {}).get('title') or ''}
     # The first insertion is mirrored into the singular fields, so a reader that knows only the old
     # shape (one `spec`, one `node_id`) still reads something true; `insertions` is where the whole
     # list lives and is the field to walk when there is more than one.
     insertions = [{'title': edit['title'], 'tags': edit['tags'],
                    'spec_path': edit['spec_path'], 'add_command': edit['add_command'],
                    'spec_of': edit['spec_of'], 'commands': edit['commands'],
-                   'fields': edit['fields'], 'note': edit['note'], 'steps': edit['steps']}
+                   'fields': edit['fields'], 'note': edit['note'], 'why': edit['why'],
+                   'steps': edit['steps'], **before}
                   for edit in edits]
     return _insert_node(cycle, head, note, head['steps'], {
-        **head['fields'],
+        **head['fields'], 'why': head['why'], **before,
         'insertions': insertions,
     })
 
@@ -458,19 +472,20 @@ def render_action(action: dict, as_json: bool = False, preview: bool = False) ->
             else _action_lines(action))
 
 
-def _field_lines(fields: dict) -> list:
-    """The fields an insertion source reported, as the one or two lines a reader needs.
+def _insertion_lines(item: dict) -> list:
+    """What a reader needs about one insertion beside its node: its reason, and what it went in front of.
 
-    Which measurement, what it read, where the line was, and the node the close had picked before
-    this one was put in front of it. A reader who is not using `--json` is exactly the reader who
-    needs to see why the graph grew a node.
+    `why` is the source's own sentence, printed exactly as it was written -- the core builds none for
+    it and reads nothing out of it, because a source that says nothing about its reason simply has no
+    line here. `before_node` is the core's own reading of where the node landed: `insertion.insert`
+    placed it after the closed node and before that one, so naming it is something the core does from
+    the graph it just edited rather than something a source has to report.
     """
     lines = []
-    if fields.get('metric'):
-        lines.append(f"metric: {fields['metric']} = {fields.get('reading')} "
-                     f"(line {fields.get('line')})")
-    if fields.get('deferred_node'):
-        lines.append(f"after:  {fields.get('deferred_title', '')}  ({fields['deferred_node']})")
+    if item.get('why'):
+        lines.append(f"{'why:':<9} {item['why']}")
+    if item.get('before_node'):
+        lines.append(f"{'after:':<9} {item.get('before_title', '')}  ({item['before_node']})")
     return lines
 
 
@@ -502,7 +517,7 @@ def _action_lines(action: dict) -> str:
         lines.append(f"spec:   {action['spec']}")
     if action.get('action') == 'dispatch':
         lines.append(f"mode:   {action.get('mode')}")
-    lines.extend(_field_lines(action))
+    lines.extend(_insertion_lines(action))
     if 'applied' in action:
         lines.append(f"applied: {action['applied']}")
     for extra in (action.get('insertions') or [])[1:]:
@@ -514,7 +529,7 @@ def _action_lines(action: dict) -> str:
             lines.append(f"spec:   {extra['spec_path']}")
         for step in extra.get('steps') or []:
             lines.append(f"  - {step}")
-        lines.extend(_field_lines(extra.get('fields') or {}))
+        lines.extend(_insertion_lines(extra))
     for item in action.get('attention', []):
         who = f"{item.get('node_title')} ({item.get('node_id')})" if item.get('node_id') else '?'
         lines.append(f"attention: {item.get('kind')}  {who}")

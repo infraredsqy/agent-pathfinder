@@ -298,6 +298,12 @@ def _usable_offer(name: str, offer):
     The steps an insertion action shows are the CORE's words (`actions._insertion_steps`: they carry
     the placeholder only `insertion.py` may spell, so an offer never has to state them). An offer that
     states `steps` anyway is shape-checked here and then not read.
+
+    **`why` is the offer's own sentence, and `fields` is its own data.** The first is prose a reader
+    sees beside the action, printed as the plugin wrote it -- so a plugin that says nothing about its
+    reason says it in a string, not in a shape the core has to know. The second is a dict the core
+    hands on and never interprets: what a plugin records there is for the plugin and for a `--json`
+    reader, and nothing in this tree reads a key out of it.
     """
     if not isinstance(offer, dict):
         warn(name, 'returned an unusable offer',
@@ -332,6 +338,12 @@ def _usable_offer(name: str, offer):
     if not isinstance(note, str):
         warn(name, 'returned an unusable offer', f'`note` must be a string, got {note!r}')
         return None
+    why = offer.get('why')
+    if why is None:
+        why = ''
+    if not isinstance(why, str):
+        warn(name, 'returned an unusable offer', f'`why` must be a string, got {why!r}')
+        return None
     steps = offer.get('steps')
     if steps is None:
         steps = []
@@ -340,7 +352,7 @@ def _usable_offer(name: str, offer):
         warn(name, 'returned an unusable offer', f'`steps` must be a list of strings, got {steps!r}')
         return None
     return {'plugin': name, 'title': title, 'tags': list(tags), 'spec_of': spec_of,
-            'fields': dict(fields), 'note': note, 'steps': list(steps)}
+            'fields': dict(fields), 'note': note, 'why': why, 'steps': list(steps)}
 
 
 def insertions(timing: str, ctx: Context) -> list:
