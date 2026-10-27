@@ -104,7 +104,7 @@
 | 收口 / 收尾 | close out | |
 | 正本 | the one source | |
 | 出厂默认 | factory default | |
-| 维护通道 | maintenance channel | 出厂的两个插件：各占收尾时机、各插一个节点，各量一条债 |
+| 维护通道 | maintenance channel | 一个插件占收尾时机、插一个节点、量一条债 |
 | 插件 | plugin | 一个文件夹：声明 + 实现；文件夹名就是它的身份 |
 | 声明 | declaration | 插件文件夹里那份数据：占哪个时机、认哪些名字 |
 | 实现 | implementation | 插件文件夹里的代码：时机到了被叫一次 |
@@ -128,12 +128,9 @@
 | 完成判定 | completion rule | |
 | 阈值 / 线 | threshold / the line | 一个旋钮：读到的数到了它，债就到顶 |
 | 范围 | scope | |
-| 池子 | the pool | |
-| 条目（池子里的） | entry | 错题本里的条目同样写 entry |
+| 条目 | entry | 错题本里的一条同样写 entry |
 | 债 | debt | |
-| 加权和 | weighted sum | |
-| 严重度 | severity | 机器词是 `P0`–`P3` |
-| 测试档 | test tier | 取值 `full` / `minimal` |
+| 测试档 | test tier | 这个项目怎么验 |
 | worktree 档 | worktree mode | 旋钮：一个节点的活在哪棵树里做 |
 | 讨论节点 | discussion node | |
 | 验证边界 | verification boundary | |

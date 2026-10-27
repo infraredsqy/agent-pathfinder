@@ -319,8 +319,8 @@ pf instruction list --project <absolute path to the project root>
   before work starts.
 
 A problem run into along the way that is not this node's to fix goes to a subagent to record. Where
-it is recorded, and how it is written, is the installed feature's own business: run `pf doctor` to
-see which features this checkout has, and follow the skill that feature's folder carries. Recording
+it is recorded, and how it is written, is the installed plugin's own business: run `pf doctor` to
+see which plugins this checkout has, and follow the skill that plugin's folder carries. Recording
 it is the whole of it; that is not this node's scope.
 
 **4 | Size and deliverables**: the size is judged fully at prepare time — when by feel this node
@@ -747,7 +747,7 @@ quotes, so a backslash needs one more layer of escaping.
   — a missing number reads as "not known this run", and a 0 reads as "already measured at zero",
   which makes a real debt look paid off.
 - A reading whose declaration draws on a source other than the ticket is computed by whatever owns
-  that source, so it never appears on the form and you never fill it in; which features are
+  that source, so it never appears on the form and you never fill it in; which plugins are
   installed, and what each one reads, is what `pf doctor` lists.
 
 ## The dispatch path

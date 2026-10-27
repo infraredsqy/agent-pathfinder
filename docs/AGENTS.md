@@ -4,8 +4,8 @@
 
 - conduct-state.md — where the state-and-advancing design comes from: who writes it down, how
   claiming and the status divide, the two ways in, the stopping criteria, the settings chain and the
-  plugins (the two this checkout ships are the maintenance channel) (read before changing conduct's
-  behaviour or writing pf-conduct)
+  plugin mechanism and its maintenance channel (read before changing conduct's behaviour or writing
+  pf-conduct)
 - conduct-dsh-dispatch.md — dispatch and authentication: measured calibration, the self-signed
   cookie, failure modes and troubleshooting (read when a dispatch fails)
 - conduct-node-tags.md — node tags and splitting between cycles: the word list, the filter
@@ -17,3 +17,6 @@
 - tool-modules.md — the shape of tools/' modules: the one loader that loads by path, who decides
   how many copies of a file one process holds, where shared pieces go (read before touching
   cross-file references or adding a shared piece)
+
+A plugin's own design — what its metric measures, the debt it watches, the skill that settles it —
+lives with that plugin, in `plugins/<name>/docs/`; what is listed above is the core's contract only.

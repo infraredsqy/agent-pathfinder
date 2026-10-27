@@ -72,10 +72,10 @@ Worker sessions are skills, linked into `~/.agents/skills`:
 | `pf-conduct` | run one node: prepare, execute, independent review, fix, close |
 | `pf-instruct` | record a standing instruction that later sessions follow |
 
-A plugin can bring skills of its own: they live in that plugin's folder
-(`plugins/<name>/skills/`) and are linked and removed with the plugin, so `pf doctor`
-is what lists the ones this checkout has. A skill names no skill from another plugin — it says
-"run `pf doctor`" instead.
+Four more skills come with the plugins — `pf-issue-scan`, `pf-issue-discuss`, `pf-issue-repair` and
+`pf-test-audit`. A plugin's skills live in that plugin's folder (`plugins/<name>/skills/`) and are
+linked and removed with the plugin, so `pf doctor` is where a checkout's own set is listed. A skill
+names no skill from another plugin — it says "run `pf doctor`" instead.
 
 ## Development
 

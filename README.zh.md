@@ -63,7 +63,7 @@ pf next --spawn
 | `pf-conduct` | 完成单个节点：准备、执行、独立复审、修复、收尾 |
 | `pf-instruct` | 记录一条约束，供后续会话遵循 |
 
-插件也可以自带技能：技能放在该插件自己的文件夹里（`plugins/<name>/skills/`），随插件一起装、卸，所以本仓库装了哪些，以 `pf doctor` 列出来的为准。别的插件带的技能不点名——要提它，说「跑 `pf doctor`」。
+插件还自带四张技能：`pf-issue-scan`、`pf-issue-discuss`、`pf-issue-repair`、`pf-test-audit`。插件的技能放在该插件自己的文件夹里（`plugins/<name>/skills/`），随插件一起装、卸，所以本仓库装了哪些，以 `pf doctor` 列出来的为准。别的插件带的技能不点名——要提它，说「跑 `pf doctor`」。
 
 ## 开发
 
