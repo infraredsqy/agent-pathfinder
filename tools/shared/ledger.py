@@ -3,7 +3,8 @@
 
 A project's durable account is its LEDGER, `<project>/.pf/`, and this file is the only place that
 spelling lives -- the graph, the cycle book, the signals, the standing instructions, each node's own
-text and the issue pool all sit under that one directory, and every tool reaches it from here:
+text and whatever an installed plugin keeps all sit under that one directory, and every tool reaches
+it from here:
 
     ledger_dir_for(project)     `<project>/.pf/`
     meta_dir_for(project)       `<project>/.pf/meta/`         the dispatch plumbing, ignored by git

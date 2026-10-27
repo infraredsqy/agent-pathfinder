@@ -5,9 +5,10 @@ this plugin's declaration). It therefore imports nothing from the pipeline packa
 may touch arrives in the `ctx` it is handed (`plugin_host.Context`) --
 
     ctx.knob(name)            the effective value of one knob, from the whole resolution chain
-    ctx.reading(key)          the number a worker reported in the ticket's `outputs.reading.<key>`;
-                              this plugin asks it for nothing -- the pool's weight is the pool
-                              tool's own number, fetched below with `ctx.capture`
+    ctx.reading(key)          the number behind one of this declaration's readings; the source it
+                              draws on is the one the declaration claims, computed by the function
+                              that claim names (`pool_weight` below) -- so this is the door the
+                              pool's own number comes through
     ctx.nodes_with_tag(tag)   the ids of the still-open nodes carrying one tag
     ctx.capture(argv)         run one command, hand back its stdout
     ctx.spec_path(node_id)    where a node's own `spec.md` lands (this tree's layout, not ours)
@@ -25,17 +26,19 @@ It never writes a file, never opens a session, and never raises for a missing nu
 configured no line gets `None` here, which is what keeps a close without knobs byte-for-byte what it
 was before this plugin existed.
 
-**The pool's weight is not a number a session reports.** It is computed by the tool that owns the
-pool, and this plugin asks that tool -- which is why the child process is started LAST, and only
-when this line really carries a line (see `offer`): a line with no line configured does not start
-it, and neither does a plugin that was turned off. A missing or garbled number reads as "not known
-this pass", never as 0 -- reading it as 0 would make a real debt look paid off.
+**The pool's weight is not a number a session reports.** This plugin claims the source it draws on
+(`plugin.json`'s `sources`) and names the function below that computes it, so the number arrives
+through the reading door (`ctx.reading`) -- which is what makes the tool that owns the pool this
+folder's own business and not the core's. The child process is started LAST, and only when this line
+really carries a line (see `offer`): a line with no line configured does not start it, and neither
+does a plugin that was turned off. A missing or garbled number reads as "not known this pass", never
+as 0 -- reading it as 0 would make a real debt look paid off.
 """
 
 from __future__ import annotations
 
 import json
-import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -89,23 +92,21 @@ PROSE = {
 
 
 # ── the tool this plugin measures with ──────────────────────────────────────
-# The pool's number is computed by the tool that owns the pool, so this asks it -- a child process,
-# which is why it is asked LAST and only when this line really carries that line (see `offer`).
-# Which file is asked follows the tree's one toolpath rule: the env override first, then the one this
-# checkout ships (`<tree>/tools/issue/issue_manager.py`, one level up from this plugin's folder).
+# The pool's number is computed by the tool that owns the pool, so this plugin asks it -- a child
+# process, which is why it is asked LAST and only when this line really carries that line (see
+# `offer`). The tool lives in this folder's own `tools/`: the pool moved in here with the plugin, so
+# nothing outside the folder knows where it is.
 
-ISSUE_TOOL_ENV = 'DSH_CONDUCT_ISSUE_MANAGE'
-_SHIPPED_ISSUE = _HERE.parents[1] / 'tools' / 'issue' / 'issue_manager.py'
+#: The tool that owns the pool, inside this plugin's own folder.
+POOL_TOOL = _HERE / 'tools' / 'issue_manager.py'
 
 #: The one word `pf issue weight` answers with: the verb that prints the pool's weighted sum.
 WEIGHT_VERB = 'weight'
 
 
 def issue_argv() -> list:
-    """The argv that asks the issue tool for the pool's weighted debt."""
-    override = os.environ.get(ISSUE_TOOL_ENV)
-    tool = Path(override) if override else _SHIPPED_ISSUE
-    return [sys.executable, str(tool), WEIGHT_VERB]
+    """The argv that asks this folder's tool for the pool's weighted debt."""
+    return [sys.executable, str(POOL_TOOL), WEIGHT_VERB]
 
 
 # ── the reading: the number the tool prints ──────────────────────────────────
@@ -223,11 +224,13 @@ def offer(ctx):
         return None
     values = {}
     for metric in declared:
-        if metric['source'] != 'pool' or metric['line'] not in lines:
+        if metric['line'] not in lines:
             continue
-        weight = pool_weight(ctx)
-        if weight is not None:
-            values[metric['reading']] = weight
+        # The number arrives through the reading door: the source this declaration claims is the
+        # one `pool_weight` below computes, and the core hands its answer on untouched.
+        value = ctx.reading(metric['reading'])
+        if value is not None:
+            values[metric['reading']] = value
     if not values:
         return None
     for metric in declared:
@@ -350,3 +353,22 @@ def spec(hit: dict, spec_path: str) -> str:
         + _closing_reading(hit) +
         f'\n(this spec lands at: {spec_path})\n'
     )
+
+
+# ── the second way in: run as a script ──────────────────────────────────────
+# `plugin.json` reports the word `issue`, and `pf` answers that word by running THIS file as a
+# script (`pf`'s plugin bootstrap: the argv, `__name__` and `sys.path` entry a plain
+# `python impl.py …` would give it). The line's remaining arguments arrive unchanged, and they go
+# to the tool inside this folder unchanged too: this door is the folder's own command, so what the
+# tool reads and where it looks for the project are exactly what they were before the tool moved in
+# here. One implementation serves both ways in, which is what "a plugin is a folder with an
+# implementation" means.
+
+def main(argv=None) -> int:
+    """`pf issue …`: this folder's own tool, with the rest of the line handed over as it came."""
+    rest = list(sys.argv[1:] if argv is None else argv)
+    return subprocess.call([sys.executable, '-X', 'utf8', str(POOL_TOOL), *rest])
+
+
+if __name__ == '__main__':
+    sys.exit(main())

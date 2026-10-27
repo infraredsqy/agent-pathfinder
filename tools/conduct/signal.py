@@ -45,9 +45,9 @@ _STORE = None
 def _store():
     """`state.store`, loaded by path -- the record's owner, and the one writer of a signal.
 
-    The record commands (state / dag / issue) do not write where cwd points when cwd is a linked
-    worktree: they map the worktree back to the main tree, because `.pf/` lives there and only
-    there. A worker that runs THIS script directly (not through handoff.py, which resolves the root
+    The record commands do not write where cwd points when cwd is a linked worktree: they map the
+    worktree back to the main tree, because `.pf/` lives there and only there. A worker that runs
+    THIS script directly (not through handoff.py, which resolves the root
     itself and passes `base_dir`) would otherwise trust cwd and drop the signal into the worktree's
     stale `.pf/` fork -- data the main tree never reads, lost in effect. Loading store by path reuses
     its one implementation of that sense (`_write_signal`, the record's one writer), which is what a

@@ -7,8 +7,8 @@ unknown is an id that was reported but is not in the pool; neither touches any e
 
 How to run (either works):
 
-    python -m unittest discover -s issue/tests -t .      (cwd in tools/)
-    python issue/tests/test_mark.py
+    python -m unittest discover -s plugins/issue/tools/tests -t plugins/issue/tools
+    python plugins/issue/tools/tests/test_mark.py
 """
 
 from __future__ import annotations

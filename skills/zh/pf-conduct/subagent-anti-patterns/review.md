@@ -8,7 +8,7 @@
 
 **纠正信号**：这一轮里工作区有改动，而你的 prompt 只让你读。
 
-## `conduct-review-only-rechecks-last-issues` · 仅复核上一轮 issue 即报 PASS
+## `conduct-review-only-rechecks-last-round` · 仅复核上一轮那几条即报 PASS
 
 **症状**：第二、第三轮只查上一轮的 critical / minor 修好没有，确认完直接报 PASS。
 
@@ -18,13 +18,13 @@
 
 **症状**：「A 是 B 的前置，spec 里没写 A」，于是报告里写「需要增加 A」。
 
-**纠正信号**：issue 列表里出现一条要求 spec 没提过的东西。
+**纠正信号**：问题清单里出现一条要求 spec 没提过的东西。
 
 ## `conduct-review-judges-other-nodes` · 对前置或其他节点作越界判定
 
 **症状**：把前置节点的功能缺失、或者别的节点的活，当成 critical / minor 标出来。
 
-**纠正信号**：一条 issue 的位置落在本节点 spec 的范围之外。
+**纠正信号**：一条问题的位置落在本节点 spec 的范围之外。
 
 ## `conduct-review-accepts-preexisting-failure-claim` · 直接采信既有失败的归因
 
@@ -46,7 +46,7 @@
 
 ## `conduct-review-copies-known-material` · 将读者已有材料抄录进报告
 
-**症状**：一条 issue 的位置列十个行号，后面每个字段又重列一遍；大段逐字引用 spec 或正稿原文当"依据"；开头先摆一张几份文件的 `sha256` 与行数表。一轮四百多行，其中判断占不到一半。
+**症状**：一条问题的位置列十个行号，后面每个字段又重列一遍；大段逐字引用 spec 或正稿原文当"依据"；开头先摆一张几份文件的 `sha256` 与行数表。一轮四百多行，其中判断占不到一半。
 
 **纠正信号**：抄录的行数压过判断的行数。
 

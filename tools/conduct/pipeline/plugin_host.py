@@ -177,9 +177,6 @@ class Context:
         meaning -- a number is a number and nothing else: a bool is a decision, not a measurement, and
         a string is not parsed, because guessing a number out of a tool's prose is how a threshold
         fires on the wrong evidence.
-
-        A core source the core does not compute (`pool`: a tool's own number the plugin fetches with
-        `capture`) has no answer here -- it is not the ticket's, and no function was named for it.
         """
         if not key:
             return None

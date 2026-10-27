@@ -134,12 +134,13 @@ def require_initialized(project: str | None = None) -> None:
 
 
 # ── the cross-process ledger lock ─────────────────────────────────────────────
-# state.json / ideas.json / instructions.json / issues.json are whole-file read-modify-write:
+# Every JSON record this ledger holds -- the cycle book, the graph, the standing instructions, a
+# node's note, and whatever an installed plugin keeps of its own -- is whole-file read-modify-write:
 # two processes walking that sequence at once means the later write silently erases the earlier
 # one. With parallel=2 (two cycles settling at the same time) that window stops being theoretical,
 # so every MUTATING command body holds this lock across its read → write. One path per project
-# root -- `.pf/meta/ledger.lock` -- shared by conduct, dag-manage, the issue tool and a session
-# note's own writer, so their writes exclude each other too.
+# root -- `.pf/meta/ledger.lock` -- shared by conduct, dag-manage, a session note's own writer and
+# every plugin tool that keeps a record here, so their writes exclude each other too.
 #
 # This is also the gate: every mutating command passes through here, and the lock's `mkdir` would
 # otherwise be the one thing that conjures a `.pf/` nobody init'ed.
@@ -178,7 +179,7 @@ ISO_FMT = _loader().load_shared('clock').ISO_FMT_SECONDS
 
 def _now() -> str:
     """The moment for this record: the seconds shape from `tools/shared/clock.py` (the microsecond
-    one is the graph's and the pool's)."""
+    one is the graph's)."""
     return _loader().load_shared('clock').now_seconds()
 
 

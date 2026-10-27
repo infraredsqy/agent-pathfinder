@@ -1,6 +1,6 @@
 # pf-issue-scan 错题本
 
-开工前对照查一遍。判据正文在 [`./SKILL.md`](./SKILL.md)、[`./scan.md`](./scan.md) 与 [`../shared/pf/pool.md`](../shared/pf/pool.md) 里，这里只留症状与纠正信号。
+开工前对照查一遍。判据正文在 [`./SKILL.md`](./SKILL.md)、[`./scan.md`](./scan.md) 与 [`../pf-issue-repair/pool.md`](../pf-issue-repair/pool.md) 里，这里只留症状与纠正信号。
 
 ## `issue-scan-full-corpus-in-one-agent` · 以单个 subagent 覆盖全量扫描
 

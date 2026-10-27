@@ -129,7 +129,7 @@
 | 阈值 / 线 | threshold / the line | 一个旋钮：读到的数到了它，债就到顶 |
 | 范围 | scope | |
 | 池子 | the pool | |
-| 条目（池子里的） | issue | 错题本里的条目是 entry |
+| 条目（池子里的） | entry | 错题本里的条目同样写 entry |
 | 债 | debt | |
 | 加权和 | weighted sum | |
 | 严重度 | severity | 机器词是 `P0`–`P3` |

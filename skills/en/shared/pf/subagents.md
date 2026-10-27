@@ -22,7 +22,7 @@ the cap. When it cannot be crossed, yield in this order:
    dispatching the next.
 
 When merging, every copy still has to stand as its own piece: one piece per report, not mashed
-into one paragraph, or the merge into the pool has nothing to dedup on.
+into one paragraph, or there is nothing to dedup on when they are written into the record.
 
 ## Why leave headroom
 

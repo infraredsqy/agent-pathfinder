@@ -50,7 +50,7 @@ So every node has three things settled the moment it is built:
   (see "Look at the weight first" in [`../pf-conduct/SKILL.md`](../pf-conduct/SKILL.md)). A node
   carrying `method: ` (see the fourth of "The four questions to ask before writing it down") is
   measured by another standard: **one round of clearing the debt** — one metric, or one batch of
-  same-domain issues, and it hands out batches itself, not bound by "one execute-review-fix round"
+  same-domain entries, and it hands out batches itself, not bound by "one execute-review-fix round"
 - **An acceptance that can be judged**: the spec must carry a section with an executable
   completion rule — a command, a script, a probe, one run / one batch of readings — that yields a
   pass / fail reading (the criterion need not be a test: the `minimal` tier's completion rule is
@@ -69,7 +69,7 @@ spec is read-only to downstream.
 - `/pf-route the image-optimisation node is not wanted any more, delete it`
 - `/pf-route rendering has to wait for the primitive loading to finish, connect those two`
 - `/pf-route add a Chinese summary to the meeting notes, and sync the stale README notes`
-- `/pf-route clear one round of issue debt first, then touch those editor nodes`
+- `/pf-route clear one round of debt first, then touch those editor nodes`
 
 ## The flow
 
@@ -174,8 +174,8 @@ Work that lands on the first road, in a few shapes off the top of the head: brin
 notes up to what is already implemented; run a probe or read a piece of code to answer one
 feasibility question; pick the current state back up for the user (an inventory, a check, a
 rendered graph); reproduce a problem to confirm whether it is there; repository hygiene (stale
-temporary products, duplicate issues); write a settled conclusion into the project's
-`.pf/config.json` (`pf config set`); record debt run into in the issue pool; make a technology
+temporary products, duplicate entries a record already holds); write a settled conclusion into the
+project's `.pf/config.json` (`pf config set`); record a piece of debt run into; make a technology
 comparison for a node not yet written down and back-fill the conclusion into its spec.
 
 - **A behavioural change always enters the graph**; small changes where **not a byte changes when
@@ -249,14 +249,14 @@ downstream" — one framework-level description, a size one session can carry, a
 completion rule. When any one of them is not satisfied, change the node or split it first, and
 write it down only after the user nods.
 
-**Four: whose run this work's running is.** To clear debt (a batch of issues in the pool), **do
+**Four: whose run this work's running is.** To clear debt (a batch of entries some record holds), **do
 not write debt-clearing steps yourself**: run `pf doctor` once and read off which plugins are
 installed, and the dedupe tag and method name each one declares — copy those two strings in. One
 line, `method: <that method>`, means "this node is run by the conductor from that skill itself", and
 the order outranks `weight` (see "Method" in [`../pf-conduct/SKILL.md`](../pf-conduct/SKILL.md)); the
 node carries the metric's dedupe tag, plus this line's tag or the picking step cannot see it. In the
 same spec, write the scope and the criterion out clearly: the scope = one metric or one batch of
-same-domain debt, the criterion = that reading coming back under the line (or that batch of issues
+same-domain debt, the criterion = that reading coming back under the line (or that batch of entries
 reaching a terminal status). **When the listing names no plugin that watches this debt, or that
 plugin is not installed**: there is no such road — write an ordinary node, and do not invent a method
 name. A plain node carries no `method`.
@@ -353,12 +353,12 @@ Distil the key information into the answer; do not dump the raw JSON.
   yourself
 - **pf-conduct**: running the graph, doing the nodes. Picking a node from the graph, opening a
   cycle, one node from prepare to close; building no nodes
-- **the pool's own branch**: scanning into the pool, ruling with the user on external (the
-  conventions are in [`../shared/pf/pool.md`](../shared/pf/pool.md)) — this branch's skills (the
-  debt-clearing one included) ship with the plugin that watches that debt: `pf doctor` prints whether
-  that plugin is installed and which name its `method:` line takes. To clear one round of debt on the
-  graph, build a node carrying `method: <that method>` (see the fourth of "The four questions to ask
-  before writing it down")
+- **the debt-recording branch**: scanning new debt in, ruling with the user on external — this
+  branch's skills (the debt-clearing one included) ship with the plugin that watches that debt, and
+  the conventions are in that folder's own skill: `pf doctor` prints whether that plugin is installed
+  and which name its `method:` line takes. To clear one round of debt on the graph, build a node
+  carrying `method: <that method>` (see the fourth of "The four questions to ask before writing it
+  down")
 
 When the user wants to talk a node's implementation through at length → suggest moving to
 `/pf-conduct` (at prepare it aligns the request with the code); when it is only a rough

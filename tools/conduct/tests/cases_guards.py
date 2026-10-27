@@ -13,9 +13,10 @@ and a behaviour put back the old way turns it red.
      its knob keys, its readings, its claimed source names, its command words, its dedupe tags and its
      method names -- may not appear in any module of this tool outside `plugins/`. They are read off
      the installed declarations, never restated here. The folder's own name is deliberately not one of
-     them: that is the identity a folder is GIVEN, not a word a declaration invents, and the core's own
-     vocabulary may overlap it -- a core file saying `issue` is talking about its own pool, and that
-     string does not mean the core knows a plugin.
+     them: that is the identity a folder is GIVEN, not a word a declaration invents. A word a
+     declaration DOES invent is a different matter -- one that claims a common word (a command word, a
+     source name) makes that string its own, and the plain substring scan below is what keeps the core
+     from going on spelling it for its own work.
   2b. **The skills name no installed plugin either.** The same six groups may not appear in a skill
      under `skills/`: a skill bound to a plugin lives in that plugin's folder, and what a skill says
      instead is "run the command that lists what is installed".
@@ -55,7 +56,6 @@ SKILLS_ROOT = TOOLS_DIR.parent / 'skills'
 #: asks about this one cell, and `dag-manage.py`'s `approve_delivery` is its one write site.
 APPROVAL = 'approved_at'
 
-ISSUE_MANAGE = TOOLS_DIR / 'issue' / 'issue_manager.py'
 CONDUCT_PIPELINE = CONDUCT_DIR / 'conduct_pipeline.py'
 PF = TOOLS_DIR / 'bin' / 'pf.py'
 
@@ -221,9 +221,10 @@ class TestTheCoreNamesNoFeature(Base):
     out of scope; the test suite is not shipped code and is out of scope the same way.
 
     What a declaration does NOT invent is the name of the folder it sits in (`load_all`'s `name`): a
-    folder is given its name and a declaration merely agrees with it. So it is not one of the six, and
-    a core file that spells one of those folder names -- `issue`, the pool this tool has always
-    owned -- is not read as naming a plugin.
+    folder is given its name and a declaration merely agrees with it. So it is not one of the six --
+    but the words a declaration invents are, and this check is a plain substring scan over the shipped
+    modules: a declaration that claims a word as ordinary as a command word or a source name makes
+    that string the core's to lose, wherever the core used to spell it for its own work.
     """
 
     def installed_names(self) -> set:
@@ -273,8 +274,10 @@ class TestTheSkillsNameNoFeature(Base):
     (`plugins/<name>/skills/`), where naming the plugin it binds is the point, and where it is
     installed and removed with that plugin.
 
-    The folder name is not one of the six here either, and for the same reason the core guard gives:
-    a skill that says `issue` about the pool is talking about the tool the reader is using.
+    The folder name is not one of the six here either, and for the same reason the core guard gives --
+    but the words a declaration invents are, so a skill may not carry one any more than a core module
+    may: the scan here is case-insensitive, because a skill's prose is read by a human before it is
+    run.
     """
 
     def outside_names(self) -> set:
@@ -311,8 +314,10 @@ class TestTheSkillsNameNoFeature(Base):
 # ── 3. every self-entry has a real door ─────────────────────────────────────
 #: The tool entries whose own parser registers command words. `handoff.py` and `signal.py` register
 #: none -- one command each, which is the tool's whole door -- and are still asked, so a word added
-#: to one of them is caught the day it appears.
-ENTRIES = (CONDUCT_PIPELINE, STATE_MANAGE, DAG_MANAGE, ISSUE_MANAGE, HANDOFF_PY, SIGNAL_PY)
+#: to one of them is caught the day it appears. A plugin's own tools are not on this list: their
+#: words are reached through the word the folder's declaration claims for `pf`, and that routing is
+#: `cases_plugin.py`'s question (a folder's command, and its removal with the folder).
+ENTRIES = (CONDUCT_PIPELINE, STATE_MANAGE, DAG_MANAGE, HANDOFF_PY, SIGNAL_PY)
 
 
 def entry_commands(path: Path) -> set:

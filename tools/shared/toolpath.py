@@ -3,8 +3,8 @@
 
     tool_path(env_var, default)
 
-Every tool here keeps its parts side by side in one checkout -- `conduct/`, `dag/`, `issue/`,
-`shared/` -- and each file finds its neighbours from the path it is in. A tree that keeps a part
+Every tool here keeps its parts side by side in one checkout -- `conduct/`, `dag/`, `shared/` --
+and each file finds its neighbours from the path it is in. A tree that keeps a part
 somewhere else (a review draft, a drill copy) names that part with the part's own environment variable
 instead of the caller growing a second search path of its own: a silent fallback into another checkout
 would hide the failure that matters -- a shipped tree whose neighbour went missing.

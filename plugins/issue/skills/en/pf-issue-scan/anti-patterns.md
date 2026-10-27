@@ -2,7 +2,7 @@
 
 Check yourself against this before starting. The criteria themselves live in
 [`./SKILL.md`](./SKILL.md), [`./scan.md`](./scan.md) and
-[`../shared/pf/pool.md`](../shared/pf/pool.md); this keeps symptoms and correction signals only.
+[`../pf-issue-repair/pool.md`](../pf-issue-repair/pool.md); this keeps symptoms and correction signals only.
 
 ## `issue-scan-full-corpus-in-one-agent` — covering the whole scan with one subagent
 

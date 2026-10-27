@@ -122,7 +122,7 @@ into the spec; to change it, use `pf config set test_tier <value>`.
 | Are tests written | new logic needs tests, and **only invariants get locked** — none that lock a formula, a snapshot or an implementation detail | **none by default**; only "it would fail silently without this" gets one, and say first which silent failure it blocks |
 | What stays | the whole set; when it runs over, the debt channel inserts a debt node | only numeric / precision cross-checks, cross-source structural agreement, and the paths only luck reaches |
 | Each round's verification | the fast lane = the cases of the files touched | the few checks the project itself names / probes / one run |
-| The review on "missing tests" | one that should be there and is not = an issue | missing tests pass; a missing "silent-failure kind of verification" is recorded as an issue |
+| The review on "missing tests" | one that should be there and is not = a finding | missing tests pass; a missing "silent-failure kind of verification" is recorded as a finding |
 
 **Verification by tier**: the fast lane every round, and one full run at the node's close. Both
 are taken from the project docs (the `slow` marker, the two entries, and with no tier named, the
@@ -318,10 +318,10 @@ pf instruction list --project <absolute path to the project root>
   to fill it in through pf-route. The review uses it as its standard, so it has to be there
   before work starts.
 
-A problem run into along the way that is not this node's to fix goes to a subagent to record in
-the issue pool — for how to write it and what the tool expects, see
-[`../shared/pf/pool.md`](../shared/pf/pool.md). Recording it is the whole of it; that is not
-this node's scope.
+A problem run into along the way that is not this node's to fix goes to a subagent to record. Where
+it is recorded, and how it is written, is the installed feature's own business: run `pf doctor` to
+see which features this checkout has, and follow the skill that feature's folder carries. Recording
+it is the whole of it; that is not this node's scope.
 
 **4 | Size and deliverables**: the size is judged fully at prepare time — when by feel this node
 will not fit in one session, stop and ask the user to split it through pf-route. Finding halfway
@@ -378,14 +378,14 @@ Its product comes in two grades:
 - **critical is a problem that blocks delivery** (a goal not met, a mistake, a fight with the
   spec): not clear until it is zero
 - **minor is a problem not worth another round for** (style, wording, an edge): record it and go
-  to the fix; a round with only minor issues does not come back to review once fixed — do not
+  to the fix; a round with only minor findings does not come back to review once fixed — do not
   stop here for it
 - When you disagree with a critical, **do not rule it a false alarm yourself**: write the dispute
   into a fresh verification prompt and re-run the review once, and when it still cannot decide,
   hand it to the user. The power to rule a "false alarm" is the user's.
 
 Every round's prompt is **word for word** the first round's — except for naming this round's
-report file: it carries no issue from the previous round and says nothing about what the fixing
+report file: it carries no finding from the previous round and says nothing about what the fixing
 agent did. `review-{N}.md` is only its conclusion on file.
 
 ### Fix
@@ -396,7 +396,7 @@ Both roads are walked to the end: there is no round cap.
 `subagent-prompts/fix.md`), and back to Review once it is fixed. **The fix dispatch's prompt carries
 three things only**:
 
-- **the path to the issue list** — that is the one copy you hold. The review has already written
+- **the path to the findings list** — that is the one copy you hold. The review has already written
   the problem there; it reads the text, the line numbers and the arguments for itself, so do not
   copy them into the prompt
 - **the conclusions already settled above** — one sentence each: what was settled, and which
@@ -408,8 +408,8 @@ again makes the fix agent read the same material twice; worse, when the two are 
 differently the role card and your prompt fight each other.
 
 `critical = 0, minor > 0` → dispatch a dedicated fix and **do not go back to Review**: a round
-with only minor issues passes once fixed, and the fix proves it itself through its own fast lane
-and an issue-list check, with each minor written out in the fix report; anything it cannot fix
+with only minor findings passes once fixed, and the fix proves it itself through its own fast lane
+and a findings-list check, with each minor written out in the fix report; anything it cannot fix
 goes into this round's report and `run.md`'s "Known unresolved", **closed out inside this node
 and not passed on to the next one**. When it cannot all be done, so be it: the report says which
 ones were not done and why, and it goes into the user's hands.
@@ -443,7 +443,7 @@ verifying and what experience it wants):
   and report to the user, attaching what each side says and why it cannot be derived
 
 **A stuck loop is a mechanical signal**: the review looks from zero every round (the prompt is
-word for word the same) and the executor sees only this round's issue list, so neither knows how
+word for word the same) and the executor sees only this round's findings list, so neither knows how
 many times the same spot has been changed — **that history is in your hands alone**, which is why
 you judge it.
 
@@ -467,7 +467,7 @@ number; other products land elsewhere, so do not put these three names on them.
 - **The length is decided by what the next reader does with it**: keep decisions, readings and
   pointers. Raw output and long quotes land in `.pf/nodes/<node uuid>/temp/`, and the report
   gives their paths
-- **A review report carries judgements, so be as detailed as it takes**: write each issue out
+- **A review report carries judgements, so be as detailed as it takes**: write each finding out
   paragraph by paragraph, so the fixing side can start work straight from it. Its length follows
   "can someone start work from this", and line count is not the measure
 - The execution and fix reports are receipts: what was done, where it changed, the readings that
@@ -486,7 +486,7 @@ number; other products land elsewhere, so do not put these three names on them.
   separately makes the reader leaf through them one by one
 
 The usual size: the Execute and fix reports run to tens of lines, and `review-{N}.md` runs from
-tens to hundreds depending on how many issues there are. Over that size, first see whether data,
+tens to hundreds depending on how many findings there are. Over that size, first see whether data,
 long quotes or old readings were moved into the body — **do not rush to delete judgements**. The
 node's `run.md` is the node-level receipt: what was done, the change list, the decision list, the
 known unresolved items; the round's detail is already in the report set, so pointers are enough.
@@ -650,7 +650,7 @@ mode's design, see `docs/conduct-state.md` "the two ways in"; to change it,
 |---|---|
 | `off` | work straight in the main tree, with no fork and no merge-back steps. There is no isolation, so a project with several lines side by side, or `parallel` > 1, does not use this mode |
 | `fork` (the default) | a fresh worktree per node, deleted clean once the close's merge-back is done — everything below this line is this mode |
-| `reuse` | not supported by the tool: on reading this mode, stop and hand it to the user — change the mode, or give the tool a pool first. Do not patch it up with your own `git worktree add`: the close's check, which reads the FORK record, will not pass |
+| `reuse` | not supported by the tool: on reading this mode, stop and hand it to the user — change the mode, or have the tool grow a standing set of worktrees first. Do not patch it up with your own `git worktree add`: the close's check, which reads the FORK record, will not pass |
 
 **Before work starts, prepare's last step is the fork**:
 
@@ -732,9 +732,9 @@ quotes, so a backslash needs one more layer of escaping.
   set of commands the project docs name). **A reading you did not measure has its key deleted whole**
   — a missing number reads as "not known this run", and a 0 reads as "already measured at zero",
   which makes a real debt look paid off.
-- The pool's weighted sum is computed by the tool itself and does not go into the note (you do not
-  fill it in); for a live reading or the conventions, see
-  [`../shared/pf/pool.md`](../shared/pf/pool.md).
+- A reading whose declaration draws on a source other than the ticket is computed by whatever owns
+  that source, so it never appears on the form and you never fill it in; which features are
+  installed, and what each one reads, is what `pf doctor` lists.
 
 ## The dispatch path
 
@@ -761,8 +761,6 @@ checkout root prints it), not under the current project's `docs/`.
 - The contract and the design: `docs/conduct-state.md` — the full set of `next`'s actions, the
   close's two ways in and the invariants are all in it (`holding` is a set of nodes, `parallel`
   is this line's cap)
-- The pool (the issue store)'s tools and conventions:
-  [`../shared/pf/pool.md`](../shared/pf/pool.md)
 - Method skills: `~/.agents/skills/<name>/SKILL.md` — named by the spec's `method: ` line; this is
   the only place a name turns into a path
 - Dispatch and authentication: `docs/conduct-dsh-dispatch.md`

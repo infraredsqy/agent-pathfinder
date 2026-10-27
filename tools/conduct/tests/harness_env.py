@@ -89,7 +89,6 @@ def shipped_sources():
             + sorted((CONDUCT_DIR / 'state').glob('*.py'))
             + sorted((CONDUCT_DIR / 'ledger_merge').glob('*.py'))
             + sorted((TOOLS_DIR / 'dag').glob('*.py'))
-            + sorted((TOOLS_DIR / 'issue').glob('*.py'))
             + sorted((TOOLS_DIR / 'shared').glob('*.py'))
             + sorted((TOOLS_DIR / 'bin').glob('*.py')))
 

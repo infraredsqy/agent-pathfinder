@@ -13,9 +13,11 @@ import sys
 from pathlib import Path
 
 # Bootstrap: the loader is fetched by path too, so every file has to carry this paragraph itself
-# (see `shared/loader.py`).
+# (see `shared/loader.py`). This file sits at `<checkout>/plugins/<name>/tools/`, so the tree's one
+# `shared/` is three levels up: a plugin lives inside a checkout and reads that checkout's shared
+# libraries, exactly like the tools under `<checkout>/tools/` do.
 HERE = Path(__file__).resolve().parent
-SHARED = HERE.parent / 'shared'
+SHARED = HERE.parents[2] / 'tools' / 'shared'
 
 _LOADER = None
 

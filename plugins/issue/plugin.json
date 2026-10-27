@@ -4,6 +4,17 @@
   "enable_knob": "issue_pool",
   "timing": "close",
   "action": "insert",
+  "commands": {
+    "issue": {
+      "summary": "the issue pool",
+      "keep_name": false
+    }
+  },
+  "sources": {
+    "pool": {
+      "by": "pool_weight"
+    }
+  },
   "knobs": {
     "issue_pool": {
       "kind": "switch",

@@ -11,7 +11,7 @@ disable-model-invocation: true
 > 我解决什么：池子的读写与判定——收一条、看现状、定 autofix/external、把要拍板的摆到用户面前
 > 我派不派 subagent：不派。要修走 `/pf-issue-repair`，要扫走 `/pf-issue-scan`
 
-工具与口径见 [`../shared/pf/pool.md`](../shared/pf/pool.md)：命令只走 `pf issue`，动手前先 `--help`。
+工具与口径见 [`../pf-issue-repair/pool.md`](../pf-issue-repair/pool.md)：命令只走 `pf issue`，动手前先 `--help`。
 
 ## 进门先认意图
 
@@ -48,7 +48,7 @@ disable-model-invocation: true
 | 场景 | 处理 |
 |---|---|
 | 深聊某条的实现细节 | 建议转 `/engineering` |
-| 大规模重构信号 | 单独立一条（阈值与口径见 [`../shared/pf/pool.md`](../shared/pf/pool.md)），建议转 `/engineering` |
+| 大规模重构信号 | 单独立一条（阈值与口径见 [`../pf-issue-repair/pool.md`](../pf-issue-repair/pool.md)），建议转 `/engineering` |
 | 要修一批 | `/pf-issue-repair` |
 | 池子该刷新了 | `/pf-issue-scan` |
 | 该进图的新功能 | `/pf-route` |

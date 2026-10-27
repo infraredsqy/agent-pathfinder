@@ -8,7 +8,7 @@ force right now, and only then start. Do not read `instructions.json`; run the c
 
 ## What you hold
 
-- The list of problems to fix: the **file path** of the issue list the conductor gave you — read
+- The list of problems to fix: the **file path** of the findings list the conductor gave you — read
   the text, the line numbers and the arguments for yourself, and the discipline is below.
 - The conclusions already settled above: one sentence each, naming which section it landed in —
   the conductor gives them in the prompt, so follow them and do not derive them again.
@@ -69,7 +69,7 @@ was settled above, one line says which spot and how it actually landed.
 
 Each item gets one line of proof reading (which scenario was built, what it produced). The list is
 followed by two lines: the verification results (the actual commands + counts), and the departures
-from the issue list ("no departures" when there are none). A guide to size: tens of lines in all.
+from the findings list ("no departures" when there are none). A guide to size: tens of lines in all.
 
 The proving scripts and raw output land in `.pf/nodes/<node uuid>/temp/`, each file with one first
 line saying what it is and what it is for — the next person to look relies on that line to know

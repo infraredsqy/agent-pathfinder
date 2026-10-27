@@ -72,9 +72,14 @@ pf next --spawn
 ```pwsh
 cd tools
 python -m unittest discover -s dag/tests -t .
-python -m unittest discover -s issue/tests -t .
 python -m unittest discover -s shared/tests -t .
 python -m unittest discover -s conduct/tests -t .
+```
+
+插件自己的套件是插件自己的：在仓库根上跑，top level 指向插件的 `tools/`——插件是一个文件夹，它的测试跟着它走。
+
+```pwsh
+python -m unittest discover -s plugins/issue/tools/tests -t plugins/issue/tools
 ```
 
 契约文档位于 `docs/`（中文）。

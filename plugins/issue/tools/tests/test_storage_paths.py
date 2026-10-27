@@ -1,4 +1,4 @@
-"""Path binding in `tools/issue/storage.py`: importing binds no project, and the pool is only
+"""Path binding in this plugin's `tools/storage.py`: importing binds no project, and the pool is only
 readable after a name is given.
 
 The CLI goes through `configure(cwd)` in `issue_manager.py main()` (`test_weight.py` and the conduct
@@ -8,8 +8,8 @@ exactly the project that was named.
 
 How to run (either works):
 
-    python -m unittest discover -s issue/tests -t .      (cwd in tools/)
-    python issue/tests/test_storage_paths.py
+    python -m unittest discover -s plugins/issue/tools/tests -t plugins/issue/tools
+    python plugins/issue/tools/tests/test_storage_paths.py
 """
 
 from __future__ import annotations

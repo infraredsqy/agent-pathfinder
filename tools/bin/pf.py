@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """`pf`: one command in front of the tools.
 
-Every skill says `pf next`, `pf handoff`, `pf issue top`: where the tools live is resolved here, once,
+Every skill says `pf next`, `pf handoff`, `pf dag add`: where the tools live is resolved here, once,
 from this file's own location, so the prose reads the same on every machine.
 
 Everything else forwards to a tool, keeping the tool's own subcommand names so the docs stay
@@ -25,7 +25,6 @@ HERE = Path(__file__).resolve().parent
 TOOLS = HERE.parent
 CONDUCT = TOOLS / 'conduct'
 DAG = TOOLS / 'dag' / 'dag-manage.py'
-ISSUE = TOOLS / 'issue' / 'issue_manager.py'
 STATE_MANAGE = CONDUCT / 'state-manage.py'
 HANDOFF = CONDUCT / 'handoff.py'
 CONDUCT_PIPELINE = CONDUCT / 'conduct_pipeline.py'
@@ -115,11 +114,10 @@ FORWARD_VERBS = (
 )
 
 #: The groups: a word whose remaining argv names one of its own verbs. Which verbs those are is the
-#: parser behind the group -- `pf cycle --help`, `pf issue --help` -- never a list kept here.
+#: parser behind the group -- `pf cycle --help`, `pf dag --help` -- never a list kept here.
 FORWARD_GROUPS = (
     ('cycle', STATE_MANAGE, True, 'one line of work'),
     ('dag', DAG, False, 'the graph'),
-    ('issue', ISSUE, False, 'the issue pool'),
     ('config', STATE_MANAGE, True, "this machine's and this project's settings"),
     ('instruction', STATE_MANAGE, True, 'standing user instructions'),
     ('session', STATE_MANAGE, True, "a node's own conversations, which live on this machine only"),
@@ -199,7 +197,7 @@ pf -- the agent pipeline's own command
 
   Level 2 is a verb: it acts on the project or on the pipeline itself. Level 3 is a noun -- a record
   with an identity -- plus the verb that acts on it. So `pf init` and `pf next` are verbs, and
-  `pf cycle list`, `pf issue top`, `pf dag add` are a group's verbs.
+  `pf cycle list`, `pf dag add` are a group's verbs.
 
 """
 

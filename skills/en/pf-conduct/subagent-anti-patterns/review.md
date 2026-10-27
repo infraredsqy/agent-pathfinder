@@ -11,10 +11,10 @@ done.
 
 **Correction signal**: the workspace changed during this round, and your prompt only let you read.
 
-## `conduct-review-only-rechecks-last-issues` — rechecking only the last round, then PASS
+## `conduct-review-only-rechecks-last-round` — rechecking only the last round, then PASS
 
 **Symptom**: the second and third rounds only check whether the previous round's critical / minor
-issues are fixed, and report PASS as soon as they are.
+findings are fixed, and report PASS as soon as they are.
 
 **Correction signal**: this round's list holds only the previous round's few items.
 
@@ -23,14 +23,14 @@ issues are fixed, and report PASS as soon as they are.
 **Symptom**: "A is a prerequisite of B, and the spec never wrote A", so the report says "A needs
 to be added".
 
-**Correction signal**: an issue on the list asks for something the spec never mentioned.
+**Correction signal**: a finding on the list asks for something the spec never mentioned.
 
 ## `conduct-review-judges-other-nodes` — judging a prerequisite node or another node out of bounds
 
 **Symptom**: a prerequisite node's missing feature, or another node's work, is marked critical /
 minor.
 
-**Correction signal**: an issue's location falls outside this node's spec scope.
+**Correction signal**: a finding's location falls outside this node's spec scope.
 
 ## `conduct-review-accepts-preexisting-failure-claim` — taking the pre-existing claim at face value
 
@@ -55,7 +55,7 @@ not add up against the list.
 
 ## `conduct-review-copies-known-material` — copying material the reader already holds
 
-**Symptom**: one issue's location lists ten line numbers and every field after it lists them
+**Symptom**: one finding's location lists ten line numbers and every field after it lists them
 again; long stretches of the spec or the manuscript are quoted verbatim as "grounds"; it opens
 with a table of several files' `sha256` and line counts. Four hundred and more lines in a round,
 judgements making up less than half of it.

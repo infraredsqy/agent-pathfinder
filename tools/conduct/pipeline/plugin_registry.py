@@ -12,7 +12,7 @@ writes down to name one of its debts, and the words `pf` routes to it, live in t
 here.
 
 This module is the core's whole knowledge of plugins: the four knob kinds, the three timings, the
-two actions, the shape of a declared command, the two reading sources the core serves itself plus the
+two actions, the shape of a declared command, the one reading source the core serves itself plus the
 ones a declaration claims for its own, and the rules a declaration has to satisfy. No installed
 plugin's name appears here: names arrive from the declarations and are merged here for every reader
 (the writing side's validation, the candidates `--help` shows, the words `pf` routes, the ticket form,
@@ -67,16 +67,16 @@ ACTIONS = ('insert', 'block')
 #: pass a plain membership check and then never run -- a closed set that lies -- so it is a problem.
 CELLS = (('close', 'insert'), ('pick', 'insert'), ('dispatch', 'block'))
 
-#: The two reading sources the core serves itself: the number the worker reports in its ticket, and
-#: the pool a tool computes. A declaration may draw on either, and on nothing else it does not claim
-#: for itself (`SOURCES_GROUP`): the set of sources is these two plus the names the installed plugins
-#: claim, merged here for every reader.
-SOURCES = ('ticket', 'pool')
+#: The one reading source the core serves itself: the number the worker reports in its ticket. Every
+#: other number a reading may draw on is a name some declaration claims for itself (`SOURCES_GROUP`):
+#: the set of sources is this one plus the names the installed plugins claim, merged here for every
+#: reader.
+SOURCES = ('ticket',)
 
 #: The group a declaration claims reading sources of its own in: `{name: {by}}`. A claimed
 #: source is the claimant's: the number is computed by the implementation function `by` names, and the
 #: core only hands it on to the plugin that asked for it -- it does not read what the number means.
-#: The two names in `SOURCES` are the core's own and cannot be claimed (that would be a second home
+#: The names in `SOURCES` are the core's own and cannot be claimed (that would be a second home
 #: for the meaning the core already fixed); a name two plugins claim is `_conflicts`' problem.
 SOURCES_GROUP = 'sources'
 
@@ -268,7 +268,7 @@ def _one_word(value) -> bool:
 def _source_cells(decl: dict) -> dict:
     """One declaration's usable source claims: `{name: {by}}`, in declaration order.
 
-    A cell is usable when its name is one token, the name is not one of the core's own two, and it
+    A cell is usable when its name is one token, the name is not one of the core's own, and it
     states `by` as one word. Everything else is a declaration problem (`_declaration_problems`) and is
     not a source any reading may draw on -- a broken claim is named by the doctor and skipped by the
     merge, the same way a broken knob cell is.
@@ -288,7 +288,7 @@ def _served(decl: dict) -> tuple:
     """What one declaration's readings may draw on: the core's own two, then the names it claims.
 
     One declaration only. A source another plugin claims is not in this tuple: a claimed name is the
-    claimant's, not a pool every reading may reach into, so B's reading on A's source stays a
+    claimant's, not a well every reading may reach into, so B's reading on A's source stays a
     declaration problem (the same answer as a name nobody claims).
     """
     return (*SOURCES, *_source_cells(decl))
@@ -501,7 +501,7 @@ def validate() -> list:
     """Every problem the installed plugins have: the doctor's list, and nothing that raises.
 
     Covered: the plugins directory itself, each declaration's own shape and references (a reading's
-    source is one of the core's two or one its own declaration claims; a claim names the function that
+    source is one of the core's own or one its own declaration claims; a claim names the function that
     computes the number), the names two plugins may not share, an implementation file that is missing,
     and an implementation that failed to load at runtime. An unknown timing or action is stated here
     rather than silently dropped: the runtime skips that cell, and this is where a human reads why.
@@ -526,9 +526,9 @@ class _StandIn:
     configured its knobs but holds nothing yet would: a declared knob reads the first value its cell
     allows (a `number` / `integer` as 1, a `word` as its first declared word, a `switch` as `on`), a
     declared reading the core hands a number for reads 1 -- the ticket's, and one drawn on a source
-    this declaration claims -- the line is in service with no tags, and the graph is empty. A core
-    source the implementation measures itself (`pool`) reads nothing here, exactly as no door answers
-    for it: the stand-in says what the real context would say.
+    this declaration claims -- the line is in service with no tags, and the graph is empty. A reading
+    on a source this declaration neither is served nor claims reads nothing here, exactly as the real
+    context would answer it: the stand-in says what the real context would say.
 
     The line carries no tags on purpose: which line a plugin judges is its own business, read off
     the cycle it is handed, and the core guessing a tag on its behalf would be the core naming a
@@ -869,9 +869,9 @@ def readings() -> list:
 
     Declaration order inside one plugin, plugins in folder order -- the order the declarations were
     written in, which is the order a form or a judgement should walk them in. A reading whose source
-    is neither one of the core's two nor a source its own declaration claims is dropped (the doctor
+    is neither one of the core's own nor a source its own declaration claims is dropped (the doctor
     reports it). `by` is the implementation function that computes the number for a claimed source,
-    and `''` for the core's own two -- the door that hands the number over reads it from here.
+    and `''` for the core's own -- the door that hands the number over reads it from here.
     """
     out = []
     for plugin in load_all():
@@ -909,7 +909,7 @@ def sources() -> list:
 
     Folder order then declaration order, the same order every other merged table has. A name two
     plugins claim is `_conflicts`' problem and the first folder keeps it, exactly like a knob's or a
-    command's first claim. The core's own two are not here: `SOURCES` is their one home, and a claim
+    command's first claim. The core's own are not here: `SOURCES` is their one home, and a claim
     that named one of them is a declaration problem.
     """
     out = []
@@ -927,10 +927,10 @@ def sources() -> list:
 
 
 def source_names() -> list:
-    """Every reading source in play right now: the core's own two, then the names the plugins claim.
+    """Every reading source in play right now: the core's own, then the names the plugins claim.
 
-    The whole set, for whoever asserts that the core names no third one -- not the set a reading is
-    judged against: that one is per declaration (`_served`, the core's two plus the names that
+    The whole set, for whoever asserts that the core names no other one -- not the set a reading is
+    judged against: that one is per declaration (`_served`, the core's own plus the names that
     declaration itself claims), so a name one plugin claims is never handed to another plugin's
     reading.
     """

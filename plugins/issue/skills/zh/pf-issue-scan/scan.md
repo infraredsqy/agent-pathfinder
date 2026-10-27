@@ -29,7 +29,7 @@
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `id` | string | 唯一 ID（见上） |
-| `severity` | string | P0 / P1 / P2 / P3（口径见 [`../shared/pf/pool.md`](../shared/pf/pool.md)） |
+| `severity` | string | P0 / P1 / P2 / P3（口径见 [`../pf-issue-repair/pool.md`](../pf-issue-repair/pool.md)） |
 | `module` | string | 模块名（如 `core/export`、`export`、`ui`） |
 | `title` | string | 简短标题（≤30 字） |
 | `description` | string | 一句话说清是什么毛病 |

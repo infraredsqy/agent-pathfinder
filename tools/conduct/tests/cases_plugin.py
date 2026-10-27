@@ -15,7 +15,7 @@ What this file pins, in the order the criteria are stated:
     runtime skips it;
   * **a source a plugin claims**: a reading may draw on a source its own declaration claims, whose
     number the implementation function it names computes -- the implementation reaches that number
-    through the reading door, the note's value is not consulted, and the core names no third source;
+    through the reading door, the note's value is not consulted, and the core names no other source;
     a source nobody claims, and one the core already serves, are the validator's to report;
   * **the command face**: a folder may carry words instead of a timing -- `commands()` is where they
     are merged for `pf`, a declaration that cannot be read contributes none of them, a folder whose
@@ -709,7 +709,7 @@ class TestASourceAPluginClaims(FeatureBase):
 
     The criteria in order: a declared source of the plugin's own passes the doctor and reaches the
     implementation at the close; a source nobody claims is named by the doctor and skipped at runtime;
-    two plugins may not claim one name; the core names no third source. The numbers the cases build
+    two plugins may not claim one name; the core names no other source. The numbers the cases build
     with are deliberately not the note's: what proves the door is that the plugin's own function is
     where the answer came from.
     """
@@ -725,7 +725,7 @@ class TestASourceAPluginClaims(FeatureBase):
 
     def test_a_claimed_source_passes_the_doctor_and_reaches_the_close(self):
         """A source of the plugin's own, end to end: the validator has nothing to say, the merged table
-        carries the name beside the core's two, the session is never asked for that number -- and the
+        carries the name beside the core's own, the session is never asked for that number -- and the
         close hands the implementation the number its own function computes, not the one the note
         happens to carry for that key."""
         self.one()
@@ -787,14 +787,14 @@ class TestASourceAPluginClaims(FeatureBase):
         self.assertEqual([NODE2], sb.holding_ids())
 
     def test_a_source_the_core_serves_cannot_be_claimed(self):
-        """The core's two names are its own statement of where a number comes from: a claim on one of
-        them is a second home for that meaning, and the doctor names it."""
-        self.one(decl=claimed_decl(source='pool'))
+        """The core's own name is its statement of where a number comes from: a claim on it is a
+        second home for that meaning, and the doctor names it."""
+        self.one(decl=claimed_decl(source='ticket'))
 
         problems = '\n'.join(pipeline.registry().validate())
 
         self.assertIn("plugin 'feed'", problems)
-        self.assertIn("source 'pool' is one of the core's own", problems)
+        self.assertIn("source 'ticket' is one of the core's own", problems)
 
     def test_a_reading_cannot_draw_on_another_plugins_source(self):
         """A source name belongs to the plugin that claimed it: another plugin's reading on that name
@@ -830,15 +830,15 @@ class TestASourceAPluginClaims(FeatureBase):
         self.assertIn(f"source {CLAIMED_SOURCE!r} is claimed by both 'a-one' and 'b-two'", problems)
         self.assertEqual(['a-one'], [claim['plugin'] for claim in pipeline.registry().sources()])
 
-    def test_the_core_names_no_third_source(self):
-        """The core serves its own two and merges the rest from the declarations: the fixture's source
+    def test_the_core_names_no_other_source(self):
+        """The core serves its own one and merges the rest from the declarations: the fixture's source
         and the function it names appear in no shipped file."""
         self.one()
         registry = pipeline.registry()
 
-        self.assertEqual(('ticket', 'pool'), registry.SOURCES,
-                         "the core's own sources grew a third name")
-        self.assertEqual(['ticket', 'pool', CLAIMED_SOURCE], registry.source_names())
+        self.assertEqual(('ticket',), registry.SOURCES,
+                         "the core's own sources grew a second name")
+        self.assertEqual(['ticket', CLAIMED_SOURCE], registry.source_names())
         spelled = [path.relative_to(TOOLS_DIR).as_posix() for path in shipped_sources()
                    if CLAIMED_SOURCE in (text := path.read_text(encoding='utf-8'))
                    or CLAIMED_BY in text]

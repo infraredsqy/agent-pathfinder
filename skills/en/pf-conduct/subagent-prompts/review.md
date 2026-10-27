@@ -22,9 +22,9 @@ down the implementation and the evidence one at a time: what is met is marked OK
 met, or met in a way that cannot be argued, is reported critical.
 
 When the node is a **debt-clearing** one (the spec carries a `method: ` line), the goal is
-the one standard the spec writes: this batch of issues reaches a terminal status, or that reading
-comes back under the line. Check it against the tools of
-[`../../shared/pf/pool.md`](../../shared/pf/pool.md), not just against a diff.
+the one standard the spec writes: this batch of entries reaches a terminal status, or that reading
+comes back under the line. Check it against the tool that owns that record — its own skill says
+which one it is, and `pf doctor` lists what is installed — not just against a diff.
 
 The basic items go by in the same round: functional completeness; a passing reading from the
 project **test tier** in the conductor's supplement (`full` tier = the whole fast lane green;
@@ -44,11 +44,11 @@ has to be there first for the work to count as handed over.
   full run at the node's close is the conductor's to run — do not go and run it yourself.
 - While running, glance at how long it takes: a single command over 10 seconds is recorded as one
   minor, with its measured seconds attached.
-- Run the node's whole checklist every round; confirming only the previous round's issues does not
+- Run the node's whole checklist every round; confirming only the previous round's findings does not
   count, so run it again.
 - A pre-existing failure unrelated to this change gets one line — do not re-run for it, and do not
-  count it as this round's issue.
-- A missing thing outside the spec scope gets one sentence only and does not go into the issues; a
+  count it as this round's finding.
+- A missing thing outside the spec scope gets one sentence only and does not go into the findings; a
   cross-boundary dependency worth the conductor's knowing is stated in one sentence of plain words
   at the end of the report.
 
@@ -68,7 +68,7 @@ has to be there first for the work to count as handed over.
 
 ## What not to do
 
-- Do not fix problems: the fix goes to a new Execute, working from your issue list.
+- Do not fix problems: the fix goes to a new Execute, working from your findings list.
 - Do not `git commit`.
 
 ## The report
@@ -76,11 +76,11 @@ has to be there first for the work to count as handed over.
 The whole report lands in the node directory's `review-{N}.md` — N is the review's round number
 (counted out of the `review-*.md` files already in the node directory), and the conductor names
 the file in the supplement; when it names none, use that number. The first line is
-`Issue Count: critical={N}, minor={M}`, and from the second line on, one line per **identity
+`Finding Count: critical={N}, minor={M}`, and from the second line on, one line per **identity
 marker**:
 
 ```
-Issue Count: critical=2, minor=5
+Finding Count: critical=2, minor=5
 C1 parser.md:209
 C2 missing: verify/run.mjs
 m1 config.json#/limits/15/retries
@@ -94,7 +94,7 @@ if **the next round can write the same one**. The conductor uses it to see wheth
 keeps producing problems; line numbers drift with edits, a short name does not.
 
 Then list the problems by critical / minor. **These are the fixing side's construction notes, so
-write them in detail**: one issue per paragraph, saying the location, the symptom, the grounds and
+write them in detail**: one finding per paragraph, saying the location, the symptom, the grounds and
 the effect, so the fixing side can start work straight from it; quote the spec's own sentence
 where it should be quoted.
 

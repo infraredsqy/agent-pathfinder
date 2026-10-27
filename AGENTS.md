@@ -12,12 +12,12 @@ development discipline (the dispatch path is live ammunition).
   `~/.agents/skills` by junction. A skill bound to a plugin is not here: it lives in that plugin's
   own folder (`plugins/<name>/skills/<lang>/<method>/`) and is linked too, so it is
   installed and removed with the plugin.
-  Common cards are named after themselves (`subagents.md`, `pool.md`, `toolcraft.md`, …) —
+  Common cards are named after themselves (`philosophy.md`, `subagents.md`, `toolcraft.md`, …) —
   `AGENTS.md` / `CLAUDE.md` are host-reserved names, case-insensitive: whichever directory one
   falls into, the host injects it as instructions into every session that starts work there
 - tools/ — the `pf` command and its implementation: the `bin/` entry, the `conduct/` pipeline, the
-  `dag/` graph, the `issue/` pool, `shared/` for the pieces used across tools (libraries only, no
-  entries)
+  `dag/` graph, `shared/` for the pieces used across tools (libraries only, no entries). A tool a
+  plugin ships is not here either: it lives in that plugin's own folder (`plugins/<name>/tools/`)
 - install.ps1 — install and self-check: link the skills, put `pf` on PATH; idempotent, re-running
   repairs it
 - .gitignore — the blocklist for workspace litter

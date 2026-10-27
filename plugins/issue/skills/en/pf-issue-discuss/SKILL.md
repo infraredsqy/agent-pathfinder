@@ -11,7 +11,7 @@ disable-model-invocation: true
 > What I am for: reading, writing and ruling on the pool — take one entry in, look at the state, rule autofix/external, and put what needs the call in front of the user
 > Do I dispatch subagents: no. To repair, go to `/pf-issue-repair`; to scan, go to `/pf-issue-scan`
 
-Tools and conventions are in [`../shared/pf/pool.md`](../shared/pf/pool.md): commands go through
+Tools and conventions are in [`../pf-issue-repair/pool.md`](../pf-issue-repair/pool.md): commands go through
 `pf issue` only, and run `--help` before touching anything.
 
 ## Read the intent at the door
@@ -62,7 +62,7 @@ More burns the judgement, so what is over goes into the next batch.
 | Situation | What to do |
 |---|---|
 | Talking a single entry's implementation through at length | suggest moving to `/engineering` |
-| A large-scale refactor signal | an entry of its own (threshold and conventions in [`../shared/pf/pool.md`](../shared/pf/pool.md)), and suggest moving to `/engineering` |
+| A large-scale refactor signal | an entry of its own (threshold and conventions in [`../pf-issue-repair/pool.md`](../pf-issue-repair/pool.md)), and suggest moving to `/engineering` |
 | A batch to repair | `/pf-issue-repair` |
 | The pool is due for a refresh | `/pf-issue-scan` |
 | A new feature that should enter the graph | `/pf-route` |

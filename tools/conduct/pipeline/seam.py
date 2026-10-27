@@ -38,11 +38,6 @@ def dag(*args) -> list:
     return _entry()['_dag'](*args)
 
 
-def issue(*args) -> list:
-    """The entry's `_issue`: an argv that runs `issue_manager.py`."""
-    return _entry()['_issue'](*args)
-
-
 def as_text(argv) -> str:
     """The entry's `_as_text`: an argv as the one readable line its errors quote."""
     return _entry()['_as_text'](argv)

@@ -243,8 +243,9 @@ def _read(path: Path, label: str):
 def _write(kind: str, path: Path, payload: bytes) -> bool:
     """Land the merged bytes under the project's ledger lock; False when the lock never came free.
 
-    `.pf/meta/ledger.lock` is what makes this driver exclude the mutating commands (conduct / dag /
-    issue): the driver rewrites the WHOLE file, and a whole-file write racing another whole-file write
+    `.pf/meta/ledger.lock` is what makes this driver exclude the mutating commands (conduct / dag,
+    and whatever an installed plugin keeps a record with): the driver rewrites the WHOLE file, and a
+    whole-file write racing another whole-file write
     silently erases one side's records. The lock itself is `tools/shared/ledgerlock.py` -- one
     implementation for every writer of a record here -- and git's cwd (the worktree the merge runs in)
     maps to the main tree by the store's own rule, which is where the lock (and the ledger) live. A

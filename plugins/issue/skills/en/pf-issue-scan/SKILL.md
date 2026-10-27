@@ -17,7 +17,7 @@ old debt is still there. **It fixes nothing, discusses nothing with the user and
 `/pf-issue-discuss` (what was ruled at the moment of the scan is stale by the time anyone really
 works on it).
 
-The pool's tools and conventions are in [`../shared/pf/pool.md`](../shared/pf/pool.md).
+The pool's tools and conventions are in [`../pf-issue-repair/pool.md`](../pf-issue-repair/pool.md).
 
 ## Prepare
 
@@ -76,7 +76,7 @@ Only once the whole batch is back do you go on.
 - On running into "a new feature that should enter the graph", record one line for the user; build
   no node yourself, that is `/pf-route`'s work
 - A large-scale refactor signal gets an entry of its own, and its threshold and criterion are in
-  [`../shared/pf/pool.md`](../shared/pf/pool.md)
+  [`../pf-issue-repair/pool.md`](../pf-issue-repair/pool.md)
 
 ## Anti-patterns
 

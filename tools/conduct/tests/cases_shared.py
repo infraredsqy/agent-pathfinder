@@ -23,16 +23,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import Base, NODE  # noqa: E402
-from harness import (HANDOFF_PY, SIGNAL_PY, TOOLS_DIR, _child_env, _fresh_module, _run_proc,
-                     init_markers, load_pipeline, run_dag, run_signal, shared_loader,
-                     shipped_sources)  # noqa: E402
+from harness import (HANDOFF_PY, PLUGINS_DIR, SIGNAL_PY, TOOLS_DIR, _child_env, _fresh_module,  # noqa: E402
+                     _run_proc, init_markers, load_pipeline, requires_plugin, run_dag, run_signal,
+                     shared_loader, shipped_sources)  # noqa: E402
 
 __all__ = ['TestOneSharedDoor', 'TestOneReaderOneWording', 'TestTheMarkerWaitsOutAReader',
            'TestTheMarkerContract', 'TestOneWriterPerRecord']
 
 CONDUCT_DIR = TOOLS_DIR / 'conduct'
 SHARED_DIR = TOOLS_DIR / 'shared'
-ISSUE_MANAGE = TOOLS_DIR / 'issue' / 'issue_manager.py'
+#: The pool tool, which moved into its plugin's own folder: a plugin is a folder with the tool it
+#: needs inside it, so the only thing that points at it from outside is a path into `plugins/`.
+ISSUE_MANAGE = PLUGINS_DIR / 'issue' / 'tools' / 'issue_manager.py'
 SPAWN_DIR = CONDUCT_DIR / 'spawn'
 
 
@@ -321,6 +323,7 @@ class TestOneReaderOneWording(Base):
         self.assertIn('ideas.json is not valid UTF-8', proc.stderr)
         self.assertNotIn('Traceback', proc.stderr)
 
+    @requires_plugin('issue')
     def test_the_pool_tool_refuses_a_non_utf8_pool_instead_of_dying(self):
         tmp = tempfile.TemporaryDirectory(prefix='pf-nonutf8-issue-')
         self.addCleanup(tmp.cleanup)

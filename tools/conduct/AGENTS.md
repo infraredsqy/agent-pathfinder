@@ -11,7 +11,9 @@
   driver's body) — plus `plugins/` at the repository root, which holds the plugins and no core
   machinery.
 - A **plugin** is a folder under `plugins/` with two files in it — its declaration (`plugin.json`)
-  and its implementation (`impl.py`) — with the folder's name as its identity.
+  and its implementation (`impl.py`) — plus whatever else belongs to it: the method skills its
+  declaration names, and its own tools under `tools/` (loaded by path, the same way this tree's own
+  are). The folder's name is its identity.
   `pipeline/plugin_registry.py` is the core's whole knowledge of them — four knob kinds, three
   timings, two actions, the reading sources it serves itself plus the ones a declaration claims, the
   shape of a command a declaration may claim, and the rules a declaration has to satisfy — and it is

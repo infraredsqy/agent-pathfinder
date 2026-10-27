@@ -51,8 +51,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from harness import (GIT, TOOLS_DIR, _child_env, _run_command, git, init_markers, run_argv,
-                     write_skill)
+from harness import (GIT, TOOLS_DIR, _child_env, _run_command, git, init_markers, requires_plugin,
+                     run_argv, write_skill)
 
 __all__ = ['TestPfCmdShim', 'TestDoctorRoot', 'TestDoctorFeatures', 'TestPluginCommands',
            'TestCommandList']
@@ -769,7 +769,10 @@ class TestCommandList(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
+    @requires_plugin('issue')
     def test_issue_help_prints_the_parser_help(self):
+        """The word a folder contributes answers `--help` with the folder's own tool's text: `pf
+        <word> --help` is that tool's parser talking, which is what a plugin's word means."""
         verb, flag = pf('issue', 'help', cwd=self.dir), pf('issue', '--help', cwd=self.dir)
         self.assertEqual(0, verb.returncode, verb.stderr)
         self.assertEqual(0, flag.returncode, flag.stderr)

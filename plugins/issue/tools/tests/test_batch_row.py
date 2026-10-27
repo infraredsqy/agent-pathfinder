@@ -17,8 +17,8 @@ equals the "key absent" column here.
 
 How to run (either works):
 
-    python -m unittest discover -s issue/tests -t .      (cwd in tools/)
-    python issue/tests/test_batch_row.py
+    python -m unittest discover -s plugins/issue/tools/tests -t plugins/issue/tools
+    python plugins/issue/tools/tests/test_batch_row.py
 """
 
 from __future__ import annotations

@@ -35,7 +35,7 @@ carry:
 | Field | Type | Meaning |
 |------|------|------|
 | `id` | string | the unique ID (see above) |
-| `severity` | string | P0 / P1 / P2 / P3 (the conventions are in [`../shared/pf/pool.md`](../shared/pf/pool.md)) |
+| `severity` | string | P0 / P1 / P2 / P3 (the conventions are in [`../pf-issue-repair/pool.md`](../pf-issue-repair/pool.md)) |
 | `module` | string | the module name (like `core/export`, `export`, `ui`) |
 | `title` | string | a short title (≤30 characters) |
 | `description` | string | one sentence saying what the trouble is |

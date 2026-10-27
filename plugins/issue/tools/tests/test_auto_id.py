@@ -9,8 +9,8 @@ answers and share no branch.
 
 How to run (either works):
 
-    python -m unittest discover -s issue/tests -t .      (cwd in tools/)
-    python issue/tests/test_auto_id.py
+    python -m unittest discover -s plugins/issue/tools/tests -t plugins/issue/tools
+    python plugins/issue/tools/tests/test_auto_id.py
 """
 
 from __future__ import annotations

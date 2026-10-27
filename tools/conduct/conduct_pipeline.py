@@ -103,10 +103,6 @@ def _dag(*args) -> list:
     return [sys.executable, str(DAG_MANAGE), *[str(a) for a in args]]
 
 
-def _issue(*args) -> list:
-    return [sys.executable, str(ISSUE_MANAGE), *[str(a) for a in args]]
-
-
 def _as_text(cmd: list) -> str:
     return ' '.join(str(c) for c in cmd)
 
@@ -181,9 +177,9 @@ def _loader():
 def _tool_path(env_var: str, default):
     """`tools/shared/toolpath.py`: `<env var>` when it is set, else the neighbour this tree ships.
 
-    The two tools below are the tree's parts this module only calls; one rule, resolved once, is what
-    keeps `DSH_CONDUCT_DAG_MANAGE` and `DSH_CONDUCT_ISSUE_MANAGE` meaning the same thing here as they
-    do in the merge driver.
+    The one tool below is a part of this tree that this module only calls; one rule, resolved once,
+    is what keeps `DSH_CONDUCT_DAG_MANAGE` meaning the same thing here as it does in the merge
+    driver.
     """
     toolpath = _loader().load_shared('toolpath')
     return toolpath.tool_path(env_var, default)
@@ -195,11 +191,6 @@ def _tool_path(env_var: str, default):
 # this module having a second search path of its own: a silent fallback into `~/.agents` would also
 # hide the failure that matters -- a shipped tree whose sibling `dag/` went missing.
 DAG_MANAGE = _tool_path('DSH_CONDUCT_DAG_MANAGE', CONDUCT.parent / 'dag' / 'dag-manage.py')
-#: `issue_manager.py` owns the issue pool (`.pf/issues/issues.json`) and the one number a plugin
-#: reads out of it at the close (the pool's weighted debt, which the tool computes itself). Same rule
-#: as `DAG_MANAGE` above -- the sibling `issue/` directory of the shipped tree, with
-#: `DSH_CONDUCT_ISSUE_MANAGE` for a tree that keeps these scripts elsewhere.
-ISSUE_MANAGE = _tool_path('DSH_CONDUCT_ISSUE_MANAGE', CONDUCT.parent / 'issue' / 'issue_manager.py')
 
 
 def _load_impl():

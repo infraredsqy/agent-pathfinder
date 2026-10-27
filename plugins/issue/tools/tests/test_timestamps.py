@@ -7,8 +7,8 @@ goes red -- this case guards how fine the timestamps in the record are.
 
 How to run (either works):
 
-    python issue\tests\test_timestamps.py
-    python -m unittest discover -s issue/tests -t .      (cwd in tools/)
+    python -m unittest discover -s plugins/issue/tools/tests -t plugins/issue/tools
+    python plugins/issue/tools/tests/test_timestamps.py
 """
 
 from __future__ import annotations
@@ -23,8 +23,11 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 
-TOOLS = Path(__file__).resolve().parent.parent.parent
-TOOL = TOOLS / 'issue' / 'issue_manager.py'
+#: This plugin's own `tools/` -- the tool this case drives, and the way up to the checkout's one
+#: `shared/` (three levels, the same walk the tool itself does: see `shared/loader.py`).
+HERE = Path(__file__).resolve().parent.parent
+TOOL = HERE / 'issue_manager.py'
+SHARED = HERE.parents[2] / 'tools' / 'shared'
 #: UTC, microseconds, a literal `Z`. Hard-coded here, not read from `clock.ISO_FMT`: reading it
 #: would let the assertion fall back with it once the source drops to seconds -- exactly the drift
 #: this case exists to stop.
@@ -32,7 +35,7 @@ SHAPE = r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z'
 
 
 def load_clock():
-    spec = importlib.util.spec_from_file_location('pf_shared_clock_case', TOOLS / 'shared' / 'clock.py')
+    spec = importlib.util.spec_from_file_location('pf_shared_clock_case', SHARED / 'clock.py')
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

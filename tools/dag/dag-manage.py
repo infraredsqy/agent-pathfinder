@@ -293,8 +293,9 @@ def _write(data: dict) -> None:
 # ── the cross-process ledger lock ─────────────────────────────────────────────
 # ideas.json is whole-file read-modify-write; two processes walking that at once means the later
 # write erases the earlier one. Every MUTATING command body holds the project's one lock across
-# its read → write -- the same `.pf/meta/ledger.lock` file conduct, the issue tool and a session
-# note's own writer use, so writes exclude each other across all of them. Reentrant per process
+# its read → write -- the same `.pf/meta/ledger.lock` file conduct and a session note's own writer
+# use, and every plugin tool that keeps a record here, so writes exclude each other across all of
+# them. Reentrant per process
 # (this body writes a node's note inside its own read-modify-write).
 
 

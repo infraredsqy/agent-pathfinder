@@ -2,10 +2,10 @@
 """The project's one cross-process ledger lock: `<project>/.pf/meta/ledger.lock`.
 
 The records this tree keeps are whole-file read-modify-write -- `state.json`, `ideas.json`,
-`instructions.json`, `issues.json`, a node's session note -- so two processes walking that sequence
-at once means the later write silently erases the earlier one. Every mutating command holds this one
-lock across its read -> write, which is what makes conduct, dag-manage, the issue tool and a note's
-own writer exclude each other.
+`instructions.json`, a node's session note, and the records an installed plugin keeps of its own --
+so two processes walking that sequence at once means the later write silently erases the earlier one.
+Every mutating command holds this one lock across its read -> write, which is what makes conduct,
+dag-manage, a note's own writer and every plugin tool that keeps a record here exclude each other.
 
     ledger_lock(ledger_dir, *, timeout=LEDGER_LOCK_TIMEOUT, gate=None)
 

@@ -7,8 +7,8 @@ nobody can move and the threshold could never come back under the line.
 
 How to run (either works):
 
-    python -m pytest tools/issue/tests/test_weight.py
-    python tools/issue/tests/test_weight.py
+    python -m unittest discover -s plugins/issue/tools/tests -t plugins/issue/tools
+    python plugins/issue/tools/tests/test_weight.py
 """
 
 from __future__ import annotations

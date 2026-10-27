@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
 import shutil
 import sys
 import tempfile
@@ -59,16 +58,12 @@ __all__ = [
     'TestTicketSwitch', 'TestTicketThresholds',
 ]
 
-#: The tool that owns the issue pool; the issue plugin asks it for the pool's number through this
-#: same CLI, out of a child process of its own.
-ISSUE_MANAGE = TOOLS_DIR / 'issue' / 'issue_manager.py'
+#: The tool that owns the issue pool. The pool moved into the plugin's own folder with everything
+#: else that is its business, so this is a path into `plugins/`: the plugin's implementation asks the
+#: tool for the pool's number through this same CLI, out of a child process of its own.
+ISSUE_MANAGE = PLUGINS_DIR / 'issue' / 'tools' / 'issue_manager.py'
 
-#: The tree's own switch for where that tool lives. A plugin asks for it by walking up from its own
-#: folder (`impl.py`), so a copy of the folder somewhere else needs this lever -- the same one a
-#: checkout kept outside this tree uses.
-ISSUE_TOOL_ENV = 'DSH_CONDUCT_ISSUE_MANAGE'
-
-#: The weights the issue tool gives a severity (`tools/issue/storage.py`). Stated here as the
+#: The weights the issue tool gives a severity (`plugins/issue/tools/storage.py`). Stated here as the
 #: EXPECTATION a fixture lays out, not as a copy of the tool: the pool's number is the sum over its
 #: entries, so a case can only produce a number by putting entries in.
 WEIGHTS = (('P0', 8), ('P1', 4), ('P2', 2), ('P3', 1))
@@ -144,9 +139,10 @@ class Debt:
     reading = ''
     tag = ''
     method = ''
-    #: Which source the number comes from -- one of the core's own two: `ticket` for a number a
-    #: session reports in its note, `pool` for one the pool tool computes -- and the knob after which
-    #: the note's form asks for it (`''` when the form never asks, because no session reports it).
+    #: Which source the number comes from -- the core's own `ticket` (a number a session reports in
+    #: its note), or a name the plugin's own declaration claims for a number its own tool computes
+    #: (`pool` for the issue plugin) -- and the knob after which the note's form asks for it (`''`
+    #: when the form never asks, because no session reports it).
     source = ''
     when_knob = ''
     #: The metric in the words the generated spec shows a reader, and the words that spec must carry
@@ -1108,28 +1104,25 @@ def plugins_only(name):
 
     The folder is COPIED into a throwaway directory and the scan is pointed there
     (`PF_PLUGINS_DIR`), because "the folder was deleted" is a state of THIS tree and the suite must
-    not delete the tree's own folder to produce it. A plugin that asks a tool beside the tree for its
-    number walks up from its OWN folder, so the copy would lose that path: that tool's own switch
-    (`ISSUE_TOOL_ENV`) is held for the block, which is the lever a checkout kept elsewhere uses.
+    not delete the tree's own folder to produce it. What the copy lands in is shaped like the
+    checkout it came from: `<tmp>/plugins/<name>/` is the folder, and the checkout's own
+    `tools/shared/` is copied beside it, because a plugin's tool walks up from its own place for the
+    shared libraries (`shared/loader.py`) -- a plugin folder is a part of a checkout, and a fixture
+    that handed it those libraries some other way would no longer be running the folder this
+    checkout ships.
     """
     source = PLUGINS_DIR / name
     assert source.is_dir(), f'{source} is not the shipped plugin folder'
     with tempfile.TemporaryDirectory(prefix='conduct-plugins-one-') as tmp:
-        shutil.copytree(source, Path(tmp) / name,
+        base = Path(tmp)
+        shutil.copytree(source, base / 'plugins' / name,
                         ignore=shutil.ignore_patterns('__pycache__'))
-        env_key = ISSUE_TOOL_ENV if name == POOL.plugin else None
-        old = os.environ.get(env_key) if env_key else None
-        if env_key:
-            os.environ[env_key] = str(ISSUE_MANAGE)
-        try:
-            with plugins_dir(tmp):
-                yield Path(tmp) / name
-        finally:
-            if env_key:
-                if old is None:
-                    os.environ.pop(env_key, None)
-                else:
-                    os.environ[env_key] = old
+        shared = base / 'tools' / 'shared'
+        shared.mkdir(parents=True)
+        for path in sorted((TOOLS_DIR / 'shared').glob('*.py')):
+            shutil.copyfile(path, shared / path.name)
+        with plugins_dir(base / 'plugins'):
+            yield base / 'plugins' / name
 
 
 class TestTheTwoLinesInOneClose(Base):

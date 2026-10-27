@@ -13,7 +13,7 @@ disable-model-invocation: true
 
 扫描只干两件事：找新债写进池子、确认旧债还在不在。**不修、不和用户讨论、不判 `decision`**——新条目一律留 `unknown`，判定晚一步由 `/pf-issue-discuss` 做（扫描那一刻判的，等真动手时早 stale 了）。
 
-池子的工具与口径见 [`../shared/pf/pool.md`](../shared/pf/pool.md)。
+池子的工具与口径见 [`../pf-issue-repair/pool.md`](../pf-issue-repair/pool.md)。
 
 ## 准备
 
@@ -50,7 +50,7 @@ disable-model-invocation: true
 - **只能由用户或指挥者跑**：这份技能要派 subagent；被派来的执行者读到它，停手回报
 - 不判 `decision`、不修代码、不改 spec、不进图——挑选与排序是 DAG 的事
 - 撞见「该进图的新功能」记一句给用户，别自己建节点，那是 `/pf-route` 的活
-- 大规模重构信号单独立一条，阈值与判据见 [`../shared/pf/pool.md`](../shared/pf/pool.md)
+- 大规模重构信号单独立一条，阈值与判据见 [`../pf-issue-repair/pool.md`](../pf-issue-repair/pool.md)
 
 ## 反模式
 

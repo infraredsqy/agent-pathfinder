@@ -12,7 +12,7 @@ disable-model-invocation: true
 > Do I dispatch subagents: yes, one layer (Fix / Review) and no more. An executor dispatched here reads this, stops and reports back — it does not work from it
 
 There is one place to draw material from: the pool. Tools and conventions are in
-[`../shared/pf/pool.md`](../shared/pf/pool.md). **The scope is not yours to set** — the pipeline
+[`./pool.md`](./pool.md). **The scope is not yours to set** — the pipeline
 node's spec, the few lines of "why it was inserted", or the user's sentence: whoever called you in
 sets it, and you do not widen it to everything yourself. Once the criterion is passed, stop.
 
@@ -74,7 +74,7 @@ is clearly harmless → recorded as a new entry for a later same-domain batch, a
 as usual.
 
 New debt run into while working is recorded into the pool as always (`add`, conventions in
-[`../shared/pf/pool.md`](../shared/pf/pool.md)), and then **its disposal is settled on the spot by
+[`./pool.md`](./pool.md)), and then **its disposal is settled on the spot by
 the table above**: what the same batch and the same domain can swallow is swallowed, and what
 cannot is settled as it really is. A freshly recorded entry counts into the readings as it really
 is — "it was just found" does not cancel that number.

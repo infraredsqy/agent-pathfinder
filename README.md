@@ -84,9 +84,15 @@ Each tool's suite runs from `tools/` — nothing is discovered under the `tools/
 ```pwsh
 cd tools
 python -m unittest discover -s dag/tests -t .
-python -m unittest discover -s issue/tests -t .
 python -m unittest discover -s shared/tests -t .
 python -m unittest discover -s conduct/tests -t .
+```
+
+A plugin's suite is the plugin's own: it runs from the checkout root, with the plugin's `tools/` as
+the top level — a plugin is a folder, and its tests move with it.
+
+```pwsh
+python -m unittest discover -s plugins/issue/tools/tests -t plugins/issue/tools
 ```
 
 The contract docs live in `docs/` (Chinese for now).

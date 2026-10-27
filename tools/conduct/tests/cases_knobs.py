@@ -76,29 +76,42 @@ def knobs():
 
 
 def write_plugin(plugins: Path, name: str, declaration: dict, impl: bool = True) -> Path:
-    """One plugin folder under `plugins/`: its declaration, and (by default) a trivial impl."""
+    """One plugin folder under `plugins/`: its declaration, and (by default) a trivial impl.
+
+    The trivial one answers both doors with "nothing from me this pass", and carries the function
+    `auditor_declaration` claims for its own source -- a claim names a function, and a fixture whose
+    implementation lacks it would be the validator's finding rather than this file's point.
+    """
     folder = plugins / name
     folder.mkdir(parents=True)
     (folder / 'plugin.json').write_text(json.dumps(declaration), encoding='utf-8')
     if impl:
         (folder / 'impl.py').write_text(
-            'def offer(ctx):\n    return None\n\n\ndef check(ctx):\n    return None\n',
+            'def offer(ctx):\n    return None\n\n\ndef check(ctx):\n    return None\n\n\n'
+            'def audit_feed(ctx):\n    return 1.0\n',
             encoding='utf-8')
     return folder
 
 
 def auditor_declaration(**knobs_extra) -> dict:
-    """A well-formed plugin: one number knob, one metric, and three readings of the two sources."""
+    """A well-formed plugin: one number knob, one metric, and three readings -- two of them the
+    worker's own (`source: ticket`) and one computed by a source the declaration claims for itself.
+
+    The core serves one source itself; every other number a reading draws on is a name its OWN
+    declaration claims, with the implementation function that computes it (`sources`). That is how a
+    plugin measures something the core has no way to measure.
+    """
     declaration = {
         'name': 'auditor',
         'timing': 'close',
         'action': 'insert',
         'knobs': {'audit_limit': {'kind': 'number'}},
+        'sources': {'audit_feed': {'by': 'audit_feed'}},
         'readings': {
             'audit_minutes': {'source': 'ticket', 'when_knob': 'audit_limit',
                               'ask': 'the minutes a full audit took'},
             'always_asked': {'source': 'ticket', 'ask': 'the number this one always wants'},
-            'pool_weight': {'source': 'pool'},
+            'audit_feed_weight': {'source': 'audit_feed'},
         },
         'metrics': {
             'audit_minutes': {'line': 'audit_limit', 'tag': 'audit:minutes',
@@ -357,8 +370,9 @@ class TestKnobTicketReadings(_Sandbox):
     def test_a_reading_whose_threshold_nobody_states_is_not_asked(self):
         self.assertEqual(['always_asked'],
                          knobs().ticket_readings(str(self.root)),
-                         'a pool-computed number is never asked of a worker, and a ticket reading '
-                         'behind an unconfigured threshold is measured for nothing')
+                         'a number a source this declaration claims computes is never asked of a '
+                         'worker, and a ticket reading behind an unconfigured threshold is measured '
+                         'for nothing')
 
     def test_a_stated_threshold_puts_its_reading_in_the_form(self):
         self.write_project({'audit_limit': 10})

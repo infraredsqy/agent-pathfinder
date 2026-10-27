@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """The one reader and the one atomic writer for this tree's JSON files.
 
-Every record the tools keep is JSON -- state, signals, the graph, the instructions, the issue pool,
-a node's session note, the broken-chain marker -- and every one of them is a whole-file write read
+Every record the tools keep is JSON -- state, signals, the graph, the instructions, a node's session
+note, the broken-chain marker, and whatever an installed plugin keeps of its own -- and every one of
+them is a whole-file write read
 by other processes (a second command, a test, a human's editor). So a write lands the same way
 everywhere:
 
