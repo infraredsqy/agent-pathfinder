@@ -25,10 +25,11 @@ the first case of each pass.
 
 Every case that needs a shipped declaration carries `requires_plugin(...)`: deleting that folder is a
 supported state of this tree (the core keeps closing and dispatching), so the behaviour cases skip
-rather than fail there. What the two plugins do to EACH OTHER -- a close that crosses both lines, and
-a tree that has lost one of the two folders -- is `TestTheTwoLinesInOneClose`. The mechanism cases
-that must run with no plugin installed point `PF_PLUGINS_DIR` at their own folder --
-`cases_plugin.py`.
+rather than fail there. A guard keeps them carrying it -- the ordinary run has every folder installed,
+so a decorator lost from one of these classes is invisible there (`cases_guards.py`). What the two
+plugins do to EACH OTHER -- a close that crosses both lines, and a tree that has lost one of the two
+folders -- is `TestTheTwoLinesInOneClose`. The mechanism cases that must run with no plugin installed
+point `PF_PLUGINS_DIR` at their own folder -- `cases_plugin.py`.
 
 The side where a line really runs (the graph edit through real processes, a whole line walked to the
 end, the form the note's receiver sees) lives in `cases_maintenance_run.py`.
@@ -634,11 +635,13 @@ class ChannelCases:
         self.assertEqual(sb.dag()['nodes'][NODE2]['status'], 'todo')
 
 
+@requires_plugin(TICKET.plugin)
 class TestTicketChannel(ChannelCases, Base):
     """`plugins/test-audit`'s line, walked the way the core walks it."""
     DEBT = TICKET
 
 
+@requires_plugin(POOL.plugin)
 class TestPoolChannel(ChannelCases, Base):
     """`plugins/issue`'s line, walked the way the core walks it."""
     DEBT = POOL
@@ -780,11 +783,13 @@ class SwitchCases:
         self.assert_inserted(sb, sb.close_round(NODE))
 
 
+@requires_plugin(TICKET.plugin)
 class TestTicketSwitch(SwitchCases, Base):
     """`plugins/test-audit`'s switch, on every layer of the chain it may be written at."""
     DEBT = TICKET
 
 
+@requires_plugin(POOL.plugin)
 class TestPoolSwitch(SwitchCases, Base):
     """`plugins/issue`'s switch, on every layer of the chain it may be written at."""
     DEBT = POOL
@@ -860,11 +865,13 @@ class ThresholdCases:
         self.assertIn(f'over the line {self.DEBT.shown(self.DEBT.at)}', action['note'])
 
 
+@requires_plugin(TICKET.plugin)
 class TestTicketThresholds(ThresholdCases, Base):
     """`plugins/test-audit`'s line, resolved on the whole chain."""
     DEBT = TICKET
 
 
+@requires_plugin(POOL.plugin)
 class TestPoolThresholds(ThresholdCases, Base):
     """`plugins/issue`'s line, resolved on the whole chain."""
     DEBT = POOL
@@ -898,6 +905,7 @@ class ScopeCases:
         self.assertEqual(len(sb.dag()['nodes']), 2)
 
 
+@requires_plugin(TICKET.plugin)
 class TestTicketScope(ScopeCases, Base):
     """What `plugins/test-audit` reads, and from where: the ticket, and nothing else."""
 
@@ -932,6 +940,7 @@ class TestTicketScope(ScopeCases, Base):
                          f'a child process was started for a number the note already carries: {asked}')
 
 
+@requires_plugin(POOL.plugin)
 class TestPoolScope(ScopeCases, Base):
     """What `plugins/issue` reads, and from where: the pool tool, out of a child process."""
 
@@ -1084,11 +1093,13 @@ class DedupCases:
         self.assertEqual(pipeline.knob_specs()[self.DEBT.switch]['kind'], 'switch')
 
 
+@requires_plugin(TICKET.plugin)
 class TestTicketDedup(DedupCases, Base):
     """`plugins/test-audit`: one live node per metric."""
     DEBT = TICKET
 
 
+@requires_plugin(POOL.plugin)
 class TestPoolDedup(DedupCases, Base):
     """`plugins/issue`: one live node per metric."""
     DEBT = POOL

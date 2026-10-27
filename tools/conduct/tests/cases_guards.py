@@ -1,4 +1,4 @@
-"""Four guards over the sources: the rules that only a red case keeps.
+"""Five guards over the sources: the rules that only a red case keeps.
 
 Each of them pins one sentence that otherwise lives in prose, and each is written against the
 sources rather than against a snapshot, so a rename that keeps the behaviour keeps the guard green
@@ -23,9 +23,16 @@ and a behaviour put back the old way turns it red.
   3. **Every self-entry has a real door.** A word a tool's own parser registers is either a word `pf`
      routes to it or a door another shipped module really calls (`plan` / `apply` / `record`). An
      entry that only a case drives is red: that is the shape of an exit grown to prove itself.
+  4. **Every case class that drives a shipped declaration skips once that folder is gone.** The
+     classes that bind a metric (`DEBT`) in the two maintenance case modules are imported twice --
+     once as the tree is, once with `PF_PLUGINS_DIR` pointed at an empty directory -- and each has to
+     report itself skipped in the second. The import is where the decorator decides, so nothing is
+     run: a class carrying no decorator (invisible in the ordinary run, where every folder is
+     installed) and a class naming a folder this checkout does not ship are both red here.
 
-Nothing here drives the pipeline: the subjects are the sources on disk and the parsers the tools
-build, and no case starts a session, dispatches anything or runs a graph edit.
+Nothing here drives the pipeline: the subjects are the sources on disk, the parsers the tools build,
+and one import of a case module, read for the marks on its classes; no case starts a session,
+dispatches anything or runs a graph edit.
 """
 
 from __future__ import annotations
@@ -36,16 +43,18 @@ import contextlib
 import inspect
 import io
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cases_base import Base, pipeline  # noqa: E402
 from harness import (CONDUCT_DIR, DAG_MANAGE, HANDOFF_PY, SIGNAL_PY, STATE_MANAGE,  # noqa: E402
-                     TOOLS_DIR, _fresh_module, patched, shipped_sources)
+                     TOOLS_DIR, _fresh_module, patched, plugins_dir, shipped_sources)
 
 __all__ = ['TestTheApprovalHasTwoHumanDoors', 'TestTheCoreNamesNoFeature',
-           'TestTheSkillsNameNoFeature', 'TestEverySelfEntryHasARealDoor']
+           'TestTheSkillsNameNoFeature', 'TestEverySelfEntryHasARealDoor',
+           'TestEveryMetricPassSkipsWithoutItsPlugin']
 
 #: The skill trees this checkout ships, one directory per language. A skill bound to a plugin is not
 #: here -- it lives in the plugin's own folder -- so everything under this root is a skill that has to
@@ -430,3 +439,71 @@ class TestEverySelfEntryHasARealDoor(Base):
                                     f'shipped module calls it any more')
 
         self.assertEqual([], problems, 'a self-entry has no real door:\n' + '\n'.join(problems))
+
+
+# ── 4. every metric pass skips without its plugin ───────────────────────────
+#: The two case modules whose test classes bind a metric of their own (`DEBT = POOL` and the like):
+#: they drive the two declarations this checkout ships.
+METRIC_CASES = (CONDUCT_DIR / 'tests' / 'cases_maintenance.py',
+                CONDUCT_DIR / 'tests' / 'cases_maintenance_run.py')
+
+
+def debt_classes(module) -> dict:
+    """`{class name: class}` for every test case in one module that binds a metric for itself.
+
+    A class BINDS one when `DEBT` is in its own body: the mixins carrying the shared cases leave
+    theirs at `None`, and the two bindings that name a metric state it on their own class.
+    """
+    import unittest
+    return {name: obj for name, obj in vars(module).items()
+            if isinstance(obj, type) and issubclass(obj, unittest.TestCase)
+            and 'DEBT' in vars(obj)}
+
+
+class TestEveryMetricPassSkipsWithoutItsPlugin(Base):
+    """A case class that drives a shipped declaration skips itself once that plugin's folder is gone.
+
+    `cases_maintenance.py` and `cases_maintenance_run.py` drive the two declarations this checkout
+    ships, and each of their pass classes binds one metric to drive it. The skip is
+    `requires_plugin(...)`, and it is decided when the module is IMPORTED: the decorator asks the
+    plugin scan whether the folder is there and marks the class when it is not. So both modules are
+    imported twice here -- once as the tree is, once with `PF_PLUGINS_DIR` pointed at an empty
+    directory -- and the classes are asked directly, with no case run and no project built.
+
+    Three ways one of these classes loses its door, each one red here instead of invisible in the
+    ordinary run:
+
+      * **no decorator at all.** Every folder is installed in the ordinary run, so the class runs
+        there; with the folder hidden it dies inside its own fixture instead of skipping -- a declared
+        knob is not a knob any more, and `cycle policy` refuses it.
+      * **a decorator naming a folder this checkout does not ship.** The class skips itself even with
+        everything installed, so its subject never runs anywhere.
+      * **the criterion going vacuous**: a module stops binding a metric, or stops importing, and the
+        halves below would otherwise pass by asking nothing.
+    """
+
+    def test_every_metric_pass_skips_without_its_plugin(self):
+        for path in METRIC_CASES:
+            with self.subTest(case_module=path.name):
+                self.check_one_module(path)
+
+    def check_one_module(self, path: Path):
+        """One case module's classes, asked in both worlds."""
+        here = debt_classes(_fresh_module(f'guard_metrics_{path.stem}', path))
+        self.assertTrue(here, f'{path.name} binds no metric any more: this guard asks nothing')
+        stuck = sorted(name for name, cls in here.items()
+                       if getattr(cls, '__unittest_skip__', False))
+        self.assertEqual([], stuck,
+                         f'{path.name}: these classes skip with every plugin installed, so the '
+                         f'subject they drive never runs anywhere: {stuck}')
+
+        with tempfile.TemporaryDirectory() as empty, plugins_dir(empty):
+            hidden = debt_classes(_fresh_module(f'guard_metrics_no_plugins_{path.stem}', path))
+
+        self.assertEqual(sorted(here), sorted(hidden),
+                         f'{path.name}: the two imports disagree on which classes bind a metric')
+        missing = sorted(name for name, cls in hidden.items()
+                         if not getattr(cls, '__unittest_skip__', False))
+        self.assertEqual([], missing,
+                         f'{path.name}: with no plugin installed these classes run instead of '
+                         f'skipping: {missing}')
