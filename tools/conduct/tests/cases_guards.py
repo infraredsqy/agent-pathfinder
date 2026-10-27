@@ -480,6 +480,11 @@ class TestEveryMetricPassSkipsWithoutItsPlugin(Base):
         everything installed, so its subject never runs anywhere.
       * **the criterion going vacuous**: a module stops binding a metric, or stops importing, and the
         halves below would otherwise pass by asking nothing.
+
+    A class is what this rule can read: `DEBT` announces which metric drives it. A door written per
+    METHOD (`TestTheTwoLinesInOneClose`, the form class in the run module) is no such binding, and
+    nothing here can tell a method that needs a declaration from one that does not, so those keep
+    their decorator by hand.
     """
 
     def test_every_metric_pass_skips_without_its_plugin(self):

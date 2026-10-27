@@ -25,11 +25,12 @@ the first case of each pass.
 
 Every case that needs a shipped declaration carries `requires_plugin(...)`: deleting that folder is a
 supported state of this tree (the core keeps closing and dispatching), so the behaviour cases skip
-rather than fail there. A guard keeps them carrying it -- the ordinary run has every folder installed,
-so a decorator lost from one of these classes is invisible there (`cases_guards.py`). What the two
-plugins do to EACH OTHER -- a close that crosses both lines, and a tree that has lost one of the two
-folders -- is `TestTheTwoLinesInOneClose`. The mechanism cases that must run with no plugin installed
-point `PF_PLUGINS_DIR` at their own folder -- `cases_plugin.py`.
+rather than fail there. A guard asks the pass classes -- the ones binding a metric -- for that mark,
+because the ordinary run has every folder installed and a decorator lost from one of them is invisible
+there (`cases_guards.py`); the doors written per method keep it by hand. What the two plugins do to
+EACH OTHER -- a close that crosses both lines, and a tree that has lost one of the two folders -- is
+`TestTheTwoLinesInOneClose`. The mechanism cases that must run with no plugin installed point
+`PF_PLUGINS_DIR` at their own folder -- `cases_plugin.py`.
 
 The side where a line really runs (the graph edit through real processes, a whole line walked to the
 end, the form the note's receiver sees) lives in `cases_maintenance_run.py`.
