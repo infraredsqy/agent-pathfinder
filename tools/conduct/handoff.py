@@ -188,6 +188,21 @@ def _print_form(project: Path, cycle_id: str, node: str | None) -> int:
     return 0
 
 
+def _outputs_text(raw: str) -> str:
+    """The `-o` payload as text: the string itself, or what `@path` / `-` point at.
+
+    A JSON object handed over inline survives only where the shell keeps its quotes: under the Windows
+    `.cmd` shim an argument's double quotes are consumed as quoting delimiters before this process
+    starts, and what arrives here is a bare `{a:1}`. Reading the object from a file or stdin has no
+    such stage in between.
+    """
+    if raw == '-':
+        return sys.stdin.read()
+    if raw.startswith('@'):
+        return Path(raw[1:]).read_text(encoding='utf-8')
+    return raw
+
+
 def main(argv=None) -> int:
     # The working slot runs this command at the close, and the session reads its output into context:
     # force it to UTF-8, so that a GBK console code page does not turn a non-ASCII summary into
@@ -202,7 +217,10 @@ def main(argv=None) -> int:
     parser.add_argument('node', nargs='?', help='The DAG node this session was working on')
     parser.add_argument('status', nargs='?', choices=['completed', 'failed', 'stopped'])
     parser.add_argument('-s', '--summary', default=None)
-    parser.add_argument('-o', '--outputs', default='{}', help='JSON object of key outputs')
+    parser.add_argument('-o', '--outputs', default='{}',
+                        help='JSON object of key outputs. `@path` reads it from a file and `-` from '
+                             'stdin: an inline object reaches Python with its quotes intact only where '
+                             'the shell leaves them alone, and the Windows `.cmd` shim does not')
     parser.add_argument('--form', action='store_true',
                         help='Print the ticket shape this line asks for, and stop (writes nothing)')
     parser.add_argument('--project', default='.', help='Project root (default: cwd)')
@@ -220,7 +238,10 @@ def main(argv=None) -> int:
                      '`--form <cycle>` prints the shape')
 
     try:
-        outputs = json.loads(args.outputs)
+        outputs = json.loads(_outputs_text(args.outputs))
+    except OSError as e:
+        print(f'Error: -o could not read {args.outputs}: {e}', file=sys.stderr)
+        return 1
     except json.JSONDecodeError as e:
         print(f'Error: -o is not valid JSON: {e}', file=sys.stderr)
         return 1
@@ -244,7 +265,10 @@ def main(argv=None) -> int:
         where = (f'it is holding {", ".join(x[:8] for x in holding)}' if holding
                  else 'it is holding nothing')
         print(f'Error: cycle "{args.cycle}" is not holding {args.node} ({where}); nothing was '
-              f'written.', file=sys.stderr)
+              f'written. A node this line already closed out is the usual reason: put it back in '
+              f'play and pin the line on it again -- `pf dag status {args.node} todo`, then '
+              f'`pf cycle hold {args.cycle} {args.node}` -- and the extra round lands as another '
+              f'step on the line.', file=sys.stderr)
         return 2
     try:
         signal_mod.write_signal(args.cycle, args.node, args.status,

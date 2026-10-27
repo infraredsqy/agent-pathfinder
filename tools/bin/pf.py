@@ -199,6 +199,10 @@ pf -- the agent pipeline's own command
   with an identity -- plus the verb that acts on it. So `pf init` and `pf next` are verbs, and
   `pf cycle list`, `pf dag add` are a group's verbs.
 
+  Under the Windows `.cmd` shim an argument loses its double quotes and its `|` before Python starts:
+  pass an object as `-o @path` or `-o -`, and send anything else carrying shell punctuation straight
+  to `pf.py` (`python -X utf8 <checkout>/tools/bin/pf.py ...` answers the same).
+
 """
 
 
