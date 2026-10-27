@@ -428,11 +428,12 @@ goes into this round's report and `run.md`'s "Known unresolved", **closed out in
 and not passed on to the next one**. When it cannot all be done, so be it: the report says which
 ones were not done and why, and it goes into the user's hands.
 
-This round is **dispatched at the same time as the close's step 1, doc-update**: the fix touches
-code only, the docs are doc-update's, and the two subagents go into one message. An entry on the
-list that lands in `docs/` is handed to doc-update (changing docs is its job) and the fix leaves
-it alone. When this round touches a public name or an interface, do not run them in parallel —
-fix first and dispatch doc-update after, or the docs get written against half-finished work.
+This round is **dispatched at the same time as the close's step 1, the docs sync**: the fix
+touches code only, the docs are Doc-sync's (role card `subagent-prompts/doc-sync.md`), and the
+two subagents go into one message. An entry on the list that lands in `docs/` is handed to
+Doc-sync (changing docs is its job) and the fix leaves it alone. When this round touches a public
+name or an interface, do not run them in parallel — fix first and dispatch Doc-sync after, or the
+docs get written against half-finished work.
 
 On a light node you do this step's work too: read `review-{N}.md`, fix only the problems the list
 names, and write the report as `fix-{N}.md`; borrow the discipline of `subagent-prompts/fix.md`
@@ -517,7 +518,7 @@ The close walks these steps in order, and only steps 1 and 2 start at the same t
 
 | Step | What it does |
 |---|---|
-| 1 doc-update | dispatch a subagent to run doc-update and sync the docs (writing only what is already implemented), **on the tree the work is happening in** (fork mode = the worktree, off mode = the main tree) — the docs it syncs are part of this node's deliverable, committed and merged back together with this node |
+| 1 docs sync | dispatch a Doc-sync subagent on its role card (`subagent-prompts/doc-sync.md`; the prompt carries the spec path and a supplement saying what this node did) and sync the docs (writing only what is already implemented), **on the tree the work is happening in** (fork mode = the worktree, off mode = the main tree) — the docs it syncs are part of this node's deliverable, committed and merged back together with this node |
 | 2 run.md | write `.pf/nodes/<node uuid>/run.md`, with four fixed sections: "What I did" in prose; one column each for "Autonomous decisions" and "Known unresolved"; "Facts checked" carried over from prepare. It ends with this node's change list and the paths of every report file. **Which tree it lands in follows the `.pf/` flavour**: the commit flavour lands in the working tree (merging back with this node), the local one in the main tree (there is no `.pf/` in a worktree) |
 | 3 merge back | a node that went through a parallel fork merges back first, see "Parallel: worktree" — this step commits this node once and brings it back to the main tree. **What is in that commit follows the `.pf/` flavour**: for the commit flavour it is code + docs + run.md + the report set; for the local one only code + docs, and the node's few text files belong to step 7 |
 | 4 full run | run one **full run** (`full` tier = the whole suite, slow lane included; `minimal` tier = the few checks the project names), and fix failures here; an unrelated pre-existing failure is still one line only. The `full` tier **records this run's measured seconds** — the close command reads it; the `minimal` tier has no suite timing, so delete that item from the note |
@@ -527,7 +528,7 @@ The close walks these steps in order, and only steps 1 and 2 start at the same t
 | 8 push | every commit that should be pushed is pushed successfully before going on |
 | 9 dispatch | go by the `action` step 6 returns |
 
-**Steps 1 and 2 are done together**: doc-update is a subagent, so you are free the moment it is
+**Steps 1 and 2 are done together**: Doc-sync is a subagent, so you are free the moment it is
 dispatched — write `run.md`'s four sections in that window, and add the docs it synced to the
 change list when it comes back. Step 3's merge-back precondition does not change: it starts only
 once both have landed.
@@ -687,7 +688,7 @@ The work:
   every code path points at the worktree — a subagent's absolute paths, and your own workdir on a
   light node, are both it; each round's fast lane runs as always, inside the worktree
 - **Code and docs live in the worktree, and the node's few text files follow the `.pf/` flavour**
-  — the code and the docs doc-update syncs are done in the worktree and merge back to the main
+  — the code and the docs Doc-sync hands back are done in the worktree and merge back to the main
   tree with this node's one commit; `run.md` and the report set: under the commit flavour `.pf/`
   sits in the worktree along with the code, so they are written there and merged back together;
   under the local flavour there is no `.pf/` in the worktree at all (ignored files cannot be
@@ -705,7 +706,7 @@ The work:
   will not free up after two or three tries, stop and hand it to the user; **the lock file
   belongs to a live process and must not be deleted**
 
-**Merge back** (the close's step 3: doc-update has landed and `run.md` is written, and this step
+**Merge back** (the close's step 3: Doc-sync has landed and `run.md` is written, and this step
 commits the whole node once and brings it back to the main tree, before the full run):
 
 1. commit this node once inside the worktree (code, docs, and for the commit flavour run.md and
@@ -779,7 +780,7 @@ checkout root prints it), not under the current project's `docs/`.
   the only place a name turns into a path
 - Dispatch and authentication: `docs/conduct-dsh-dispatch.md`
 - The filter semantics for node tags: `docs/conduct-node-tags.md`
-- Role cards: `<this skill's directory>/subagent-prompts/` (execute / review / fix)
+- Role cards: `<this skill's directory>/subagent-prompts/` (execute / review / fix / doc-sync)
 - Write paths out as full absolute paths: a subagent gets no `~` expansion and has none of your
   current `./`. Get this skill's directory once (`cd ~/.agents/skills/pf-conduct/ && pwd`)
 

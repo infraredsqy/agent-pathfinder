@@ -101,7 +101,7 @@ def cmd_fork_worktree(node_id: str) -> None:
         sys.exit(1)
     if status.stdout.strip():
         print(f'Error: the main tree has uncommitted tracked changes -- another line may be '
-              f'mid-merge-back (doc-update and the ledger commit leave a dirty window of '
+              f'mid-merge-back (the docs sync and the ledger commit leave a dirty window of '
               f'minutes). Wait a few minutes and re-check `git status` before forking:\n'
               f'{status.stdout}', file=sys.stderr)
         sys.exit(1)

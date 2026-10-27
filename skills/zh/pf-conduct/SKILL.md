@@ -232,7 +232,7 @@ standard 节点派 Execute subagent（可写文件、可跑命令），prompt �
 
 `critical = 0, minor > 0` → 派专属修复，**不回 Review**：只有 minor 的轮次修完就算过，修复自证走它自己的快档与问题清单核对，minor 逐条在修复报告里写清；修不动的写进这一轮的报告与 `run.md` 的已知未解决项，**在本节点收口，不往下一个节点传**。做不完就做不完：报告里写清哪几条没做掉、为什么，交到用户手上。
 
-这一轮**和收尾第 1 步的 doc-update 同时派**：修复只碰代码，文档归 doc-update，两个 subagent 写在同一条消息里。清单里落在 `docs/` 的条目转给 doc-update（它本来就是改文档的），修复别去动。这轮要动公共名字或接口时不并行——先修完再派 doc-update，否则文档照着半成品写。
+这一轮**和收尾第 1 步的文档同步同时派**：修复只碰代码，文档归 Doc-sync 那个 subagent（角色卡 `subagent-prompts/doc-sync.md`），两个写在同一条消息里。清单里落在 `docs/` 的条目转给它（改文档本来就是它的活），修复别去动。这轮要动公共名字或接口时不并行——先修完再派 Doc-sync，否则文档照着半成品写。
 
 light 节点上这一步的活也是你干：读 `review-{N}.md`，只修清单里列的问题，报告写 `fix-{N}.md`；`subagent-prompts/fix.md` 那份纪律照借，上面的判定照走。
 
@@ -277,7 +277,7 @@ light 节点上这一步的活也是你干：读 `review-{N}.md`，只修清单�
 
 | 步骤 | 做什么 |
 |---|---|
-| 1 doc-update | 派 subagent 跑 doc-update 同步文档（只写已经实现的），**在干活的那棵树上跑**（fork 档＝worktree，off 档＝主树）——同步出来的文档是这个节点交付物的一部分，随这个节点一起提、一起合回 |
+| 1 文档同步 | 派 Doc-sync subagent 照角色卡同步文档（`subagent-prompts/doc-sync.md`；prompt 带 spec 路径与「这个节点做了什么」的补充），只写已经实现的，**在干活的那棵树上跑**（fork 档＝worktree，off 档＝主树）——同步出来的文档是这个节点交付物的一部分，随这个节点一起提、一起合回 |
 | 2 run.md | 写 `.pf/nodes/<节点 uuid>/run.md`，固定四节：「做了什么」一段叙事；「自主决策清单」「已知未解决项」各一列；「已核事实」准备那段搬过来。末尾带这个节点的改动清单与全部报告文件的路径。**落哪棵树随 `.pf/` 档**：提交档落在干活的那棵（随这个节点合回），本地档落主树（worktree 里没有 `.pf/`） |
 | 3 合回 | 走过并行 fork 的节点先合回，见「并行：worktree」——这一步把这个节点提成一次提交，带回主树。**这一次提交里有什么随 `.pf/` 档**：提交档是代码＋文档＋run.md＋报告集；本地档只有代码＋文档，节点那几份文本归第 7 步 |
 | 4 全量 | 跑一次**全量**（`full` 档＝全套件、含慢档；`minimal` 档＝项目口径那几条检查），失败就在这里修；无关的既有失败仍只记一行。`full` 档**把这一趟的实测耗时秒数记下来**——收尾那条命令要读它；`minimal` 档没有套件实测耗时，交接单里那一项删掉 |
@@ -287,7 +287,7 @@ light 节点上这一步的活也是你干：读 `review-{N}.md`，只修清单�
 | 8 push | 该推的每一次提交都推成功，才往下走 |
 | 9 派发 | 按第 6 步返回的 `action` 走 |
 
-**第 1 步与第 2 步一起做**：doc-update 是 subagent，派完你就空了——`run.md` 的四节趁这段窗口写掉，它回来后在改动清单里补上同步出的那几份文档。第 3 步合回的前提不变：两样都落好才起。
+**第 1 步与第 2 步一起做**：Doc-sync 是 subagent，派完你就空了——`run.md` 的四节趁这段窗口写掉，它回来后在改动清单里补上同步出的那几份文档。第 3 步合回的前提不变：两样都落好才起。
 
 **派发排在最后**：先关节点、再提交、再推、最后才派发（顺序为什么钉死，见 `docs/conduct-state.md`「会话是怎么被叫起来、怎么收尾的」）。
 
@@ -374,12 +374,12 @@ pf fork-worktree <节点id>
 干活：
 
 - Execute、Review、Fix 的循环、报告与复审规则一字不变；一切代码路径指 worktree——subagent 的绝对路径、light 节点自己动手时的 workdir 都是它；每轮快档照旧跑，跑在 worktree 里
-- **代码与文档在 worktree，节点那几份文本看 `.pf/` 档**——代码与 doc-update 同步出的文档在 worktree 里做，随这个节点的那一次提交合回主树；`run.md` 与报告集：提交档下 `.pf/` 跟代码一起在 worktree 里，照样在 worktree 里写、一起合回；本地档下 worktree 里根本没有 `.pf/`（被忽略的文件检不出来），它们落主树，随记录那一次提交走。探针与原始输出永远落**主树**的 `.pf/nodes/<节点 uuid>/temp/`，两种档都一样。收尾那几条命令在 worktree 的 cwd 里跑也不用挪窝：工具认得 worktree，结转与交接单自动落主树
+- **代码与文档在 worktree，节点那几份文本看 `.pf/` 档**——代码与 Doc-sync 同步出的文档在 worktree 里做，随这个节点的那一次提交合回主树；`run.md` 与报告集：提交档下 `.pf/` 跟代码一起在 worktree 里，照样在 worktree 里写、一起合回；本地档下 worktree 里根本没有 `.pf/`（被忽略的文件检不出来），它们落主树，随记录那一次提交走。探针与原始输出永远落**主树**的 `.pf/nodes/<节点 uuid>/temp/`，两种档都一样。收尾那几条命令在 worktree 的 cwd 里跑也不用挪窝：工具认得 worktree，结转与交接单自动落主树
 - 一个节点内部怎么分活（多个 subagent 并行）与 worktree 无关：它们都在同一个 worktree 里做，收尾只合回一次
 - 两份 spec 的文件范围重叠不拦：各做各的，先后由谁先 merge 决定，撞车在合回那一步解（改同一批文件的节点该由 pf-route 拉出先后边，那是它的债）
 - 多线在主树上的 git 写操作（合回、提交、push）撞出 `index.lock` 是瞬时撞锁：等几秒重跑同一条命令即可，两三次仍不解放就停手交用户；**锁文件是活进程的，不许删**
 
-**合回**（收尾的第 3 步：doc-update 已经落好、`run.md` 也写完了，这一步把整个节点提成一次提交、带回主树，排在全量之前）：
+**合回**（收尾的第 3 步：Doc-sync 已经落好、`run.md` 也写完了，这一步把整个节点提成一次提交、带回主树，排在全量之前）：
 
 1. worktree 里把这个节点提成一次提交（代码、文档，提交档还有 run.md 与报告集），再把主树的最新合进来：`git -C <worktree> merge <出口分支>`——撞车在 worktree 里解，解完重跑快档
 2. 主树上 `git merge --squash pf/<节点短id>`，发这个节点的 `feat:` commit：一个节点在主树上就是一次提交，历史形状不变
@@ -413,7 +413,7 @@ pf fork-worktree <节点id>
 - 方法技能：`~/.agents/skills/<名>/SKILL.md`——spec 的 `method: ` 行点名；由名字推路径只有这一处
 - 派发与鉴权：`docs/conduct-dsh-dispatch.md`
 - 节点 tag 的过滤语义：`docs/conduct-node-tags.md`
-- 角色卡：`<本 skill 目录>/subagent-prompts/`（execute / review / fix）
+- 角色卡：`<本 skill 目录>/subagent-prompts/`（execute / review / fix / doc-sync）
 - 路径写完整绝对路径：subagent 拿不到 `~` 展开，也没有你当前的 `./`。本 skill 目录取一次（`cd ~/.agents/skills/pf-conduct/ && pwd`）
 
 ## 反模式

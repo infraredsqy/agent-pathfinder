@@ -181,7 +181,7 @@ comparison for a node not yet written down and back-fill the conclusion into its
 - **A behavioural change always enters the graph**; small changes where **not a byte changes when
   it runs** — comments, docstrings, formatting, docs only — can be done right now, and the trace
   is that one commit
-- Docs that have to wait for some node to finish belong to that node's close (the `doc-update`
+- Docs that have to wait for some node to finish belong to that node's close (the docs sync
   step), and do not go through "do it now"
 - Once picked, look at the order: when the pieces to do now are somebody's prerequisites (a
   probe's conclusion has to enter a spec, docs have to catch up with the state), clear them first
@@ -270,8 +270,11 @@ against [`../shared/pf/subagents.md`](../shared/pf/subagents.md)), and **they on
 they do not commit**; when it is done, report to the user, and commit in step 5 together. Three
 things belong to this road:
 
-- **Docs and design notes catching up with the state**: go through `doc-update` and write only
-  what is already implemented — docs/ holding ground truth only is this system's foundation
+- **Docs and design notes catching up with the state**: dispatch a subagent on pf-conduct's
+  Doc-sync role card
+  ([`../pf-conduct/subagent-prompts/doc-sync.md`](../pf-conduct/subagent-prompts/doc-sync.md)), and
+  write only what is already implemented — docs/ holding ground truth only is this system's
+  foundation
 - **A non-behavioural small change**: comments, docstrings, formatting, docs only
 - **A one-off feasibility probe**: run a script, read a piece of code, and answer "can this be
   done"; it changes no file and leaves no node
