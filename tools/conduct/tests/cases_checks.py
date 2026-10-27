@@ -81,14 +81,14 @@ class TestTheValidator(Base):
         fixture (or a second skill) after calling `one()` is still writing into the tree the scan is
         pointed at.
         """
-        root = getattr(self, '_features_root', None)
+        root = getattr(self, '_plugins_root', None)
         if root is None:
             tmp = tempfile.TemporaryDirectory(prefix='conduct-checks-')
             self.addCleanup(tmp.cleanup)
             stack = ExitStack()
             self.addCleanup(stack.close)
             stack.enter_context(plugins_dir(tmp.name))
-            root = self._features_root = Path(tmp.name)
+            root = self._plugins_root = Path(tmp.name)
         return root
 
     def one(self, method=None, impl=QUIET_IMPL, skill=True, **over):
@@ -136,7 +136,7 @@ class TestTheValidator(Base):
                             f'{method} has no {registry.SKILL_FILE}')
 
     # ── (a) the closed sets, and the name in the sentence ───────────────────
-    def test_a_timing_or_a_kind_outside_the_closed_sets_names_the_feature(self):
+    def test_a_timing_or_a_kind_outside_the_closed_sets_names_the_plugin(self):
         """A timing the core does not serve and a knob kind it does not know are problems, and the
         sentence names the plugin.
         """
@@ -157,7 +157,7 @@ class TestTheValidator(Base):
         self.assertIn("plugin 'probe'", '\n'.join(problems))
         self.assertIn('is not a cell this core serves', '\n'.join(problems))
 
-    def test_a_half_stated_cell_names_the_feature(self):
+    def test_a_half_stated_cell_names_the_plugin(self):
         """The timing and the action are one cell: stated whole, or not at all.
 
         Half of it is not a smaller declaration -- it names a thing nothing ever serves -- so the
@@ -193,7 +193,7 @@ class TestTheValidator(Base):
             self.assertIn("action None is not one of ['insert', 'block']", text)
 
     # ── (a3) the command face: a word, a line, whether it travels ───────────
-    def test_a_command_only_feature_occupies_no_cell_and_is_legal(self):
+    def test_a_command_only_plugin_occupies_no_cell_and_is_legal(self):
         """A declaration may carry words for `pf` instead of a timing: it is asked at no moment of the
         pipeline, so there is no cell to serve, and the validator has nothing to say about it.
         """
@@ -202,7 +202,7 @@ class TestTheValidator(Base):
 
         self.assertEqual([], problems)
 
-    def test_a_command_cell_that_cannot_become_one_names_the_feature(self):
+    def test_a_command_cell_that_cannot_become_one_names_the_plugin(self):
         """Four ways a declared command is not a command, each one named: the cell is not an object,
         the key is not a word `pf` could be handed, there is no line for the help to print, and the
         `keep_name` cell is not the true/false it has to be.
@@ -281,7 +281,7 @@ class TestTheValidator(Base):
         self.assertIn('a skill belongs to one plugin', text)
 
     # ── (c) the method skill ─────────────────────────────────────────────────
-    def test_a_method_without_a_card_names_the_feature(self):
+    def test_a_method_without_a_card_names_the_plugin(self):
         """A method whose skill no plugin folder carries: the generated node would point a session at
         nothing, so the validator says which method and which plugin.
         """
@@ -307,7 +307,7 @@ class TestTheValidator(Base):
         self.assertEqual([], pipeline.registry().verify())
 
     # ── (d) the implementation, really called ───────────────────────────────
-    def test_an_implementation_that_raises_names_the_feature(self):
+    def test_an_implementation_that_raises_names_the_plugin(self):
         """One real call against a stand-in project: the implementation may answer or say "not
         known", and it may not raise -- a raise at the timing is what the runtime would swallow.
         """
@@ -318,7 +318,7 @@ class TestTheValidator(Base):
         self.assertIn('offer() raised on a stand-in project', text)
         self.assertIn('boom', text)
 
-    def test_an_answer_carrying_a_command_shaped_list_names_the_feature(self):
+    def test_an_answer_carrying_a_command_shaped_list_names_the_plugin(self):
         """A plugin declares a node; the graph edit is the core's, so a command-shaped list in a key
         the core reads (`steps`, here) is a second spelling of the edit -- and the validator refuses
         it, whatever verb it names, because the vocabulary has one home.
@@ -333,6 +333,61 @@ class TestTheValidator(Base):
         self.assertIn("plugin 'probe'", text)
         self.assertIn("carries a command-shaped list in 'steps'", text)
         self.assertIn("'rm'", text, 'the answer that carried it is quoted back')
+
+    def test_a_gate_that_answers_a_reason_is_not_walked_for_offer_keys(self):
+        """A `block` door answers a reason string or nothing, and that is a whole answer.
+
+        The two doors read different shapes: an `insert` door answers an offer object, whose keys the
+        validator walks, and a `block` door answers prose for a human. Reading an offer's keys out of
+        a gate's sentence is not a plugin problem to report -- it is the validator failing on a legal
+        plugin, and it used to take the whole doctor down with it, every other problem included.
+        """
+        problems = self.one(impl="def check(ctx):\n    return 'not while the budget is tight'\n",
+                            timing='dispatch', action='block')
+
+        self.assertEqual([], problems)
+
+    def test_a_broken_plugin_still_reports_beside_a_gate(self):
+        """One legal gate and one broken declaration: both are answered, and neither hides the other.
+
+        The failure this pins is the one a gate used to cause -- the doctor answering with a single
+        crash line instead of the list it exists to give.
+        """
+        root = self.plugins()
+        self.one(impl="def check(ctx):\n    return 'not while the budget is tight'\n",
+                 name='gate', timing='dispatch', action='block')
+        folder = root / 'gate'
+        write_skill(folder, CARDED)
+        broken = root / 'broken'
+        broken.mkdir()
+        (broken / 'plugin.json').write_text('{ "name": "broken",, }', encoding='utf-8')
+
+        problems = pipeline.registry().verify()
+
+        text = '\n'.join(problems)
+        self.assertIn("'broken'", text, 'the broken declaration is named')
+        self.assertNotIn("'gate'", text, 'the legal gate is not a problem')
+
+    def test_a_declared_file_that_is_not_there_names_the_plugin(self):
+        """What a plugin ships besides its two files is its own to state, and the doctor checks it.
+
+        A plugin's own tool is inside its folder and the core cannot spell that path without knowing
+        one plugin's layout, so the declaration lists it. A tool that never shipped is then a line
+        here instead of a reading that quietly stops arriving.
+        """
+        problems = self.one(files=['tools/gone.py'])
+
+        text = '\n'.join(problems)
+        self.assertIn("plugin 'probe'", text)
+        self.assertIn('tools/gone.py', text)
+
+    def test_a_declared_file_may_not_point_outside_the_folder(self):
+        """The folder is a plugin's identity, so a declared path is inside it or it is not one."""
+        problems = self.one(files=['../../elsewhere.py'])
+
+        text = '\n'.join(problems)
+        self.assertIn("plugin 'probe'", text)
+        self.assertIn('../../elsewhere.py', text)
 
     def test_a_two_dimensional_list_in_fields_is_no_problem(self):
         """`fields` is the free-shape dict a reader is shown, and the core only asks it to be a dict:

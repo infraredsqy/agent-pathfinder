@@ -99,6 +99,13 @@ COMMANDS = 'commands'
 COMMAND_SUMMARY = 'summary'
 COMMAND_KEEP_NAME = 'keep_name'
 
+#: The group a declaration lists what else it ships in its own folder as: `["tools/x.py"]`, relative
+#: to that folder. What a plugin's commands reach for is inside it, and the core cannot spell those
+#: paths without knowing one plugin's layout -- so the plugin says them and the doctor checks each is
+#: there. A tool that never shipped is then one line in the doctor instead of a reading that quietly
+#: stops arriving.
+FILES = 'files'
+
 #: The layers a knob's resolution chain walks, narrowest first. `state/knobs.py` owns the chain, and
 #: this file restates the names because it is loaded by path from two packages and imports neither:
 #: they are the closed set a declaration's `layers` cell may narrow its own knob to.
@@ -151,7 +158,7 @@ _RUNTIME_PROBLEMS: dict[str, str] = {}
 # ── where the folders are ───────────────────────────────────────────────────
 
 def plugins_dir() -> Path:
-    """The directory the plugin folders live under: `<conduct>/plugins`, or `PF_PLUGINS_DIR`.
+    """The directory the plugin folders live under: `<repo>/plugins`, or `PF_PLUGINS_DIR`.
 
     The shipped location is computed from this file's own place -- the conduct directory is one level
     up from the package this file sits in -- so a checkout that moves carries its plugins with it.
@@ -162,7 +169,7 @@ def plugins_dir() -> Path:
     return Path(__file__).resolve().parents[3] / 'plugins'
 
 
-def _feature_folders() -> list:
+def _plugin_folders() -> list:
     """Every folder a plugin could be, sorted by folder name; the scan errors are left to the caller.
 
     `__pycache__` and dotted directories are not plugins: a compiled artefact of an implementation
@@ -207,7 +214,7 @@ def load_all() -> list:
     hide its neighbours.
     """
     out = []
-    for folder in _feature_folders():
+    for folder in _plugin_folders():
         decl, problem = _read_declaration(folder / DECLARATION)
         out.append({
             'name': folder.name,
@@ -329,6 +336,8 @@ def _declaration_problems(plugin: dict) -> list:
         out.append(f'plugin {name!r}: {action!r} at {timing!r} is not a cell this core serves '
                    f'({served})')
 
+    out.extend(_file_problems(name, decl.get(FILES)))
+
     groups = _names(decl)
     knobs, readings, metrics = groups['knobs'], groups['readings'], groups['metrics']
     commands, sources = groups['commands'], groups[SOURCES_GROUP]
@@ -438,6 +447,47 @@ def _declaration_problems(plugin: dict) -> list:
     return out
 
 
+def _usable_files(files) -> list:
+    """The entries of a `files` list that name a path inside the plugin's own folder.
+
+    A declaration says what it ships; it does not get to point outside the folder that is its
+    identity, so an absolute path or a `..` is not one of these (it is `_file_problems`' finding).
+    """
+    if not isinstance(files, list):
+        return []
+    out = []
+    for entry in files:
+        if not isinstance(entry, str) or not entry.strip():
+            continue
+        path = Path(entry)
+        if path.is_absolute() or '..' in path.parts:
+            continue
+        out.append(entry)
+    return out
+
+
+def _file_problems(name: str, files) -> list:
+    """The shape of a declaration's `files` list -- never the disk.
+
+    Whether each path is there is `_problems_of`'s question: the shape is answerable from the
+    declaration alone, and keeping the two apart is what lets a declaration be read in a tree other
+    than the one it describes.
+    """
+    if files is None:
+        return []
+    if not isinstance(files, list):
+        return [f'plugin {name!r}: {FILES} must be a list of paths relative to its own folder, '
+                f'got {type(files).__name__}']
+    out = []
+    for entry in files:
+        if not isinstance(entry, str) or not entry.strip():
+            out.append(f'plugin {name!r}: {FILES} holds {entry!r}, which is not a path')
+        elif entry not in _usable_files([entry]):
+            out.append(f'plugin {name!r}: {FILES} holds {entry!r}, which is not inside its own '
+                       f'folder')
+    return out
+
+
 def _problems_of(plugin: dict) -> list:
     """`_declaration_problems`, plus whether the implementation file is there.
 
@@ -450,6 +500,10 @@ def _problems_of(plugin: dict) -> list:
     out = _declaration_problems(plugin)
     if not (plugin['folder'] / IMPLEMENTATION).is_file():
         out.append(f'plugin {plugin["name"]!r}: no {IMPLEMENTATION} in {plugin["folder"]}')
+    for entry in _usable_files((_decl_of(plugin) or {}).get(FILES)):
+        if not (plugin['folder'] / entry).is_file():
+            out.append(f'plugin {plugin["name"]!r}: {entry} is not in its folder, and its '
+                       f'declaration lists it under {FILES!r}')
     return out
 
 
@@ -712,6 +766,10 @@ def _live_call_problems(plugin: dict, decl: dict) -> list:
     door is a plugin that declares a timing nothing will ever serve. An action outside the two is
     skipped -- `validate()` names it, and there is no door to call.
 
+    **The two doors answer different shapes, and they are read as such.** An `insert` door answers an
+    offer object; a `block` door answers a reason string or nothing, and that string is prose for a
+    human. Only the first kind is walked for its keys (`_edit_problems`), because only it has any.
+
     A load failure is skipped here for the same reason: it is `_RUNTIME_PROBLEMS`' entry, printed by
     `validate()`, and calling a module that did not load is not a second finding.
     """
@@ -735,10 +793,14 @@ def _live_call_problems(plugin: dict, decl: dict) -> list:
         # "Nothing from me this pass" is always a legal answer: it is what a project with no debt
         # left, no line stated and nothing to say gets, and no plugin has to answer every time.
         return []
-    expected = dict if door == 'offer' else str
-    if not isinstance(answer, expected):
-        return [f'plugin {name!r}: {door}() answered {type(answer).__name__}, and that timing reads '
-                f'{"an offer object" if door == "offer" else "a reason string"} or nothing']
+    if door != 'offer':
+        if not isinstance(answer, str):
+            return [f'plugin {name!r}: check() answered {type(answer).__name__}, and that timing '
+                    f'reads a reason string or nothing']
+        return []
+    if not isinstance(answer, dict):
+        return [f'plugin {name!r}: offer() answered {type(answer).__name__}, and that timing reads '
+                f'an offer object or nothing']
     return _edit_problems(name, answer)
 
 
@@ -1090,7 +1152,7 @@ def impl_of(name: str):
     try the file again, which is what "a later load works" means.
     """
     path = plugins_dir() / name / IMPLEMENTATION
-    module_name = 'pf_feature_' + re.sub(r'\W', '_', name) + '_impl'
+    module_name = 'pf_plugin_' + re.sub(r'\W', '_', name) + '_impl'
     try:
         module = _loader().load_by_path(module_name, path, register=True, reuse=True)
     except (Exception, SystemExit) as e:      # noqa: BLE001 -- a broken plugin must not raise here
