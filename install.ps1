@@ -96,8 +96,90 @@ $repoSharedPf = Join-Path $langSkills 'shared\pf'
 if (-not (Test-Path -LiteralPath $repoSharedPf)) { throw "cannot find $repoSharedPf -- run this from the repository root." }
 if (-not (Test-Path -LiteralPath $skillsRoot)) { New-Item -ItemType Directory -Force -Path $skillsRoot | Out-Null }
 
-# ── 1. skill junctions ────────────────────────────────────────────────────────
+# The two skill sets share one namespace: a name under `$skillsRoot`. They are gathered here, before
+# section 1 writes a junction, because that is the only moment both are in hand with nothing on disk
+# yet. A plugin skill, or a method a node's declaration names, that carries a core skill's name would
+# take that junction in section 2: the core skill left unreachable under its own name, the run still
+# reporting success, and every re-run repeating the theft. So a name both sides carry is refused
+# before the first link is made or removed; a name only one side carries is an ordinary link, and a
+# plugin method that merely starts with `pf-` is a method like any other.
 $skills = Get-ChildItem -LiteralPath $langSkills -Directory | Where-Object { $_.Name -like 'pf-*' }
+$pluginsRoot = Join-Path $repo 'plugins'
+
+function Get-SkillFolders([string]$pluginDir) {
+    # Every skill one plugin ships: `skills\<lang>\<method>`, in language order. Which of them gets
+    # linked is decided below, not here: a filter here is what would silently turn a missing language
+    # into a missing link.
+    $root = Join-Path $pluginDir 'skills'
+    $found = @()
+    if (-not (Test-Path -LiteralPath $root)) { return $found }
+    foreach ($langDir in Get-ChildItem -LiteralPath $root -Directory) {
+        if ($langDir.Name -like '.*' -or $langDir.Name -like '__*') { continue }
+        foreach ($method in Get-ChildItem -LiteralPath $langDir.FullName -Directory) {
+            $found += [pscustomobject]@{ Method = $method.Name; Folder = $method.FullName
+                                         Plugin = (Split-Path -Leaf $pluginDir)
+                                         Language = $langDir.Name }
+        }
+    }
+    return $found
+}
+
+function Get-DeclaredMethods([string]$pluginDir) {
+    # The methods a declaration points a node at (`metrics.<key>.method`): the names the install owes a
+    # readable skill, each with the plugin that declared it, so a name two owners share can say who
+    # claims it. Only the caller says what to do when no skill answers one.
+    $file = Join-Path $pluginDir 'plugin.json'
+    if (-not (Test-Path -LiteralPath $file)) { return @() }
+    try { $decl = Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return @() }
+    $found = @()
+    if ($decl.metrics) {
+        foreach ($metric in $decl.metrics.PSObject.Properties) {
+            $method = $metric.Value.method
+            if ($method -is [string] -and $method) {
+                $found += [pscustomobject]@{ Method = $method; Plugin = (Split-Path -Leaf $pluginDir) }
+            }
+        }
+    }
+    return $found
+}
+
+$pluginFolders = @()
+if (Test-Path -LiteralPath $pluginsRoot) {
+    $pluginFolders = @(Get-ChildItem -LiteralPath $pluginsRoot -Directory | Where-Object {
+        $_.Name -notlike '.*' -and $_.Name -notlike '__*' })
+}
+$allSkills = @()
+$declared = @()
+foreach ($plugin in $pluginFolders) {
+    $allSkills += Get-SkillFolders $plugin.FullName
+    $declared += Get-DeclaredMethods $plugin.FullName
+}
+
+# Who claims a name, the first claimant winning: the throw can name one plugin, and the one whose
+# claim the run would have read first is the one to send the reader to.
+$claims = @{}
+foreach ($skill in $allSkills) {
+    $key = $skill.Method.ToLowerInvariant()
+    if (-not $claims.ContainsKey($key)) { $claims[$key] = $skill.Plugin }
+}
+foreach ($decl in $declared) {
+    $key = $decl.Method.ToLowerInvariant()
+    if (-not $claims.ContainsKey($key)) { $claims[$key] = $decl.Plugin }
+}
+# Uninstall is not refused: it writes no junction, and taking a stolen one off is how the core skill
+# gets its own name back for the next run.
+if (-not $Uninstall) {
+    foreach ($skill in $skills) {
+        $key = $skill.Name.ToLowerInvariant()
+        if ($claims.ContainsKey($key)) {
+            throw ("plugin '$($claims[$key])' claims the skill name '$($skill.Name)', which belongs to a " +
+                   "core skill here: one method name has one skill, so that plugin's link would overwrite " +
+                   "the core's. Rename the plugin's method or the core skill, and re-run.")
+        }
+    }
+}
+
+# ── 1. skill junctions ────────────────────────────────────────────────────────
 foreach ($skill in $skills) {
     $link = Join-Path $skillsRoot $skill.Name
     if ($Uninstall) {
@@ -123,42 +205,9 @@ if (-not $Uninstall) {
 # the dead link off -- that is all "installed and removed with it" means. Which links are this step's
 # to reconcile is answered by the link's own shape (`Test-PluginSkill`), never by where the checkout
 # sits at the moment: a repository that moves keeps its skill links attributable, and a repair then
-# re-points them at the new place instead of leaving them dead behind it.
-$pluginsRoot = Join-Path $repo 'plugins'
-
-function Get-SkillFolders([string]$pluginDir) {
-    # Every skill one plugin ships: `skills\<lang>\<method>`, in language order. Which of them gets
-    # linked is decided below, not here: a filter here is what would silently turn a missing language
-    # into a missing link.
-    $root = Join-Path $pluginDir 'skills'
-    $found = @()
-    if (-not (Test-Path -LiteralPath $root)) { return $found }
-    foreach ($langDir in Get-ChildItem -LiteralPath $root -Directory) {
-        if ($langDir.Name -like '.*' -or $langDir.Name -like '__*') { continue }
-        foreach ($method in Get-ChildItem -LiteralPath $langDir.FullName -Directory) {
-            $found += [pscustomobject]@{ Method = $method.Name; Folder = $method.FullName
-                                         Plugin = (Split-Path -Leaf $pluginDir)
-                                         Language = $langDir.Name }
-        }
-    }
-    return $found
-}
-
-function Get-DeclaredMethods([string]$pluginDir) {
-    # The methods a declaration points a node at (`metrics.<key>.method`): the names the install owes a
-    # readable skill. Only the caller says what to do when no skill answers one.
-    $file = Join-Path $pluginDir 'plugin.json'
-    if (-not (Test-Path -LiteralPath $file)) { return @() }
-    try { $decl = Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return @() }
-    $found = @()
-    if ($decl.metrics) {
-        foreach ($metric in $decl.metrics.PSObject.Properties) {
-            $method = $metric.Value.method
-            if ($method -is [string] -and $method) { $found += $method }
-        }
-    }
-    return $found
-}
+# re-points them at the new place instead of leaving them dead behind it. The set itself is gathered
+# above, before the core's links are made, so a name the two sides share is refused there instead of
+# linked here.
 
 function Test-PluginSkill([string]$target) {
     # Is this link pointing at a plugin's skill -- `<checkout>\plugins\<name>\skills\<lang>\<method>`?
@@ -183,18 +232,6 @@ function Test-UnderPlugins([string]$target) {
     return $target.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
-$pluginFolders = @()
-if (Test-Path -LiteralPath $pluginsRoot) {
-    $pluginFolders = @(Get-ChildItem -LiteralPath $pluginsRoot -Directory | Where-Object {
-        $_.Name -notlike '.*' -and $_.Name -notlike '__*' })
-}
-$allSkills = @()
-$declared = @()
-foreach ($plugin in $pluginFolders) {
-    $allSkills += Get-SkillFolders $plugin.FullName
-    $declared += Get-DeclaredMethods $plugin.FullName
-}
-
 $pluginSkills = @($allSkills | Where-Object { $_.Language -eq $Lang })
 $spareSkills = @{}
 foreach ($skill in $allSkills) {
@@ -213,7 +250,7 @@ foreach ($key in @($spareSkills.Keys | Sort-Object)) {
 $shipped = @{}
 foreach ($skill in $allSkills) { $shipped[$skill.Method.ToLowerInvariant()] = $true }
 if (-not $Uninstall) {
-    foreach ($method in @($declared | Sort-Object -Unique)) {
+    foreach ($method in @($declared.Method | Sort-Object -Unique)) {
         if ($shipped.ContainsKey($method.ToLowerInvariant())) { continue }
         Say 'missing' ("$method  (no language ships this skill; a node naming it would land on nothing)")
     }
@@ -280,6 +317,12 @@ if ($Uninstall) {
     }
 } elseif (Test-Path -LiteralPath $sharedRoot) {
     Say 'already a dir' $sharedRoot
+} else {
+    # Nothing owns `shared` here yet -- the first install on a machine, or a root someone cleaned.
+    # It has to become a real directory: the branch below links this checkout's `pf` into it, and a
+    # skill body that says `../shared/pf/…` reads a path that only exists once it is one.
+    New-Item -ItemType Directory -Force -Path $sharedRoot | Out-Null
+    Say 'created' $sharedRoot
 }
 if (-not $Uninstall -and (Test-Path -LiteralPath $sharedRoot) -and -not (Test-Reparse $sharedRoot)) {
     New-Junction $sharedPf $repoSharedPf
