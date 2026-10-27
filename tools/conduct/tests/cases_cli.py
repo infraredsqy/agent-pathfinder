@@ -154,6 +154,31 @@ class TestCLIEntryPoints(Base):
         after = self.cli(sb, 'cycle', 'show', 'cyc', NODE)
         self.assertIn('signal: completed', after.stdout)
 
+    def test_the_line_readings_carry_the_tag_scope(self):
+        """`cycle list` / `cycle current` print each line's tags.
+
+        Which nodes a line can pick is the one fact a human needs before putting a parked line
+        back in service, and both readings must answer it -- especially for a line that is out of
+        service, which is exactly the one a handoff decision is about.
+        """
+        sb = self.make(cli=True)
+        sb.add_node(NODE, 'UI design', mode='auto', tags=['coding'])
+        sb.start_cycle(tags='coding,art')
+
+        listed = self.cli(sb, 'cycle', 'list')
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        self.assertIn('coding,art', listed.stdout)
+
+        current = self.cli(sb, 'cycle', 'current')
+        self.assertIn('[active]', current.stdout)
+        self.assertIn('tags: coding,art', current.stdout)
+
+        sb.set_cycle_status('cyc', 'inactive')
+        parked = self.cli(sb, 'cycle', 'current')
+        self.assertIn('[inactive]', parked.stdout)
+        self.assertIn('tags: coding,art', parked.stdout,
+                      'a parked line is exactly the one whose scope a human must read')
+
     def test_next_help_documents_the_surface(self):
         proc = run_argv([STATE_MANAGE, 'next', '--help'], check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr)

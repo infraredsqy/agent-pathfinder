@@ -398,15 +398,16 @@ def cmd_cycle_list() -> None:
     if not state['cycles']:
         print('No cycles found.')
         return
-    print(f'{"ID":<22} {"Title":<34} {"Status":<12} {"Steps":<6} {"Node":<10}')
-    print('-' * 92)
+    print(f'{"ID":<22} {"Title":<34} {"Status":<12} {"Steps":<6} {"Node":<10} {"Tags":<14}')
+    print('-' * 108)
     for c in state['cycles']:
         holding = _holding_ids(c)
         node = holding[0][:8] if holding else '-'
         if len(holding) > 1:
             node += f'+{len(holding) - 1}'
+        tags = ','.join(c.get('tags') or []) or '-'
         print(f'{c["id"]:<22} {c.get("title","?"):<34} '
-              f'{c.get("status","?"):<12} {len(c.get("path") or []):<6} {node:<10}')
+              f'{c.get("status","?"):<12} {len(c.get("path") or []):<6} {node:<10} {tags:<14}')
 
 
 def cmd_cycle_current() -> None:
@@ -429,7 +430,8 @@ def cmd_cycle_current() -> None:
         # ● in service, ○ not -- one glance says whether this line moves on by itself.
         mark = '●' if c.get('status') == 'active' else '○'
         policy = ', '.join(f'{k}={v}' for k, v in cycle_policy(c).items())
-        print(f'{mark} {c["id"]} — {c.get("title","")}  [{c.get("status", "?")}]')
+        tags = ','.join(c.get('tags') or []) or '(none)'
+        print(f'{mark} {c["id"]} — {c.get("title","")}  [{c.get("status", "?")}]  tags: {tags}')
         print(f'  Policy: {policy}  Steps walked: {len(c.get("path") or [])}')
         holding = _holding_of(c)
         if holding:

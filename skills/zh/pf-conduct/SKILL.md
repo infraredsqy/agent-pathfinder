@@ -123,7 +123,7 @@ tag 说清一个节点属于哪条线：`writing`（文案）、`coding`（代�
 | `/pf-conduct status` | `cycle list` + `cycle current`，只看不推进 |
 | `/pf-conduct`，恰好一条 active cycle | 接着跑：`next --spawn --json`（裸 `next` 跟的就是这条唯一 active 的线） |
 | `/pf-conduct`，多条 active cycle | 裸 `next` 会被拒，报错列出候选线并指 `--cycle` —— 把候选念给用户，他点名哪条就走哪条：`next --cycle <cycle id> --spawn --json`（少了 `--spawn` 只会钉住节点、写好 prompt，没有会话接手） |
-| `/pf-conduct`，线都在、只是没一条 `active` | `cycle status <id> active` 把它放回服务，再接着跑。不在服务中的线点名也驱动不动（`next` 回 `ask_user`，把那条命令原文给你），但它钉着的那个节点照样收得掉——只登记、不派发；要重做 `shelved` 的节点，先 `pf dag revive <node_id>` |
+| `/pf-conduct`，线都在、只是没一条 `active` | `cycle status <id> active` 把它放回服务，再接着跑。不在服务中的线点名也驱动不动（`next` 回 `ask_user`，把那条命令原文给你），但它钉着的那个节点照样收得掉——只登记、不派发；要重做 `shelved` 的节点，先 `pf dag revive <node_id>`。多条候选摆出来让用户点名，别替他挑——这个决定本该在 pf-route 里就跟节点一起定掉；刚从那儿过来的，线应该已经是 `active` 的，直接走上一行 |
 | `/pf-conduct`，还没有 cycle | 走下面「开机」 |
 | 用户直接说要做的事，还没有 cycle | 走「开机」，`--title` 用他那句话 |
 

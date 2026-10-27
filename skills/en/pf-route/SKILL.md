@@ -91,8 +91,10 @@ spec is read-only to downstream.
    the spec. **It does not go into the project root's `AGENTS.md` / `CLAUDE.md`** — settings live
    only in `.pf/config.json` and the global copy. The worktree mode is the same, through
    `pf config set worktree_mode`. A pure graph query asks nothing
-4. Read the DAG: first `pf dag --help` to confirm the full set of commands, then list the graph
-   once to see the skeleton
+4. Read the DAG, and read the lines with it: first `pf dag --help` to confirm the full set of
+   commands, then list the graph once to see the skeleton; `pf cycle list` and `pf cycle current`
+   say which lines are in service and what each line's tags cover — the lines enter here, to be
+   settled together with the nodes in step 3
    - The user names a specific feature → search by keyword, merging like words into one query
      (for the technique, see toolcraft.md)
    - A node is hit → look at its detail and its direct dependencies; to read spec.md's content
@@ -161,6 +163,12 @@ now, some have to enter the graph and queue, and the queued ones have an order a
   edges cannot be added (three nodes colliding pairwise, falling into a cycle), the right
   conclusion is that they should become one node**, and take care not to dodge into lowering
   `parallel`
+- **Which line**: which line the new work belongs to is settled here, together with value and
+  dependency. A line in service whose tags cover the new node takes it; when no line can take it,
+  lay the two roads out for him to pick — which parked line to put back (`pf cycle status <line>
+  active`), or open a new one (`pf cycle start <slug> --title "<the user's own words>" --tags
+  <tags>`). **Only the user decides whether a line comes back to service**; your pen is only his
+  hand. The decision is settled here, and the close only executes it (see step 5)
 
 Each piece of work picks one road:
 
@@ -325,17 +333,32 @@ carries the judgements and the conventions only.
 
 ### Step 5: close out
 
-Collect this run's things into commits, in two shots:
+To run it right now, the line was settled together with the nodes in step 3; here you only land
+it, then collect the commits:
 
-- **One commit for the graph and the spec** (`docs:`, with the description saying which node was
-  added / changed): `.pf/ideas.json` and `.pf/nodes/<uuid>/spec.md` — this record stays in the
-  workspace, and another machine cannot see this node
-- **One commit for what "do it now" produced** (`docs:` / `style:` / `chore:`, picked by what
-  changed)
+1. **Land the line** (the user has nodded; you are only the hand that executes): putting a parked
+   line back runs `pf cycle status <line> active`; opening a new one runs `pf cycle start <slug>
+   --title "<the user's own words>" --tags <tags>` — `--tags` is required, and matches these
+   nodes' tags
+2. **Collect the commits**, in two shots:
+   - **One commit for the graph, the spec and the cycle records** (`docs:`, with the description
+     saying which node was added / changed): `.pf/ideas.json`, `.pf/state.json` and
+     `.pf/nodes/<uuid>/spec.md` — this record stays in the workspace, and another machine cannot
+     see this node
+   - **One commit for what "do it now" produced** (`docs:` / `style:` / `chore:`, picked by what
+     changed)
+3. **Verify**: `pf next --plan` (with `--cycle <line>` when several lines are in service) — the
+   answer has to point at a dispatchable node; when it does not, an empty ready set means going
+   back to grow the graph, and a tag block or a gate is read out as its `reason` says — **never
+   hand over a line that cannot run**
+4. **Hand over the keys**: the report ends with one line the user can run by pressing enter —
+   `/pf-conduct <node id>`; when the line picks its own way through, a bare `/pf-conduct`. Once he
+   presses enter, that session should not have to ask "who am I, which line am I on"; while the
+   line is still parked, give no line at all and say the state as it is
 
-Give the user both shas along with the report — that commit is the trace of "do it now". Then
-report to the user what changed and what the topology is now. To run it right now, use
-`/pf-conduct` — it dispatches the graph's ready node; to name a node, name it on the call line.
+When he does not want to run it now: skip landing the line, collect the commits and report the
+topology as usual.
+Give the user both shas along with the report — that commit is the trace of "do it now".
 
 ## Query mode
 
@@ -354,8 +377,10 @@ Distil the key information into the answer; do not dump the raw JSON.
 - Small things that do not need a graph entry (docs catching up with the state, a non-behavioural
   small change, a feasibility probe) go to a subagent, and you still do not touch a file's body
   yourself
-- **pf-conduct**: running the graph, doing the nodes. Picking a node from the graph, opening a
-  cycle, one node from prepare to close; building no nodes
+- **pf-conduct**: running the graph, doing the nodes. One node from prepare to close; it builds no
+  nodes and opens no line — opening a line, or putting a parked one back in service, is written
+  down by you with the user's nod; it only backstops a bare `/pf-conduct` that skipped pf-route
+  (its own opening-at-start road stays)
 - **the debt-recording branch**: scanning new debt in, ruling with the user on external — this
   branch's skills (the debt-clearing one included) ship with the plugin that watches that debt, and
   the conventions are in that folder's own skill: `pf doctor` prints whether that plugin is installed
