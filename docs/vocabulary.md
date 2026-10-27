@@ -161,7 +161,7 @@
 | 验收 / 总验收 | acceptance / final acceptance |
 | 两个入口 / 唯一入口 | the two ways in / the one way in |
 
-每份 `SKILL.md` 开头那三行抬头，七份用同一套写法：
+每份 `SKILL.md` 开头那三行抬头，用同一套写法：
 
 | 中文 | 英文 |
 |---|---|

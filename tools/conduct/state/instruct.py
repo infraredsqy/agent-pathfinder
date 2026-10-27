@@ -381,7 +381,7 @@ def cmd_instruction_list(as_json: bool, live_only: bool, project: str | None = N
                       node: str | None = None) -> None:
     """The instruction channel.
 
-    Nothing is injected into a dispatch prompt any more, so this command is how a session learns
+    Nothing is injected into a dispatch prompt, so this command is how a session learns
     what the user asked for: it runs it among its first commands and reads the answer. The default
     view is therefore computed from WHERE the pipeline stands -- the line this session works on and
     the node in its hand -- and not from the whole account: a view that is narrower than the truth is
@@ -527,9 +527,8 @@ def cmd_instruction_revive(ins_id: str, project: str | None = None) -> None:
     one act of one code path, so the merge driver resolves them as a unit (see the NOTES in
     `tools/conduct/ledger-merge.py`): a revive on one machine is not torn apart by a pull on another.
 
-    A field an older tool left on the record (it used to note which hand archived the entry) is
-    ordinary data now, and reviving does not rewrite it: this command writes the state and its one
-    stamp, and nothing else.
+    Any other field on the record is ordinary data, and reviving does not rewrite it: this command
+    writes the state and its one stamp, and nothing else.
 
     An entry that is already live is refused, and so is an id the account does not have. Neither is
     putting something back, and a quiet success would be a lie about what is in force.

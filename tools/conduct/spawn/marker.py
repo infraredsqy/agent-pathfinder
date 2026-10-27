@@ -15,7 +15,7 @@ that exception and its reason are written in the `how` item.
               line clears only this line's marker, never wiping another line's broken-chain sign.
     shape     record(cycle, phase, reason, attempts=, workspace=, extra=) -- one shape, and every
               path that writes it grows the same one; the host's own facts (dsh's api_base, zcode's
-              db) travel in the `extra` slot, so drift no longer lands on the fields. `detected_at`
+              db) travel in the `extra` slot, so drift lands there, not on the fields. `detected_at`
               is this record's own moment, taking the microsecond shape from
               `tools/shared/clock.py` (`clock.now()`) -- the moment's shape has exactly one source.
     how       write(path, payload) -- `tools/shared/jsonio.py`'s atomic write: temp file +
@@ -43,7 +43,7 @@ the dispatch side stops assembling a second copy of its own, and when the name c
 moves along with the record.
 
 The command line is the face for a human troubleshooting or drilling: `python marker.py write
---path ...` writes one marker by hand to this shape. The spawner no longer calls it (see the
+--path ...` writes one marker by hand to this shape. The spawner does not call it (see the
 exception above); the python side uses `marker_path` / `record` / `write` directly.
 
 Loaded by PATH, never by name, like every other file in this directory: the callers are themselves

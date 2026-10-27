@@ -120,11 +120,10 @@ NOTES  (deliberate consequences, worth knowing before trusting a clean merge)
     record cannot come back half-archived.
     `note` deliberately does NOT travel with them: a hand-written note is never silently
     overwritten, so a `note` both sides changed is a conflict.
-  * instructions: an older tool's bookkeeping (`applied` / `applied_rounds` / `superseded_by`, and the
-    hand an archive used to record in `resolved_by`) is not claimed by anything any more, so the
-    driver gives it no rule. A record still carrying those fields merges as it stands and needs no
-    repair: a reader treats any `state` other than `live` as archived, and these fields are ordinary
-    data nobody reads -- which is also why a merge never rewrites one.
+  * instructions: bookkeeping no code claims (`applied` / `applied_rounds` / `superseded_by` /
+    `resolved_by`) gets no rule from the driver. A record still carrying those fields merges as it
+    stands and needs no repair: a reader treats any `state` other than `live` as archived, and these
+    fields are ordinary data nobody reads -- which is also why a merge never rewrites one.
   * Key order in the merged file: ours', with keys only theirs has appended (`ideas.json` is sorted
     by its own writer). An existing record is never reordered, so a merge that decides nothing new
     leaves the bytes alone -- and `run` skips the write entirely when they are unchanged.

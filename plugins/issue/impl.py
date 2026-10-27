@@ -126,8 +126,8 @@ def _number(value) -> float | None:
 def pool_weight(ctx) -> float | None:
     """How heavy the pool is, asked of the tool that owns it. `None` when it cannot be read.
 
-    A missing number reads as "not known this pass", never as 0: reading it as 0 would make a real
-    debt look paid off. The answer is the last non-empty line of the tool's stdout.
+    The answer is the last non-empty line of the tool's stdout; a missing or garbled one reads as
+    "not known this pass", never as 0.
     """
     try:
         out = ctx.capture(issue_argv())

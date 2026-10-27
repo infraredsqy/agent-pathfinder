@@ -1,6 +1,6 @@
 """The `cycle` group: one line of work, and every verb that acts on it.
 
-Owns all eleven verbs of `pf cycle` -- create / start / rename / status / policy / list / current /
+Owns the verbs of `pf cycle` -- create / start / rename / status / policy / list / current /
 show / hold / close / retry -- plus the vocabulary a cycle carries: VALID_TAGS, `_parse_cycle_tags`
 and the policy table (`POLICY_*`, and `cycle_policy` as the one reading of it).
 

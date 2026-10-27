@@ -292,7 +292,7 @@ def _source_cells(decl: dict) -> dict:
 
 
 def _served(decl: dict) -> tuple:
-    """What one declaration's readings may draw on: the core's own two, then the names it claims.
+    """What one declaration's readings may draw on: the core's own, then the names it claims.
 
     One declaration only. A source another plugin claims is not in this tuple: a claimed name is the
     claimant's, not a well every reading may reach into, so B's reading on A's source stays a
@@ -688,8 +688,7 @@ def _skill_problems(plugins: list) -> list:
     A skill no declaration names is not a problem either way: it is a skill the user invokes, and
     `pf doctor` lists it with the plugin that carries it.
 
-    There is no skills tree to be missing here any more: the skill belongs to the plugin, so a project
-    with no plugin has no skill and nothing to report.
+    The skill belongs to the plugin, so a project with no plugin has no skill and nothing to report.
     """
     out = []
     owner = {}

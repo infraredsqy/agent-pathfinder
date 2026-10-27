@@ -140,7 +140,7 @@ def live_instructions(project: Path, target: str | None = None, cycle: str | Non
 
 # How an instruction reaches the session that has to obey it: the session runs
 # `state-manage.py instruct list` and reads what is visible from where the pipeline stands. Nothing
-# is injected into a prompt any more.
+# is injected into a prompt.
 #
 # There is deliberately no "write `done` when the scope ends" step either. Visibility is a pure
 # derivation -- `scope` + the bound node/cycle + the DAG as it stands -- so an entry that has gone

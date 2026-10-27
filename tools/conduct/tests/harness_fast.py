@@ -120,7 +120,7 @@ class FastStateManage:
                       '--spawn': ('spawn', False, False),
                       '--spawner': ('spawner', True, None)}),
     }
-    #: `pf cycle <verb>`: the group's eleven verbs, in the same shape as `_SPEC`. The entry's `route`
+    #: `pf cycle <verb>`: the group's verbs, in the same shape as `_SPEC`. The entry's `route`
     #: is what answers them (keyed off `ns.cycle_command`), so this table and `_CYCLE_CALLS` are one
     #: list of the group's surface: the first is what the argv is parsed with, the second names the
     #: `cmd_*` each verb reaches.

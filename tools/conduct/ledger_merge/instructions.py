@@ -25,8 +25,7 @@ from .generic import (_MISSING, _UNDECIDED, _as_dict, _get, _keys, _merge_entrie
                       _plain_field, _stamp, _three_way)
 
 #: One act of archiving (or putting back) writes these together, and the driver resolves them as a
-#: unit. An archived entry used to record the hand that did it as well; nothing writes that any more,
-#: so it is ordinary data with no rule of its own.
+#: unit. Anything else on an archived entry is ordinary data with no rule of its own.
 RESOLUTION_GROUP = ('state', 'resolved_at')
 #: The key the trace a removal leaves lives under -- the `id` and the moment, no text. The
 #: instruction collection propagates deletions like the graph; the traces themselves are unioned,

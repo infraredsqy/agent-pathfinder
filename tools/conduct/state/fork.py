@@ -1,12 +1,9 @@
 """The parallel-mode fork: one worktree per node, and the record that proves it was closed out.
 
-Parallel mode (the SKILL's "parallel: worktree") puts a node's code work into the main tree's
+Parallel mode puts a node's code work into the main tree's
 `.pf/worktrees/<node short id>` checkout, on branch `pf/<node short id>` (a git ref name may not start
 with a dot, so the branch drops that dot from the directory name); `.pf/` itself always lands in the
-main tree. Today this is all hand-typed git commands, and both gates (a clean main tree, an unused
-name) rest on the prep step's own self-discipline -- while the closing side has only the SKILL's one
-line, "clean up the merge-back before handoff", and nobody checks it. This module turns both ends into
-tool gates:
+main tree. Both ends are tool gates:
 
     fork-worktree <node_id>   at the end of prep: check the main tree is clean and the short id is
                               free, then `git worktree add`, and write
@@ -46,7 +43,7 @@ def worktree_path(project: Path, node_id: str) -> Path:
 
 
 def worktree_branch(node_id: str) -> str:
-    """One node's parallel exit branch: `pf/<short id>` (the SKILL's "parallel: worktree" wording).
+    """One node's parallel exit branch: `pf/<short id>`.
 
     The branch name comes from the ledger directory's name: a git ref name may not start with a dot,
     so the branch prefix for the directory `.pf/` is `pf/`.
@@ -136,7 +133,7 @@ def gate_close_on_fork(project: Path, node_id: str) -> None:
     """The close's backstop: while a FORK record is still there the merge-back must be finished, or the
     node may not be settled.
 
-    The merge-back is three steps (the SKILL's "parallel: worktree"): merge the exit branch inside the
+    The merge-back is three steps: merge the exit branch inside the
     worktree, squash it into the main tree, then `git worktree remove` + `git branch -D`. The third step
     not done means this close took the parallel path but did not finish it -- carry on to handoff and
     dispatch, and the next slot opens on a tree still carrying an old branch. So: if the worktree

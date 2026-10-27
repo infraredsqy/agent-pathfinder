@@ -228,9 +228,9 @@ def _open(project: Path, cycle: dict, nodes: list) -> dict:
 def _park_commands(cycle: dict) -> list:
     """Stopping is one sentence: turn this line `inactive`.
 
-    There is no paused / completed distinction any more: that fork asked whether the graph still had
-    work, and a graph grows and work multiplies, so whether a stopped line should run on is a
-    human's call. The tool never writes `active`.
+    There is no paused / completed fork: whether a stopped line should run on is a human's call --
+    a graph grows and its work multiplies, so no status can answer it. The tool never writes
+    `active`.
     """
     return [seam.cmd('cycle', 'status', cycle['id'], 'inactive')]
 

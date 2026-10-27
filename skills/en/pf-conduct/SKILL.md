@@ -776,6 +776,8 @@ checkout root prints it), not under the current project's `docs/`.
 - The contract and the design: `docs/conduct-state.md` — the full set of `next`'s actions, the
   close's two ways in and the invariants are all in it (`holding` is a set of nodes, `parallel`
   is this line's cap)
+- Which plugins are installed, and each one's tools and conventions: `pf doctor` lists what is
+  installed, and the skills each declaration ships state their own tools and conventions
 - Method skills: `~/.agents/skills/<name>/SKILL.md` — named by the spec's `method: ` line; this is
   the only place a name turns into a path
 - Dispatch and authentication: `docs/conduct-dsh-dispatch.md`

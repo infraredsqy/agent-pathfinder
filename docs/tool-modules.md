@@ -161,5 +161,5 @@ import，谁也不用自己拼路径。本树不走这条，判据只有一条�
   文件自带。
 
 `shared/tests/` 是这一层自己的套件：不许 import 其他工具的夹具，要用的临时项目与那份装载器拷贝都
-自己造，所以改 `shared/` 只跑这一份就能自证。四条套件的跑法在 `README.md` 的 Development 一节
+自己造，所以改 `shared/` 只跑这一份就能自证。各套件的跑法在 `README.md` 的 Development 一节
 （命令只在那一处写）。

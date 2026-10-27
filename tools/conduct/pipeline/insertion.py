@@ -171,7 +171,7 @@ def mint(project, add_command: list, spec_of, commands: list) -> tuple:
     """Run the one command that mints the node's uuid, then fill the uuid in everywhere.
 
     Returns `(node_id, rest_of_commands)`, the second already carrying the real uuid where the
-    placeholder was and no longer holding `add` itself -- the command has run by then, and leaving
+    placeholder was and holding no `add` itself -- the command has run by then, and leaving
     it in the list would run it twice. The node's `spec.md` is written here too, from the same step:
     what a session reads is that file, the session boots long after this call, and `plan()` is not
     allowed to touch a file.
