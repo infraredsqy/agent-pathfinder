@@ -51,6 +51,21 @@ for five rounds across two nodes.
 **Correction signal**: a "must / must not / always / the cap is" whose source cannot be found
 anywhere in the user's own words or the goal docs.
 
+## `conduct-freezes-criteria-with-findings` — criteria frozen along with the findings
+
+**Symptom**: you read "word for word" as "the supplement's text is frozen" — the boundary moved (a
+line unfrozen, the scope narrowed, a user criterion swapped in), yet that criterion goes out unchanged
+in the next round's review prompt. The review judges by a stale standard, so what it reports is a
+defect in the standard; the conductor then handles it as a defect in the delivery.
+
+**Instance**: a node's second round ruled "the stale name in that one comment has to go, the rest
+stays frozen" and told the fix so; the third round's supplement still read "any change under that
+directory is a critical", and the review reported a critical off it (1 insertion / 1 deletion, zero
+runtime impact) which the user ruled did not stand.
+
+**Correction signal**: one criterion in this round cannot hold at the same time as the ruling you
+gave the fix last round.
+
 ## `conduct-hand-edits-ledger-or-resolves-conflicts` — hand-editing `.pf/` or ruling a conflict
 
 **Symptom**: to line the two sides' graphs up, you read and edit a record file under `.pf/`

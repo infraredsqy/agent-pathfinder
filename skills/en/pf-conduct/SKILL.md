@@ -384,9 +384,23 @@ Its product comes in two grades:
   into a fresh verification prompt and re-run the review once, and when it still cannot decide,
   hand it to the user. The power to rule a "false alarm" is the user's.
 
-Every round's prompt is **word for word** the first round's — except for naming this round's
-report file: it carries no finding from the previous round and says nothing about what the fixing
-agent did. `review-{N}.md` is only its conclusion on file.
+Every round's review prompt carries exactly three things: the spec path, this round's supplement
+(criteria and cautions), and this round's report file name. What it must **never** carry: the
+previous round's findings, what the fixing agent did, or your judgment on how well they did it — the
+review has to be a neutral judge that does not know what happened last round, otherwise it will spend
+its effort verifying the last fix and nobody will have judged this delivery from scratch.
+`review-{N}.md` is only its conclusion on file, round by round.
+
+"Word for word" is how you execute that intent: copy the first round's supplement each time, so you
+never rewrite it. It saves you the rewriting; what it protects is the line above — the review does not
+know what happened last round. **Criteria following the current boundary is what criteria are for**:
+when the boundary moved (a freeze loosened, the scope narrowed, a user criterion swapped in), that
+spot becomes the new boundary with the layer it now covers written out — that has nothing to do with
+leaking.
+
+The line runs between "a general boundary" and "a ruling on one finding": writing "this directory
+takes comment-level changes only" is a criterion; writing "stop reporting last round's comment" is a
+leak.
 
 ### Fix
 
@@ -442,8 +456,8 @@ verifying and what experience it wants):
 - When the spec and the goal docs have been combed through and it still cannot be decided → stop
   and report to the user, attaching what each side says and why it cannot be derived
 
-**A stuck loop is a mechanical signal**: the review looks from zero every round (the prompt is
-word for word the same) and the executor sees only this round's findings list, so neither knows how
+**A stuck loop is a mechanical signal**: the review looks from zero every round (it does not know
+what happened last round) and the executor sees only this round's findings list, so neither knows how
 many times the same spot has been changed — **that history is in your hands alone**, which is why
 you judge it.
 
