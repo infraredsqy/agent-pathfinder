@@ -52,8 +52,8 @@ from cases_base import Base, pipeline  # noqa: E402
 from harness import (CONDUCT_DIR, DAG_MANAGE, HANDOFF_PY, SIGNAL_PY, STATE_MANAGE,  # noqa: E402
                      TOOLS_DIR, _fresh_module, patched, plugins_dir, shipped_sources)
 
-__all__ = ['TestTheApprovalHasTwoHumanDoors', 'TestTheCoreNamesNoFeature',
-           'TestTheSkillsNameNoFeature', 'TestEverySelfEntryHasARealDoor',
+__all__ = ['TestTheApprovalHasTwoHumanDoors', 'TestTheCoreNamesNoPlugin',
+           'TestTheSkillsNameNoPlugin', 'TestEverySelfEntryHasARealDoor',
            'TestEveryMetricPassSkipsWithoutItsPlugin']
 
 #: The skill trees this checkout ships, one directory per language. A skill bound to a plugin is not
@@ -221,7 +221,7 @@ def _called_names(expr) -> set:
 
 # ── 2. the core names no plugin ────────────────────────────────────────────
 
-class TestTheCoreNamesNoFeature(Base):
+class TestTheCoreNamesNoPlugin(Base):
     """No module of this tool outside `plugins/` spells a name an installed declaration invents.
 
     The six groups are read off the declarations, so renaming a knob, a tag, a source name or a
@@ -252,7 +252,7 @@ class TestTheCoreNamesNoFeature(Base):
                     names |= {cell.get('tag'), cell.get('method')}
         return {name for name in names if isinstance(name, str) and name.strip()}
 
-    def test_the_core_names_no_installed_feature(self):
+    def test_the_core_names_no_installed_plugin(self):
         names = self.installed_names()
         if not names:
             self.skipTest('no plugin is installed: there is no name for the core to carry')
@@ -270,7 +270,7 @@ class TestTheCoreNamesNoFeature(Base):
 
 # ── 2b. the skills name no plugin ──────────────────────────────────────────
 
-class TestTheSkillsNameNoFeature(Base):
+class TestTheSkillsNameNoPlugin(Base):
     """No skill under `skills/` spells a name an installed declaration invents.
 
     The same six name groups the core guard watches -- a declaration's knob keys, its readings, its
@@ -305,7 +305,7 @@ class TestTheSkillsNameNoFeature(Base):
                     names |= {cell.get('tag'), cell.get('method')}
         return {name for name in names if isinstance(name, str) and name.strip()}
 
-    def test_the_skills_name_no_installed_feature(self):
+    def test_the_skills_name_no_installed_plugin(self):
         names = self.outside_names()
         if not names:
             self.skipTest('no plugin is installed: there is no name for a skill to carry')

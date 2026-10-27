@@ -136,7 +136,7 @@ def plan(project, cycle_id: str | None = None, decision: str | None = None,
         # Freshly pinned nodes are what a dispatch is for. A node whose session already runs is left
         # out of the list: handing it to the spawner again would boot a second session onto it.
         dag = load_dag(project)
-        gated = _feature_gate(project, cycle, waiting, dag)
+        gated = _plugin_gate(project, cycle, waiting, dag)
         if gated is not None:
             return gated
         return _dispatch_many(project, cycle, waiting, dag=dag)
@@ -179,7 +179,7 @@ def _pick_next(project: Path, cycle: dict, tags) -> dict:
     (`pick_node` takes the top row), so a line's first pick takes the same rows the fill would.
     The line fills the slots its `parallel` policy allows -- one pin per slot, in ranking order --
     and the pipeline never stops here: a human who wants a different one names it (`--node`,
-    `cycle hold`). A plugin may put a node in front of the pick (`_feature_pick_insertions`); that
+    `cycle hold`). A plugin may put a node in front of the pick (`_plugin_pick_insertions`); that
     answer is a graph edit with no pins, so the pick itself is then made on the next step, with the
     inserted node in the same ranking.
     """
@@ -189,14 +189,14 @@ def _pick_next(project: Path, cycle: dict, tags) -> dict:
     if ready:
         # A gate sits at the dispatch, and pinning is the first half of one: asked before the pins so
         # a refused dispatch leaves nothing pinned behind it.
-        gated = _feature_gate(project, cycle, [n['id'] for n in ready], dag)
+        gated = _plugin_gate(project, cycle, [n['id'] for n in ready], dag)
         if gated is not None:
             return gated
         # The other timing an insertion is allowed at: asked here, after the ready set is known and
         # before anything is pinned, so the nodes a plugin wants enter the graph ahead of the pick
         # instead of behind it. What comes back pins nobody -- the next step picks by ranking, and
         # the inserted node is in that ranking.
-        offers = _feature_pick_insertions(project, cycle, dag, ready[0])
+        offers = _plugin_pick_insertions(project, cycle, dag, ready[0])
         if offers:
             # `None` = every offer was skipped (a plugin whose text builder raises): the pick is
             # then the ordinary one, exactly as if nothing had asked.
@@ -450,7 +450,7 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
     # The plugins' one judgement, at the one moment it can be made: the settle that closes a node is
     # the only place a reading and a freshly picked successor are both in hand. With nothing
     # configured no plugin offers anything and this whole pass costs one dict lookup.
-    offers = _feature_insertions(project, cycle, node_id, sig, dag, filled[0])
+    offers = _plugin_insertions(project, cycle, node_id, sig, dag, filled[0])
     if offers:
         # The insertion action is a close that also edits the graph, so it carries the same close
         # commands (`_close_commands` with no successor) ahead of its own edits: they run after the
@@ -489,7 +489,7 @@ def _close_own_node(project: Path, cycle: dict, node_id: str, sig: dict,
     return opened
 
 
-def _feature_pick_insertions(project: Path, cycle: dict, dag: dict,
+def _plugin_pick_insertions(project: Path, cycle: dict, dag: dict,
                              target: dict | None = None) -> list:
     """The insertions the plugins want at a PICK, in registry order (empty is the common case).
 
@@ -504,7 +504,7 @@ def _feature_pick_insertions(project: Path, cycle: dict, dag: dict,
     return plugin_host.insertions('pick', ctx)
 
 
-def _feature_insertions(project: Path, cycle: dict, node_id: str, sig: dict | None, dag: dict,
+def _plugin_insertions(project: Path, cycle: dict, node_id: str, sig: dict | None, dag: dict,
                         target: dict | None = None) -> list:
     """The insertions the plugins want at this close, in registry order (empty is the common case).
 
@@ -539,7 +539,7 @@ def _gate_says(reasons) -> str:
     return 'a plugin gate blocked this dispatch: ' + '; '.join(reasons)
 
 
-def _feature_gate(project: Path, cycle: dict, node_ids, dag: dict | None = None) -> dict | None:
+def _plugin_gate(project: Path, cycle: dict, node_ids, dag: dict | None = None) -> dict | None:
     """The stop answer when a plugin gate refuses this dispatch, or `None` for a green light.
 
     A gate sits at the dispatch -- the one moment "does anybody mind another session opening now?"

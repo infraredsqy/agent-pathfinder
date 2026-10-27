@@ -690,12 +690,12 @@ class TestShelvedPolicy(Base):
         self.assertNotIn('policies', sb.cycle(), 'a refused write still wrote something')
 
     @requires_plugin(TICKET.plugin)
-    def test_a_feature_knob_is_validated_like_any_other(self):
+    def test_a_plugin_knob_is_validated_like_any_other(self):
         """`plugins/test-audit`'s line is a first-class policy key."""
         self.a_refused_line(TICKET.line)
 
     @requires_plugin(POOL.plugin)
-    def test_the_other_feature_knob_is_validated_the_same_way(self):
+    def test_the_other_plugin_knob_is_validated_the_same_way(self):
         """`plugins/issue`'s line is one too: the core reads both out of the declaration, so neither
         is a special case."""
         self.a_refused_line(POOL.line)
@@ -1065,7 +1065,7 @@ class TestTheCloseHasOneEntry(Base):
     #: The machinery a close is built from: the stop rule, the mechanical close list, the stop
     #: answer, and the plugins' two halves (the judgement the host is asked, and the action it
     #: becomes).
-    MACHINERY = ('stop_criterion', '_close_commands', '_stop_action', '_feature_insertions',
+    MACHINERY = ('stop_criterion', '_close_commands', '_stop_action', '_plugin_insertions',
                  '_insertions_due')
 
     def machinery_callers(self):

@@ -63,7 +63,7 @@ LINE = re.compile(r'^(?P<key>[a-z_]+)\s+=\s+(?P<value>.+?)\s*\((?P<layer>.+?)\)$
 NODE = 'deadbeef-0000-1111-2222-333344445555'
 
 
-def _install_feature(plugins: Path) -> None:
+def _install_plugin(plugins: Path) -> None:
     """Put a throwaway plugin under `plugins/`, declaring the two kinds the built-ins lack.
 
     A plugin is a folder: a declaration (data) and an implementation (code). Nothing here runs the
@@ -99,7 +99,7 @@ class TestConfig(unittest.TestCase):
         # The two non-built-in kinds arrive from a plugin's declaration; a sandbox one keeps this
         # file independent of the plugins this checkout ships.
         self.plugins = self.base / 'plugins'
-        _install_feature(self.plugins)
+        _install_plugin(self.plugins)
         env = mock.patch.dict(os.environ, {'PF_HOME_DIR': str(self.home),
                                            'PF_PLUGINS_DIR': str(self.plugins)})
         env.start()

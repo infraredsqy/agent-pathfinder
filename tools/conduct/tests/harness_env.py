@@ -356,14 +356,14 @@ def write_plugin(root, name: str, decl: dict | None = None, impl: str = '', *,
     return folder
 
 
-def write_skill(feature_folder, method: str, lang: str = 'en', text: str | None = None) -> Path:
+def write_skill(plugin_folder, method: str, lang: str = 'en', text: str | None = None) -> Path:
     """One skill inside a plugin folder: `<plugin>/skills/<lang>/<method>/SKILL.md`.
 
     A skill a metric names by its `method` lives in the plugin's own folder, so a case that needs the
     method to be backed writes it here -- one language is enough, which is the same rule the registry
     applies. Returns the skill folder.
     """
-    folder = Path(feature_folder) / 'skills' / lang / method
+    folder = Path(plugin_folder) / 'skills' / lang / method
     folder.mkdir(parents=True, exist_ok=True)
     (folder / 'SKILL.md').write_text(text if text is not None else f'# {method}\n', encoding='utf-8')
     return folder

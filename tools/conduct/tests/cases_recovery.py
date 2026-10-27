@@ -100,8 +100,8 @@ class TestRetry(Base):
         self.assertEqual(sb.dag_status(NODE), 'shelved')
 
     def test_the_redone_node_hands_off_again_and_the_path_keeps_both_verdicts(self):
-        """§8's redo chain walked to the end: the redone session's second note is not refused
-        again.
+        """The recovery section's redo chain walked to the end: the redone session's second note is
+        not refused again.
 
         The `failed` verdict stays on the path as history, and the redo's `completed` is appended
         as a second step -- a walk revisiting a node is legal. The redo's delivery happens while

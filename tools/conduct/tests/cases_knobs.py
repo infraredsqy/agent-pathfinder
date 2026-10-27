@@ -52,7 +52,7 @@ from harness import CONDUCT_DIR, STATE_MANAGE, _child_env, init_markers, run_arg
     shared_loader  # noqa: E402
 
 __all__ = ['TestKnobKinds', 'TestKnobTable', 'TestKnobChain', 'TestKnobTicketReadings',
-           'TestKnobFeaturesDir']
+           'TestKnobPluginsDir']
 
 STATE_DIR = CONDUCT_DIR / 'state'
 #: The settings the core itself reads. Stated here as the expectation, never asked of the tool. The
@@ -242,7 +242,7 @@ class TestKnobTable(_Sandbox):
         self.assertEqual('auditor', specs['audit_limit']['plugin'],
                          'the merged cell says who declared it')
 
-    def test_a_feature_cannot_redefine_a_builtin_name(self):
+    def test_a_plugin_cannot_redefine_a_builtin_name(self):
         """The built-in cell is the core's own statement of what that setting means: a declaration
         that claims the name is refused here (the merge is where the precedence lives) and reported
         by `shadowed()`, which is the one door that sees both tables -- the doctor prints it."""
@@ -388,10 +388,10 @@ class TestKnobTicketReadings(_Sandbox):
                          "a threshold this line set is in force for this line's readings")
 
 
-class TestKnobFeaturesDir(_Sandbox):
+class TestKnobPluginsDir(_Sandbox):
     """`PF_PLUGINS_DIR`: the scan follows the variable, caches nothing, and is empty for no folders."""
 
-    def test_installing_and_removing_a_feature_changes_the_next_call(self):
+    def test_installing_and_removing_a_plugin_changes_the_next_call(self):
         self.assertNotIn('audit_limit', knobs().specs())
 
         folder = write_plugin(self.plugins, 'auditor', auditor_declaration())
@@ -401,7 +401,7 @@ class TestKnobFeaturesDir(_Sandbox):
         self.assertNotIn('audit_limit', knobs().specs(),
                          'and the next call sees it gone -- the folder is the whole identity')
 
-    def test_a_missing_plugins_directory_is_zero_features_not_an_error(self):
+    def test_a_missing_plugins_directory_is_zero_plugins_not_an_error(self):
         absent = self.base / 'absent'
         with mock.patch.dict(os.environ, {'PF_PLUGINS_DIR': str(absent)}):
             self.assertEqual(SETTING_NAMES, set(knobs().specs()) & SETTING_NAMES)

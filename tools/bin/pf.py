@@ -409,7 +409,7 @@ def _knob_line(name: str, spec: dict) -> str:
     return f'{name}{cell}' + (f' — {summary}' if summary else '')
 
 
-def _report_features() -> int:
+def _report_plugins() -> int:
     """Say which plugins are installed and how each one works -- its own summary, the knobs it
     declares, the tags and methods the outside writes down, the reading sources it computes itself,
     the commands it contributes -- print every problem the validator found, and count those problems
@@ -486,7 +486,7 @@ def cmd_doctor(fix: bool = False) -> int:
         print(f'  ✗ Python {sys.version.split()[0]} is too old (this tool tree needs 3.10+)')
         problems += 1
     try:
-        problems += _report_features()
+        problems += _report_plugins()
     except Exception as e:                     # noqa: BLE001 -- a health check must answer, not die
         print(f'  ✗ the plugin registry could not be read: {e}')
         problems += 1

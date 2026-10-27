@@ -19,7 +19,7 @@ All three live in the pf layer, and what is measured is the rules of that layer:
     not discovered at the next close). The scan is pointed at a throwaway plugins directory, so
     these cases say nothing about which plugins this checkout happens to ship -- an empty
     `plugins/` is a legal tree and the suite stays green with it.
-  * the plugins `doctor` says are installed (`TestDoctorFeatures`), and the words those plugins
+  * the plugins `doctor` says are installed (`TestDoctorPlugins`), and the words those plugins
     contribute (`TestPluginCommands`): a folder's declaration may claim a word, `--help` prints it and
     the router hands the rest of the line to that folder's implementation, while a declaration that is
     broken, an implementation that is missing, a folder that was deleted, and a word the core already
@@ -54,7 +54,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from harness import (GIT, TOOLS_DIR, _child_env, _run_command, git, init_markers, requires_plugin,
                      run_argv, write_skill)
 
-__all__ = ['TestPfCmdShim', 'TestDoctorRoot', 'TestDoctorFeatures', 'TestPluginCommands',
+__all__ = ['TestPfCmdShim', 'TestDoctorRoot', 'TestDoctorPlugins', 'TestPluginCommands',
            'TestCommandList']
 
 PYTHON = sys.executable
@@ -244,7 +244,7 @@ class TestDoctorRoot(unittest.TestCase):
         self.assertTrue(self.reported_root(pf('doctor', cwd=self.main)).samefile(self.main))
 
 
-class TestDoctorFeatures(unittest.TestCase):
+class TestDoctorPlugins(unittest.TestCase):
     """`doctor`'s `plugins:` section: what the scan found, and what a declaration's problems cost.
 
     `PF_PLUGINS_DIR` is pointed at a throwaway directory in every case, so what is asserted is the
@@ -271,7 +271,7 @@ class TestDoctorFeatures(unittest.TestCase):
         env['PF_HOME_DIR'] = str(self.home)
         return run_argv([PF, 'doctor'], cwd=self.project, env=env, check=False)
 
-    def add_feature(self, name='auditor', declaration=None, impl=None):
+    def add_plugin(self, name='auditor', declaration=None, impl=None):
         """One plugin folder under the temp plugins directory, with the skill its method names.
 
         `impl` replaces the trivial implementation a case does not care about: the doctor has to call
@@ -304,8 +304,8 @@ class TestDoctorFeatures(unittest.TestCase):
         return run_argv([PF, *args], cwd=self.project, env=env, check=False)
 
     # ── cases ────────────────────────────────────────────────────────────────
-    def test_an_installed_feature_is_listed_with_its_tags_and_methods(self):
-        self.add_feature()
+    def test_an_installed_plugin_is_listed_with_its_tags_and_methods(self):
+        self.add_plugin()
 
         proc = self.doctor()
 
@@ -329,7 +329,7 @@ class TestDoctorFeatures(unittest.TestCase):
         clean = self.doctor()
         self.assertEqual(0, clean.returncode, clean.stdout)
 
-        folder = self.add_feature('broken', {'name': 'broken', 'timing': 'nope'})
+        folder = self.add_plugin('broken', {'name': 'broken', 'timing': 'nope'})
         broken = self.doctor()
 
         self.assertNotEqual(0, broken.returncode,
@@ -343,7 +343,7 @@ class TestDoctorFeatures(unittest.TestCase):
         """A declaration that claims a core setting's name is the merge's one silence: the built-in
         cell keeps working (a broken declaration may not redefine what a setting means), the declared
         one is unreachable, and `pf doctor` -- the one door that sees both tables -- says so."""
-        self.add_feature('thief', {
+        self.add_plugin('thief', {
             'name': 'thief', 'timing': 'close', 'action': 'insert',
             'knobs': {'max_agents': {'kind': 'word', 'values': ['one', 'many'],
                                      'summary': 'how many agents, but a word'}},
@@ -365,7 +365,7 @@ class TestDoctorFeatures(unittest.TestCase):
         """A knob's `layers` cell is data the declaration owns; a layer name that is not on the chain
         would narrow the knob to a layer nothing resolves, so the doctor names it and the knob keeps
         the whole chain until the declaration is fixed."""
-        self.add_feature('narrow', {
+        self.add_plugin('narrow', {
             'name': 'narrow', 'timing': 'close', 'action': 'insert',
             'knobs': {'audit_limit': {'kind': 'number', 'layers': ['line']}},
             'readings': {}, 'metrics': {},
@@ -386,7 +386,7 @@ class TestDoctorFeatures(unittest.TestCase):
         clean = self.doctor()
         self.assertEqual(0, clean.returncode, clean.stdout)
 
-        self.add_feature('syntax', impl='def offer(ctx)\n    return None\n')
+        self.add_plugin('syntax', impl='def offer(ctx)\n    return None\n')
 
         broken = self.doctor()
 
@@ -400,7 +400,7 @@ class TestDoctorFeatures(unittest.TestCase):
         """The doctor runs the validator's skill check: a method a declaration names has to have its
         `SKILL.md` in a skill folder some installed plugin ships, or a generated node points a session
         at nothing."""
-        self.add_feature('cardless', {
+        self.add_plugin('cardless', {
             'name': 'cardless', 'timing': 'close', 'action': 'insert',
             'knobs': {'audit_limit': {'kind': 'number'}},
             'readings': {'audit_minutes': {'source': 'ticket', 'when_knob': 'audit_limit'}},
@@ -418,7 +418,7 @@ class TestDoctorFeatures(unittest.TestCase):
     def test_an_implementation_that_raises_is_reported(self):
         """The doctor really calls each implementation once, against a stand-in project: a plugin
         that explodes at its door is named here, not discovered at somebody's next close."""
-        self.add_feature('boom', impl='def offer(ctx):\n    raise RuntimeError("boom")\n')
+        self.add_plugin('boom', impl='def offer(ctx):\n    raise RuntimeError("boom")\n')
 
         proc = self.doctor()
 
