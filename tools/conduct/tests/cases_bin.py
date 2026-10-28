@@ -7,6 +7,14 @@ All three live in the pf layer, and what is measured is the rules of that layer:
     it finds is the one used, and that interpreter's exit code is `pf`'s exit code. A non-zero exit
     especially has to hold -- `pf handoff` / `pf merge-ledger` are live-fire commands, and being run
     again by the fallback interpreter is a second shot.
+  * in PowerShell the word `pf` is the `.ps1` shim, not the `.cmd` beside it, and the argv it was
+    handed reaches the tool whole -- on both hosts, the one a skill session runs and Windows
+    PowerShell 5.1. That is what the handoff line the skill writes down needs: cmd.exe hands a batch
+    file the caller's rendering with its double quotes still in it (`%*` reads back
+    `-o {"deliverable":"x y"}`), but with the argument boundaries already cut (`%1` and `"%~1"` are
+    `-o`), and the CRT parsing `python.exe`'s command line eats a quote as a delimiter -- so
+    `pf handoff ... -o '{"deliverable":"…"}'` reached the tool as `{deliverable:…}`. The probed
+    interpreter, the single run and the exit code hold here too.
   * the project root `doctor` reports is the same root the tools it forwards (`pf dag` / `pf issue`)
     read the ledger by: cwd is the root, the one exception being that a linked worktree goes back to
     the main tree. That the two readings agree is what these cases prove.
@@ -54,14 +62,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from harness import (GIT, TOOLS_DIR, _child_env, _run_command, git, init_markers, requires_plugin,
                      run_argv, write_skill)
 
-__all__ = ['TestPfCmdShim', 'TestDoctorRoot', 'TestDoctorPlugins', 'TestPluginCommands',
-           'TestCommandList']
+__all__ = ['TestPfCmdShim', 'TestPfShimInPowerShell', 'TestPfShimInWindowsPowerShell',
+           'TestDoctorRoot', 'TestDoctorPlugins', 'TestPluginCommands', 'TestCommandList']
 
 PYTHON = sys.executable
 BIN = TOOLS_DIR / 'bin'
 PF = BIN / 'pf.py'
 SHIM = BIN / 'pf.cmd'
 CMD = os.environ.get('COMSPEC', 'cmd.exe')
+
+#: The shim PowerShell takes instead, when it sits beside `pf.cmd`: a bare word resolves to the `.ps1`
+#: first, in both PS hosts. It is what carries an argument with a double quote in it whole -- the whole
+#: of the handoff line's JSON.
+PS1 = BIN / 'pf.ps1'
+PWSH = shutil.which('pwsh')
+
+#: The other host that takes the `.ps1`: Windows PowerShell 5.1, which does not say how it renders a
+#: native command's arguments and so renders them the way cmd.exe does. The shim builds the command line
+#: itself there, which is why this host is measured rather than assumed from the `pwsh` run.
+WINDOWS_POWERSHELL = shutil.which('powershell')
 
 #: The method the default fixture declaration names, and the skill folder the fixture writes beside it.
 #: A fixture writes its own skill instead of borrowing the name of one this checkout happens to ship:
@@ -78,6 +97,36 @@ import sys
 here = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(here, 'runs.txt'), 'a', encoding='utf-8') as fh:
     fh.write(' '.join(sys.argv[1:]) + chr(10))
+sys.exit(int(os.environ.get('FAKE_PF_EXIT', '0')))
+'''
+
+#: A second fake `pf.py`, for the cases that read argument boundaries: one JSON array per run, so one
+#: argument carrying a space cannot be read back as two (the space-joined line above cannot tell). It
+#: stands at the same door -- whatever the shim hands over is what it records, and its code is the
+#: command's.
+FAKE_PF_ARGV = '''\
+import json
+import os
+import sys
+
+here = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(here, 'runs.txt'), 'a', encoding='utf-8') as fh:
+    fh.write(json.dumps(sys.argv[1:], ensure_ascii=False) + chr(10))
+sys.exit(int(os.environ.get('FAKE_PF_EXIT', '0')))
+'''
+
+#: A third fake `pf.py`: the same one-JSON-array-per-run record as `FAKE_PF_ARGV`, plus one line on
+#: stdout. Whether the host's own capture of a call still sees the child is read off that line, so the
+#: fixture that measures it needs a child with something to say.
+FAKE_PF_TICKET = '''\
+import json
+import os
+import sys
+
+here = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(here, 'runs.txt'), 'a', encoding='utf-8') as fh:
+    fh.write(json.dumps(sys.argv[1:], ensure_ascii=False) + chr(10))
+print('TICKET-LINE')
 sys.exit(int(os.environ.get('FAKE_PF_EXIT', '0')))
 '''
 
@@ -171,6 +220,182 @@ class TestPfCmdShim(unittest.TestCase):
         self.assertIn('-3', handed, f'the whole command the shim handed to py: {handed!r}')
         self.assertIn('-X utf8', handed)
         self.assertIn('pf.py', handed)
+
+
+class _PfShimCases:
+    """In PowerShell the word `pf` is the `.ps1` shim -- and the argv it was handed reaches the tool
+    whole.
+
+    A bare word resolves to the `.ps1` before the `.cmd` beside it, and that is what the handoff line
+    the skill writes down needs: cmd.exe hands a batch file the caller's rendering with its double
+    quotes still in it, but with the argument boundaries already cut, and the CRT parsing the target's
+    command line eats a quote as a delimiter -- so `pf handoff ... -o '{"deliverable":"…"}'` reached
+    `pf.py` as `{deliverable:…}`. The shim's own contract is measured here the way the cases above
+    measure `pf.cmd`'s: probed interpreter, one run, the command's exit code.
+
+    The host is the subclass's `HOST`: the two hosts that resolve the `.ps1` render a native command's
+    arguments differently, so each is measured rather than taken for the other.
+    """
+
+    #: The PowerShell host these cases are run in, named by the subclass.
+    HOST = None
+
+    #: The line the skill writes down, and the argv it names: a note with a space, and a JSON payload
+    #: carrying double quotes and a space inside a value.
+    PAYLOAD = '{"deliverable":"x y","files":["a b"]}'
+    DOC_LINE = "pf handoff cycle-1 node-1 completed -s 'the note' -o '" + PAYLOAD + "'"
+    DOC_ARGV = ['handoff', 'cycle-1', 'node-1', 'completed', '-s', 'the note', '-o', PAYLOAD]
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix='pf-shim-ps-')
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        # Both real shims into temp, so which one PowerShell takes is this case's own reading; the
+        # fake `pf.py` records the argv, so nothing here depends on the real tool.
+        shutil.copyfile(SHIM, self.dir / 'pf.cmd')
+        shutil.copyfile(PS1, self.dir / 'pf.ps1')
+        (self.dir / 'pf.py').write_text(FAKE_PF_ARGV, encoding='utf-8')
+
+    # ── helpers ──────────────────────────────────────────────────────────────
+    def runs(self, directory=None):
+        """Every run of the fake pf.py, in order, as the argv it received -- boundaries exact."""
+        path = (self.dir if directory is None else directory) / 'runs.txt'
+        if not path.exists():
+            return []
+        return [json.loads(line)
+                for line in path.read_text(encoding='utf-8').splitlines()]
+
+    def shim(self, command, exit_code='0', env=None, path=None, shim_dir=None):
+        """One `HOST` process running `command`, this case's directory first on PATH.
+
+        `path` replaces the whole PATH: that is how "no python stands on it" is built, and System32 is
+        left in it for the same reason the `pf.cmd` cases leave it in. `shim_dir` replaces "this case's
+        directory" as the fixture the bare word resolves to -- the case that measures a checkout path
+        carrying a space builds its fixture one directory down, inside such a name.
+        """
+        fixture = self.dir if shim_dir is None else shim_dir
+        environ = _child_env() if env is None else env
+        environ['FAKE_PF_EXIT'] = exit_code
+        if path is None:
+            environ['PATH'] = os.pathsep.join([str(fixture), environ['PATH']])
+        else:
+            environ['PATH'] = path
+        return _run_command([self.HOST, '-NoProfile', '-Command', command], cwd=fixture,
+                            env=environ, check=False)
+
+    def bare_path(self):
+        """The shim directory and System32, and nothing else: no python stands on this PATH."""
+        return os.pathsep.join([str(self.dir), str(Path(os.environ['SystemRoot']) / 'System32')])
+
+    # ── cases ────────────────────────────────────────────────────────────────
+    def test_power_shell_takes_the_ps1_shim_and_the_doc_line_arrives_whole(self):
+        """The bare word on PATH, the way the skill writes it: the doc line's JSON arrives at the tool
+        with its own double quotes, and the shim PowerShell took for it is the `.ps1`."""
+        proc = self.shim(self.DOC_LINE)
+
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual([self.DOC_ARGV], self.runs(),
+                         'an argument of the doc line did not arrive as it was written')
+
+        found = self.shim('(Get-Command pf).Source')
+        self.assertEqual(0, found.returncode, found.stderr)
+        self.assertTrue(found.stdout.strip().lower().endswith('pf.ps1'),
+                        f'PowerShell did not take the .ps1 shim: {found.stdout.strip()!r}')
+
+    def test_an_empty_argument_arrives_as_an_empty_argument(self):
+        """An empty argument is an argument: the entry is in the argv, and it is empty. Windows
+        PowerShell 5.1 renders one as nothing at all, so it is one of the shapes the shim does not
+        leave to the host."""
+        proc = self.shim("pf keep '' tail")
+
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual([['keep', '', 'tail']], self.runs(),
+                         'the empty argument did not arrive as an argument')
+
+    def test_a_checkout_path_carrying_a_space_still_leaves_the_caller_its_own_streams(self):
+        """The fixture one directory down, under a name carrying a space -- the checkout shape where
+        the shim's own `-X utf8 <pf.py>` prefix is whitespace-carrying too.
+
+        That prefix is the shim's business, not an argument of the call, so an ordinary call (none of
+        the three shapes that force the built line) is still handed to `&` and `$x = pf ...` sees the
+        child. Counting the prefix would put every call of such a checkout on the built line, where
+        the host's capture goes blind: the marker would land on the console and `$x` would come back
+        empty. The host that decides this is Windows PowerShell 5.1 -- `pwsh` names its renderer and
+        takes `&` either way -- so this case runs in both and reads sharpest in one.
+
+        The doc line, whose own arguments are what force the built line, has to stay whole here too:
+        that reading is what keeping the branch buys, and it may not be traded away for the capture.
+        """
+        fixture = self.dir / 'dir with space'
+        fixture.mkdir()
+        shutil.copyfile(SHIM, fixture / 'pf.cmd')
+        shutil.copyfile(PS1, fixture / 'pf.ps1')
+        (fixture / 'pf.py').write_text(FAKE_PF_TICKET, encoding='utf-8')
+
+        proc = self.shim('$x = pf handoff --form zzz; "CAPTURED=[$x]"', shim_dir=fixture)
+
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn('CAPTURED=[TICKET-LINE]', proc.stdout,
+                      "the host's own capture did not see an ordinary call's child")
+        self.assertEqual([['handoff', '--form', 'zzz']], self.runs(fixture))
+
+        (fixture / 'runs.txt').unlink(missing_ok=True)
+        doc = self.shim(self.DOC_LINE, shim_dir=fixture)
+
+        self.assertEqual(0, doc.returncode, doc.stderr)
+        self.assertEqual([self.DOC_ARGV], self.runs(fixture),
+                         'the doc line did not arrive whole from a path carrying a space')
+
+    def test_the_ps1_shim_runs_the_command_once_and_keeps_its_code(self):
+        """A non-zero exit: the fallback interpreter must not run it again, and the exit code must not
+        change hands -- `pf.cmd`'s contract, kept by the shim PowerShell actually takes."""
+        proc = self.shim('pf issue top; exit $LASTEXITCODE', exit_code='3')
+
+        self.assertEqual(3, proc.returncode, proc.stderr)
+        self.assertEqual([['issue', 'top']], self.runs())
+
+    def test_no_python_leaves_the_py_launcher_as_the_one_interpreter(self):
+        """`where python` finds nothing and the launcher is there: the py branch is taken with `-3 -X
+        utf8`, the command still runs once, and the exit code is still the command's."""
+        (self.dir / 'py.cmd').write_text(PY_STANDIN, encoding='utf-8')
+        env = _child_env()
+        env['FAKE_PYTHON'] = PYTHON
+        proc = self.shim('pf issue top; exit $LASTEXITCODE', exit_code='3', env=env,
+                         path=self.bare_path())
+
+        self.assertEqual(3, proc.returncode, proc.stderr)
+        self.assertEqual([['issue', 'top']], self.runs(), 'the py branch must run exactly once too')
+        handed = (self.dir / 'py-runs.txt').read_text(encoding='utf-8')
+        self.assertIn('-3', handed, f'the whole command the shim handed the launcher: {handed!r}')
+        self.assertIn('-X utf8', handed)
+        self.assertIn('pf.py', handed)
+
+    def test_no_interpreter_on_path_says_so_and_runs_nothing(self):
+        """No interpreter at all: the shim says so and stops with its own 127, and nothing runs."""
+        proc = self.shim('pf doctor; exit $LASTEXITCODE', path=self.bare_path())
+
+        self.assertEqual(127, proc.returncode, f'{proc.stdout}\n{proc.stderr}')
+        self.assertEqual([], self.runs(), 'no interpreter was found, so nothing may run')
+        self.assertIn('python', proc.stderr)
+
+
+@unittest.skipUnless(os.name == 'nt', 'the two shims in front of `pf` are the Windows ones')
+@unittest.skipUnless(PWSH, 'pwsh is the host a skill session runs `pf` in')
+class TestPfShimInPowerShell(_PfShimCases, unittest.TestCase):
+    """The `.ps1` shim as `pwsh` takes it: the argv it was handed reaches the tool whole, once, with
+    the command's exit code."""
+
+    HOST = PWSH
+
+
+@unittest.skipUnless(os.name == 'nt', 'the two shims in front of `pf` are the Windows ones')
+@unittest.skipUnless(WINDOWS_POWERSHELL, 'Windows PowerShell is the other host that takes the `.ps1`')
+class TestPfShimInWindowsPowerShell(_PfShimCases, unittest.TestCase):
+    """The same cases on Windows PowerShell 5.1, whose own rendering of a native command's arguments is
+    not the CRT's: the doc line is measured on that host too -- the reading that was missing when the
+    JSON lost its quotes inside it."""
+
+    HOST = WINDOWS_POWERSHELL
 
 
 @unittest.skipUnless(GIT, 'git is not on PATH')
