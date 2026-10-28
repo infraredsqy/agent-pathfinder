@@ -116,14 +116,38 @@ def _collect_tests():
     return sorted(found)
 
 
+#: A case's outcome, as a worker process hands it back. Three states, because "not failed" is not
+#: one answer: `TestResult.wasSuccessful()` is True for a case that ran and for a case that skipped,
+#: and a case reported that way is a green light over one that never ran at all.
+_OK = 'ok'
+_FAIL = 'fail'
+_SKIP = 'skip'
+
+#: What each outcome prints: on the pool's own line, and on the per-case line under `-v`.
+_MARKS = {_OK: '.', _FAIL: 'F', _SKIP: 's'}
+_LABELS = {_OK: 'ok', _FAIL: 'FAIL', _SKIP: 'skip'}
+
+
 def _run_one(name):
-    """Worker process: run one case and hand back its failures/errors as text."""
+    """Worker process: run one case and hand back `(name, outcome, detail)`.
+
+    The outcome is `_OK` / `_FAIL` / `_SKIP`, and the detail is the text the caller should show:
+    the skip reason for a skip, the formatted tracebacks for a failure, nothing for a pass.
+    """
     cls_name, method = name
     case = globals()[cls_name](method)
     result = unittest.TestResult()
     case.run(result)
-    report = ''.join(tb for _, tb in list(result.failures) + list(result.errors))
-    return name, result.wasSuccessful(), report
+    if result.failures or result.errors:
+        return name, _FAIL, ''.join(tb for _, tb in list(result.failures) + list(result.errors))
+    if result.skipped:
+        return name, _SKIP, '; '.join(str(reason) for _, reason in result.skipped)
+    return name, _OK, ''
+
+
+def _skipped_count(outcomes):
+    """How many of `outcomes` skipped -- the one reading both aggregation sides print."""
+    return sum(1 for _, status, _ in outcomes if status == _SKIP)
 
 
 def _run_batch(names):
@@ -204,6 +228,29 @@ def _remote_case(name):
     return cls(method)
 
 
+def _apply_outcome(result, case, status, detail):
+    """Hand one worker outcome to a `unittest` result, as if `case` had run here.
+
+    A skipped case goes on through `addSkip`, with the reason it gave -- never through `addSuccess`
+    as a case that ran. This is the half a worker process cannot do (its result object is a
+    throwaway), and it is what makes `unittest` count the case, print the `s`, and close with
+    `OK (skipped=N)`: without it the discover entry reports fewer skips than the same suite run
+    directly, silently, which is how a dead case passes for a green one.
+
+    `startTest` is what increments `testsRun` and `addSuccess` does not: these cases ran in another
+    process, so the caller has to say so. Without it the runner prints "Ran 0 tests" over a suite
+    that ran all of them -- and exits as if nothing had run at all.
+    """
+    result.startTest(case)
+    if status == _FAIL:
+        result.addFailure(case, _as_exc_info(detail, f'{case} failed'))
+    elif status == _SKIP:
+        result.addSkip(case, detail or 'skipped')
+    else:
+        result.addSuccess(case)
+    result.stopTest(case)
+
+
 class ParallelSuite(unittest.TestSuite):
     """The pool's cases, executed across processes.
 
@@ -232,21 +279,12 @@ class ParallelSuite(unittest.TestSuite):
             return super().run(result, debug)
         elapsed, outcomes = run_in_parallel(self._names)
         cases = {str(case): case for case in self}
-        for (cls_name, method), ok, report in sorted(outcomes):
+        for (cls_name, method), status, detail in sorted(outcomes):
             case = cases[f'{cls_name}.{method}']
             case._remote_pending = False           # the twin must not be run again by unittest
-            # `TestResult.addSuccess` does not count the case: `TestCase.run` is what calls
-            # `startTest` (which is what increments `testsRun`), and these cases ran in another
-            # process. Without this the runner prints "Ran 0 tests" over a suite that ran all of
-            # them -- and exits as if nothing had run at all.
-            result.startTest(case)
-            if ok:
-                result.addSuccess(case)
-            else:
-                result.addFailure(case, _as_exc_info(report, f'{cls_name}.{method} failed'))
-            result.stopTest(case)
+            _apply_outcome(result, case, status, detail)
         print(f'#{len(outcomes)} cases ran in {elapsed:.3f}s '
-              f'({_jobs(len(self._names))} workers)')
+              f'({_jobs(len(self._names))} workers), skipped={_skipped_count(outcomes)}')
         return result
 
 
@@ -278,6 +316,31 @@ def load_tests(loader, standard_tests, pattern):
     return unittest.TestSuite([ParallelSuite(names)])
 
 
+def _print_report(outcomes, elapsed, workers, verbosity=1):
+    """Print the pool's own reading of `outcomes`, and return the exit code for the entry point.
+
+    A skipped case gets its own mark and its own count -- `skipped=N` in the tail line either way,
+    because the discovery entry closes with `OK (skipped=N)` over the same outcomes and the two
+    readings have to match. A skip is not a failure, so it never moves the exit code.
+    """
+    failed = [(n, detail) for n, status, detail in outcomes if status == _FAIL]
+    skipped = _skipped_count(outcomes)
+    if verbosity > 1:
+        for (cls_name, method), status, _ in outcomes:
+            print(f'{cls_name}.{method} ... {_LABELS[status]}')
+    else:
+        print(''.join(_MARKS[status] for _, status, _ in outcomes))
+    for (cls_name, method), detail in failed:
+        print(f'\n{"=" * 70}\nFAIL: {cls_name}.{method}\n{"-" * 70}\n{detail}')
+    print('-' * 70)
+    print(f'Ran {len(outcomes)} tests in {elapsed:.3f}s ({workers} workers), skipped={skipped}')
+    if failed:
+        print(f'\nFAILED (failures={len(failed)}, skipped={skipped})')
+        return 1
+    print(f'\nOK (skipped={skipped})')
+    return 0
+
+
 def _run_parallel(argv):
     """The `python test_conduct_pipeline.py` entry point.
 
@@ -302,21 +365,26 @@ def _run_parallel(argv):
     _JOBS_OVERRIDE = jobs
     elapsed, outcomes = run_in_parallel(names)
     outcomes.sort()
-    failed = [(n, r) for n, ok, r in outcomes if not ok]
-    if verbosity > 1:
-        for (cls_name, method), ok, _ in outcomes:
-            print(f'{cls_name}.{method} ... {"ok" if ok else "FAIL"}')
-    else:
-        print(''.join('.' if ok else 'F' for _, ok, _ in outcomes))
-    for (cls_name, method), report in failed:
-        print(f'\n{"=" * 70}\nFAIL: {cls_name}.{method}\n{"-" * 70}\n{report}')
-    print('-' * 70)
-    print(f'Ran {len(outcomes)} tests in {elapsed:.3f}s ({_jobs(len(names))} workers)')
-    if failed:
-        print(f'\nFAILED (failures={len(failed)})')
-        return 1
-    print('\nOK')
-    return 0
+    return _print_report(outcomes, elapsed, _jobs(len(names)), verbosity)
+
+
+# The probes for the pool's own guard. The guard itself lives in `cases_suite.py` with the rest of
+# the suite's rules about itself; the probes stay here, beside the seams they feed, because
+# `_run_one` resolves a case by name in THIS module's globals. The leading `_` is the cut
+# `_collect_tests` makes -- the live suite never runs one of them.
+class _PassProbe(unittest.TestCase):
+    def test_passes(self):
+        pass
+
+
+class _SkipProbe(unittest.TestCase):
+    def test_skips(self):
+        self.skipTest('pool probe: this case never ran')
+
+
+class _FailProbe(unittest.TestCase):
+    def test_fails(self):
+        self.fail('pool probe: this case failed')
 
 
 if __name__ == '__main__':

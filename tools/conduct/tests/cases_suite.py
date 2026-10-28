@@ -1,16 +1,20 @@
 """The rules about the tests themselves, pinned where the suite can go red on them.
 
-Five of them, each a fault the suite would otherwise carry silently: a session start spliced into a
+Six of them, each a fault the suite would otherwise carry silently: a session start spliced into a
 case's command line (the drill switch would be the only thing left holding it), a `cases_*.py` that
 only imports once something else has run, an entry-point header that names a class nothing defines,
-`finish_node` walking a node itself instead of handing `Driver` its finish line, and a shipped `.ps1`
+`finish_node` walking a node itself instead of handing `Driver` its finish line, a shipped `.ps1`
 edited without its BOM -- the cases drive these through pwsh 7, which reads either encoding, so a
-lost BOM leaves the suite green.
+lost BOM leaves the suite green -- and a pooled case that skipped counted as one that ran: a dot on
+the pool's own line, nothing in its `skipped=` reading, and the same on both entries.
 """
 
 from __future__ import annotations
 
 import ast
+import contextlib
+import importlib
+import io
 import json
 import re
 import sys
@@ -23,7 +27,7 @@ from harness import HERE, SPAWN_FLAG, TOOLS_DIR, run_argv  # noqa: E402
 
 __all__ = ['TestNoRealDispatchInTheSuite', 'TestEveryCasesFileStandsAlone',
            'TestTheHeaderNamesRealClasses', 'TestFinishNodeStaysADriverShell',
-           'TestShippedPowerShellCarriesItsBom']
+           'TestShippedPowerShellCarriesItsBom', 'TestThePoolReportsSkippedCases']
 
 #: The repo root this checkout is a worktree of. The shipped tree is everything under it.
 ROOT = TOOLS_DIR.parent
@@ -233,3 +237,120 @@ class TestShippedPowerShellCarriesItsBom(unittest.TestCase):
         self.assertEqual([], missing,
                          f'these .ps1 files lost their UTF-8 BOM, which PS 5.1 needs to parse '
                          f'them at all: {missing}')
+
+
+#: The pool's own file. `TestThePoolReportsSkippedCases` drives the seams it defines (`_run_one`,
+#: `_print_report`, `_apply_outcome`, `ParallelSuite`), so it is asked for at call time and never
+#: imported from here at import time: the entry star-imports this file near its top, and an import
+#: back would hand this file the entry's half-built module.
+ENTRY = Path(__file__).resolve().parent / 'test_conduct_pipeline.py'
+
+
+def _entry():
+    """The loaded entry module, under whichever of its two identities this run gave it.
+
+    `python -m unittest conduct.tests.test_conduct_pipeline ...` loads it as that package module,
+    while `python test_conduct_pipeline.py` runs it as `__main__` and its spawned workers re-execute
+    the file as `__mp_main__`. A pool case gets here through one of those identities -- the worker
+    that runs this case was handed `_run_batch` out of that very module -- so the module is found by
+    its file in `sys.modules`, with the package name only as a fallback.
+    """
+    for module in list(sys.modules.values()):
+        path = getattr(module, '__file__', None)
+        if isinstance(path, str) and Path(path).resolve() == ENTRY:
+            return module
+    stem = ENTRY.stem
+    return importlib.import_module(f'{__package__}.{stem}' if __package__ else stem)
+
+
+class TestThePoolReportsSkippedCases(unittest.TestCase):
+    """The pool tells a skipped case from one that ran, in the worker and on both entries.
+
+    These are the readings that used to be one reading: `_run_one` answered with `wasSuccessful()`,
+    which is True for a skip as much as for a pass, so a case whose condition went stale printed a
+    dot, closed with OK and reported no skip at all -- on both entry points. What it drives is the
+    pool's own seams, so each case asks `_entry()` for the module and uses its names directly; the
+    three probes it names in the worker (`_PassProbe`, `_SkipProbe`, `_FailProbe`) live beside those
+    seams, because `_run_one` resolves a case by name in the entry's own globals.
+    """
+
+    def test_a_skipped_case_is_not_reported_as_a_pass(self):
+        entry = _entry()
+        _, passed, _ = entry._run_one(('_PassProbe', 'test_passes'))
+        _, skipped, reason = entry._run_one(('_SkipProbe', 'test_skips'))
+        _, failed, detail = entry._run_one(('_FailProbe', 'test_fails'))
+
+        self.assertNotEqual(passed, skipped, 'a skipped case came back as a passed one')
+        self.assertNotEqual(skipped, failed, 'a skipped case came back as a failed one')
+        self.assertNotEqual(passed, failed, 'a passed case came back as a failed one')
+        self.assertIn('never ran', reason, 'the worker dropped the skip reason')
+        self.assertIn('pool probe: this case failed', detail, 'the worker dropped the failure text')
+
+    def test_the_summary_prints_skips_apart_and_keeps_the_exit_code(self):
+        entry = _entry()
+        passed = entry._run_one(('_PassProbe', 'test_passes'))
+        skipped = entry._run_one(('_SkipProbe', 'test_skips'))
+        failing = entry._run_one(('_FailProbe', 'test_fails'))
+
+        marks = io.StringIO()
+        with contextlib.redirect_stdout(marks):
+            code = entry._print_report([passed, skipped], 0.0, 1)
+        self.assertEqual(0, code, 'a skip was priced as a failure')
+        self.assertEqual('.s', marks.getvalue().splitlines()[0], marks.getvalue())
+        self.assertIn('skipped=1', marks.getvalue())
+
+        verbose = io.StringIO()
+        with contextlib.redirect_stdout(verbose):
+            code = entry._print_report([passed, skipped], 0.0, 1, verbosity=2)
+        self.assertEqual(0, code)
+        self.assertIn('_SkipProbe.test_skips ... skip', verbose.getvalue())
+
+        failures = io.StringIO()
+        with contextlib.redirect_stdout(failures):
+            code = entry._print_report([passed, skipped, failing], 0.0, 1)
+        self.assertEqual(1, code, 'a real failure stopped failing the run')
+        self.assertIn('failures=1', failures.getvalue())
+        self.assertIn('skipped=1', failures.getvalue())
+        self.assertIn('pool probe: this case failed', failures.getvalue())
+
+    def test_a_skipped_case_reaches_unittests_own_accounting(self):
+        entry = _entry()
+        case = entry._SkipProbe('test_skips')
+        result = unittest.TestResult()
+        entry._apply_outcome(result, case, *entry._run_one(('_SkipProbe', 'test_skips'))[1:])
+
+        self.assertEqual(1, result.testsRun, 'the case was not counted as run')
+        self.assertEqual(1, len(result.skipped))
+        self.assertIs(case, result.skipped[0][0])
+        self.assertIn('never ran', result.skipped[0][1], 'the skip lost its reason on the way')
+        self.assertTrue(result.wasSuccessful(), 'a skip was priced as a failure')
+
+        passing = entry._PassProbe('test_passes')
+        result = unittest.TestResult()
+        entry._apply_outcome(result, passing, *entry._run_one(('_PassProbe', 'test_passes'))[1:])
+        self.assertEqual([], result.skipped)
+        self.assertEqual([], result.failures)
+
+    def test_the_pool_line_counts_the_skips(self):
+        """`ParallelSuite.run`'s own closing line carries the same `skipped=N` reading.
+
+        That line is the pool's self-report -- what a reader of `python test_conduct_pipeline.py`
+        sees before unittest's tail -- and a skip dropped from it goes missing on that entry alone.
+        It is driven for real here: a `ParallelSuite` over the two probes, one of them skipped, run
+        from inside the suite (in a full run that is a pool worker, where this line is actually
+        written). The inner pool is legal there because this suite spawns `ProcessPoolExecutor`
+        processes, not `multiprocessing.Pool` daemons (the `Pool` worker is the one that raises
+        `daemonic processes are not allowed to have children`).
+        """
+        entry = _entry()
+        inner = entry.ParallelSuite([('_PassProbe', 'test_passes'), ('_SkipProbe', 'test_skips')])
+        result = unittest.TestResult()
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            inner.run(result)
+
+        line = printed.getvalue().strip()
+        self.assertIn('cases ran in', line, line)
+        self.assertIn('skipped=1', line, line)
+        self.assertEqual(2, result.testsRun, line)
+        self.assertEqual(1, len(result.skipped), line)
