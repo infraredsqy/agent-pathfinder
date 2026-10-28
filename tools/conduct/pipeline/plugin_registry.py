@@ -451,7 +451,8 @@ def _usable_files(files) -> list:
     """The entries of a `files` list that name a path inside the plugin's own folder.
 
     A declaration says what it ships; it does not get to point outside the folder that is its
-    identity, so an absolute path or a `..` is not one of these (it is `_file_problems`' finding).
+    identity, so an absolute path, a rooted or drive-relative one (`/etc`, `C:etc`), or a `..` is
+    not one of these (it is `_file_problems`' finding).
     """
     if not isinstance(files, list):
         return []
@@ -460,7 +461,9 @@ def _usable_files(files) -> list:
         if not isinstance(entry, str) or not entry.strip():
             continue
         path = Path(entry)
-        if path.is_absolute() or '..' in path.parts:
+        # a rooted path without a drive (`/etc`) is not `is_absolute()` on Windows, and `folder / it`
+        # would land beside the checkout: the root and the drive are the other two tells
+        if path.is_absolute() or path.root or path.drive or '..' in path.parts:
             continue
         out.append(entry)
     return out

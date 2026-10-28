@@ -333,18 +333,30 @@ if (-not $Uninstall -and (Test-Path -LiteralPath $sharedRoot) -and -not (Test-Re
 if ($Uninstall) {
     Say 'note' 'PATH is left for you to clean (something else may still be using it)'
 } elseif (-not $SkipPath) {
-    $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
-    $parts = @($userPath -split ';' | Where-Object { $_ -ne '' })
-    $last = if (Test-Path -LiteralPath $markerFile) { (Get-Content -LiteralPath $markerFile -Raw -Encoding UTF8).Trim() } else { '' }
-    $had = $parts -contains $binDir
-    # The entry the last install added, and another checkout's bin: both come off, this one stays.
-    $others = @($parts | Where-Object { $_ -ne $binDir -and ($_ -eq $last -or (Test-PfBin $_)) })
-    if ($others.Count) {
-        Say 'PATH' ("removed " + ($others -join '; '))
-        $parts = @($parts | Where-Object { $others -notcontains $_ })
+    # Read and write the value raw, through the key: GetEnvironmentVariable hands back the expanded
+    # string and SetEnvironmentVariable writes REG_SZ, so a rewrite through them would bake
+    # `%JAVA_HOME%\bin` into the literal path of the day. The stored kind is kept, so a reference
+    # stays a reference.
+    $envKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+    try {
+        $userPath = [string]$envKey.GetValue('Path', '',
+                        [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        $kind = [Microsoft.Win32.RegistryValueKind]::String
+        try { $kind = $envKey.GetValueKind('Path') } catch { }
+        $parts = @($userPath -split ';' | Where-Object { $_ -ne '' })
+        $last = if (Test-Path -LiteralPath $markerFile) { (Get-Content -LiteralPath $markerFile -Raw -Encoding UTF8).Trim() } else { '' }
+        $had = $parts -contains $binDir
+        # The entry the last install added, and another checkout's bin: both come off, this one stays.
+        $others = @($parts | Where-Object { $_ -ne $binDir -and ($_ -eq $last -or (Test-PfBin $_)) })
+        if ($others.Count) {
+            Say 'PATH' ("removed " + ($others -join '; '))
+            $parts = @($parts | Where-Object { $others -notcontains $_ })
+        }
+        if ($had) { Say 'PATH' 'already in there' } else { $parts += $binDir; Say 'PATH' "appended $binDir (open a new terminal to see it)" }
+        $envKey.SetValue('Path', ($parts -join ';'), $kind)
+    } finally {
+        $envKey.Close()
     }
-    if ($had) { Say 'PATH' 'already in there' } else { $parts += $binDir; Say 'PATH' "appended $binDir (open a new terminal to see it)" }
-    [Environment]::SetEnvironmentVariable('PATH', ($parts -join ';'), 'User')
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $markerFile) | Out-Null
     Set-Content -LiteralPath $markerFile -Value $binDir -Encoding UTF8
 }

@@ -389,6 +389,17 @@ class TestTheValidator(Base):
         self.assertIn("plugin 'probe'", text)
         self.assertIn('../../elsewhere.py', text)
 
+    def test_a_rooted_declared_file_is_outside_the_folder_too(self):
+        """A path rooted without a drive (`/etc`) is not `is_absolute()` on Windows, and `folder / it`
+        would land beside the checkout -- it is outside the folder like a `..` is.
+        """
+        problems = self.one(files=['/etc/elsewhere.py'])
+
+        text = '\n'.join(problems)
+        self.assertIn("plugin 'probe'", text)
+        self.assertIn('/etc/elsewhere.py', text)
+        self.assertIn('not inside its own folder', text)
+
     def test_a_two_dimensional_list_in_fields_is_no_problem(self):
         """`fields` is the free-shape dict a reader is shown, and the core only asks it to be a dict:
         a list of pairs in it is a legitimate field value, so the validator leaves it alone.

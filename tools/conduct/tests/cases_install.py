@@ -104,8 +104,10 @@ class TestTheInstaller(unittest.TestCase):
         # copy anywhere else would be told the wrong tree
         script = _new(self.checkout / 'install.ps1', source.replace('$HOME', f"'{self.home}'"))
         command = [PWSH, '-NoProfile', '-NonInteractive', '-File', str(script), '-SkipPath', *flags]
-        return subprocess.run(command, capture_output=True, text=True, timeout=120,
-                              cwd=str(self.checkout),
+        # the console codepage decides how pwsh renders a thrown error to stderr; decode permissively
+        # so a GBK-rendered refusal comes back as a string with the ASCII assertions intact
+        return subprocess.run(command, capture_output=True, encoding='utf-8', errors='replace',
+                              timeout=120, cwd=str(self.checkout),
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
 
     # ── the two owners, linked ───────────────────────────────────────────────
