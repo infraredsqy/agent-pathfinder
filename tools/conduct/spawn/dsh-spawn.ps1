@@ -1,5 +1,5 @@
 # ============================================================================
-# dsh-spawn.ps1 — open a new session over the DSH HTTP API (used by pipeline dispatch)
+# dsh-spawn.ps1 -- open a new session over the DSH HTTP API (used by pipeline dispatch)
 # ============================================================================
 # Called only by conduct_spawn.py (the pipeline reaches it through `state-manage.py next --spawn` and
 # `dispatch <cycle>`), never used by a human directly. It opens one kind of session:

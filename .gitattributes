@@ -1,6 +1,6 @@
 # The repo's canonical text form is LF, in the working tree and in the blob alike. The sources
-# carry Chinese prose and the five `*.ps1` carry a UTF-8 BOM that Windows PowerShell 5.1 needs:
-# read without one, Chinese text comes back as GBK. `*.cmd` is the one exception, because cmd.exe
-# wants CRLF.
+# carry Chinese prose, and a `*.ps1` with any non-ASCII in it carries the UTF-8 BOM Windows
+# PowerShell 5.1 needs: read without one, its bytes come back in the machine's codepage. `*.cmd`
+# is the one exception, since cmd.exe wants CRLF.
 * text=auto eol=lf
 *.cmd text eol=crlf

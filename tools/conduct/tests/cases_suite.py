@@ -4,9 +4,10 @@ Six of them, each a fault the suite would otherwise carry silently: a session st
 case's command line (the drill switch would be the only thing left holding it), a `cases_*.py` that
 only imports once something else has run, an entry-point header that names a class nothing defines,
 `finish_node` walking a node itself instead of handing `Driver` its finish line, a shipped `.ps1`
-edited without its BOM -- the cases drive these through pwsh 7, which reads either encoding, so a
-lost BOM leaves the suite green -- and a pooled case that skipped counted as one that ran: a dot on
-the pool's own line, nothing in its `skipped=` reading, and the same on both entries.
+that carries non-ASCII edited without its BOM -- the cases drive these through pwsh 7, which reads
+either encoding, so a lost BOM leaves the suite green -- and a pooled case that skipped counted as
+one that ran: a dot on the pool's own line, nothing in its `skipped=` reading, and the same on both
+entries.
 """
 
 from __future__ import annotations
@@ -221,22 +222,32 @@ class TestFinishNodeStaysADriverShell(unittest.TestCase):
 
 
 class TestShippedPowerShellCarriesItsBom(unittest.TestCase):
-    """Every `.ps1` the tree ships starts with the UTF-8 BOM (the bytes `EF BB BF`).
+    """Every `.ps1` the tree ships that carries non-ASCII starts with the UTF-8 BOM (`EF BB BF`).
 
-    Windows PowerShell 5.1 reads a BOM-less file as the machine's ANSI codepage: the Chinese text in
-    these scripts turns into mojibake and the parse dies before a single line runs. The cases drive
-    them through pwsh 7, which reads either encoding, so dropping one leaves the suite green.
+    Windows PowerShell 5.1 reads a BOM-less file as the machine's ANSI codepage: the ellipses,
+    arrows and dashes these scripts carry come back as mojibake, and a lead byte can swallow the
+    ASCII character after it, so the source the parser sees is not the source that was saved.
+
+    The cases drive these scripts through pwsh 7, which reads either encoding, so dropping one
+    leaves the suite green.
+
+    A file that is pure ASCII decodes the same under every codepage, so a BOM-less one of those
+    reads fine: `dsh-spawn.ps1` is written in English and carries no non-ASCII.
     """
 
-    def test_every_shipped_ps1_starts_with_the_bom(self):
+    def test_a_ps1_that_carries_non_ascii_starts_with_the_bom(self):
         scripts = _shipped_ps1()
         self.assertTrue(scripts, f'no .ps1 under {ROOT}: the scan root is wrong')
 
-        missing = [str(path.relative_to(ROOT)) for path in scripts
-                   if not path.read_bytes().startswith(b'\xef\xbb\xbf')]
-        self.assertEqual([], missing,
-                         f'these .ps1 files lost their UTF-8 BOM, which PS 5.1 needs to parse '
-                         f'them at all: {missing}')
+        breaches = []
+        for path in scripts:
+            raw = path.read_bytes()
+            if not raw.startswith(b'\xef\xbb\xbf') and any(byte > 127 for byte in raw):
+                breaches.append(str(path.relative_to(ROOT)))
+
+        self.assertEqual([], breaches,
+                         f'these .ps1 files carry non-ASCII without the UTF-8 BOM, which PS 5.1 '
+                         f'needs to read their text at all: {breaches}')
 
 
 #: The pool's own file. `TestThePoolReportsSkippedCases` drives the seams it defines (`_run_one`,
