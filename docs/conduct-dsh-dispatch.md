@@ -80,7 +80,7 @@ cookie 与 `dsh web` 自己发的那一枚同形（有效期同 `cookieMaxAgeDay
 python」那一步也照这条写标记再退出。
 通路细节与"为什么绕这一道"写在 `zcode-dispatch.py` 的模块说明里。
 
-> **这是一条未受支持的集成。** 它落在 ZCode 自己的任务库上：`zcode-dispatch.py`
+> **这条通路顺带支持，属实验性，不做保证。** 它落在 ZCode 自己的任务库上：`zcode-dispatch.py`
 > 直接往 `automations` 表写一行，再由桌面自己的调度器把会话建出来。ZCode 换一版、表的形状或字段的
 > 意思一动，这条通路会安静地失效，或者写出一行没人读的记录 —— 动它之前先照 `cases_zcode.py` 那套在
 > 临时库上验一遍。上面那个 `mode = yolo`（完全访问）是无人在键盘前时的默认值；有人看着，或这活不需要
