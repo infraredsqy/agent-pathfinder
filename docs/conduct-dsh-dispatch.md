@@ -35,15 +35,19 @@ conductor 自己不手敲 API：`commands` 一律由工具跑，调用方只读 
    理由。`workspace/create` 是幂等的（同一目录返回既有工作区）；端点明确拒绝 `workspaceId` 与
    `cwd` 同时出现；只给 `workspaceId` 时，会话的 `cwd` 就是该工作区绑定的目录。
 
-## 三、鉴权：自签持久 cookie
+## 三、鉴权：用本机 DSH 自己的会话凭据开一个会话
 
-**别再从 `~/.dsh/web-run.log` 抓进程 launch token 换 cookie。** 这个 token 每次启动 `dsh web` 都重新
-生成，日志却不随之更新，重启后必然 401；而 `/api` 走的是 cookie 鉴权路径，launch token 只是换
-cookie 的门票。
+这一步的目的只有一个：**把一个干活会话建出来，让它出现在用户的 GUI 里**。`/api` 那几条端点走
+cookie 鉴权，所以 spawner 得带一枚 cookie 才调得动 `session/create` 与 `session/prompt`。它带的就是
+**本机 DSH 自己已经写下的那把钥匙**：`~/.dsh/.credentials.yaml` 里
+`client-connection/browser-session` 记录的 `secret`，也就是 DSH 浏览器会话的签名密钥。用它签出的
+cookie 与 `dsh web` 自己发的那一枚同形（有效期同 `cookieMaxAgeDays`，默认 30 天），算法与 cookie 名
+在 `dsh-spawn.ps1` 的 `New-BrowserSessionCookie` 里 —— 走的是 DSH 自己的鉴权路径。
 
-改用凭据里的**持久签名密钥**自签：密钥取 `~/.dsh/.credentials.yaml` 里 `client-connection/browser-session`
-记录的 `secret`，签出的 cookie 有效期 30 天（与 dsh 默认 `cookieMaxAgeDays` 一致）、跨重启有效。
-算法与 cookie 名在 `dsh-spawn.ps1` 的 `New-BrowserSessionCookie` 里。
+**为什么不用 launch token**：那一枚每次启动 `dsh web` 都重新生成，而 `~/.dsh/web-run.log` 不随之
+更新，重启之后必然 401；它是给人手开一次门用的门票，一条链要反复走的时候不够用。持久签名密钥跨重启
+仍然有效，这也正是它被选中的原因。**钥匙本来就由本机 DSH 自己放在那儿**，这条链只是拿它去调同一扇门
+上的同一批端点。
 
 ## 四、派发链与它的失败模式
 
@@ -75,6 +79,12 @@ cookie 的门票。
 （两个宿主的那句话本来就不一样），「任何失败都留下降级标记」由外壳保证 —— 连 ZCode 独有的「找不到
 python」那一步也照这条写标记再退出。
 通路细节与"为什么绕这一道"写在 `zcode-dispatch.py` 的模块说明里。
+
+> **这是一条未受支持的集成。** 它落在 ZCode 自己的任务库上：`zcode-dispatch.py`
+> 直接往 `automations` 表写一行，再由桌面自己的调度器把会话建出来。ZCode 换一版、表的形状或字段的
+> 意思一动，这条通路会安静地失效，或者写出一行没人读的记录 —— 动它之前先照 `cases_zcode.py` 那套在
+> 临时库上验一遍。上面那个 `mode = yolo`（完全访问）是无人在键盘前时的默认值；有人看着，或这活不需要
+> 它自己动文件时，把 `--mode` 收到 `build` / `edit` / `plan` 更合适。
 
 **选哪一份由工具回答，不由调用方拼**，最具体的答案赢：当场点名 > 这条线自己的 `spawner` 策略 >
 这台机器的环境变量 > 宿主自认（探测答不上来时退到 `dsh` 那一份）。线策略**只收词、不收路径** ——

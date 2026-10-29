@@ -1,4 +1,4 @@
-﻿# ============================================================================
+# ============================================================================
 # dsh-spawn.ps1 — open a new session over the DSH HTTP API (used by pipeline dispatch)
 # ============================================================================
 # Called only by conduct_spawn.py (the pipeline reaches it through `state-manage.py next --spawn` and
@@ -33,8 +33,12 @@
 #
 # Dependencies: pwsh 7+; DSH web serves http://127.0.0.1:3080 by default.
 #
-# Authentication:
-#   Sign a browser-session cookie directly with the **persistent signing key**: the key lives in the
+# Authentication -- why a cookie at all:
+#   One job only: open a child session through DSH's own API so the user can see it in the GUI, and
+#   those endpoints answer on the cookie path. What it carries is the local DSH's **own**
+#   browser-session credential; nothing here works around DSH's authentication.
+#
+#   How it is made: sign one with the **persistent signing key**. The key lives in the
 #   client-connection/browser-session record of ~/.dsh/.credentials.yaml and stays valid across
 #   restarts; the cookie is valid for 30 days (matching dsh's default cookieMaxAgeDays). /api goes
 #   through the cookie authentication path, so carrying on depends on no one-off process state and
