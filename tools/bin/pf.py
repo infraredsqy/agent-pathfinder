@@ -60,7 +60,7 @@ def _ledger():
 
 #: This tree's own version. Release tags are `v<version>`, and every build handed to someone
 #: carries its own number -- one number, one content.
-VERSION = '0.1.0-alpha.1'
+VERSION = '0.1.0-rc.1'
 
 
 def _verb_version(rest: list[str]) -> int:
